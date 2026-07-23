@@ -12,6 +12,26 @@
         WindowStartupLocation="CenterScreen"
         PreviewKeyDown="OnPreviewKeyDown">
   <Window.Resources>
+    <Style x:Key="EditorToolButtonStyle"
+           TargetType="Button"
+           BasedOn="{StaticResource {x:Type Button}}">
+      <Setter Property="Width" Value="38" />
+      <Setter Property="Height" Value="32" />
+      <Setter Property="Margin" Value="2" />
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="FontFamily" Value="Segoe UI Symbol" />
+      <Setter Property="FontSize" Value="17" />
+    </Style>
+
+    <Style x:Key="EditorResetButtonStyle"
+           TargetType="Button"
+           BasedOn="{StaticResource EditorToolButtonStyle}">
+      <Setter Property="Width" Value="Auto" />
+      <Setter Property="Padding" Value="11,0" />
+      <Setter Property="FontFamily" Value="Segoe UI" />
+      <Setter Property="FontSize" Value="12" />
+    </Style>
+
     <Style x:Key="PhotoContextMenuStyle"
            TargetType="ContextMenu">
       <Setter Property="Padding" Value="3" />
@@ -87,7 +107,7 @@
                                        RelativeSource={RelativeSource Self}}">
       <MenuItem Padding="10,6"
                 Style="{StaticResource PhotoContextMenuItemStyle}"
-                Header="Zobrazit v Průzkumníku"
+                Header="Show in File Explorer"
                 Click="OnShowInExplorerClick">
         <MenuItem.Icon>
           <Viewbox Width="17" Height="17">
@@ -106,7 +126,7 @@
       </MenuItem>
       <MenuItem Padding="10,6"
                 Style="{StaticResource PhotoContextMenuItemStyle}"
-                Header="Kopírovat úplnou cestu"
+                Header="Copy full path"
                 Click="OnCopyFullPathClick">
         <MenuItem.Icon>
           <Viewbox Width="17" Height="17">
@@ -280,17 +300,17 @@
                     Padding="9,4"
                     Command="{Binding SortByTakenAtCommand}"
                     Content="{Binding TakenAtSortLabel}"
-                    ToolTip="Řadit podle data pořízení" />
+                    ToolTip="Sort by date taken" />
             <Button Margin="1"
                     Padding="9,4"
                     Command="{Binding SortByFileNameCommand}"
                     Content="{Binding FileNameSortLabel}"
-                    ToolTip="Řadit podle názvu souboru" />
+                    ToolTip="Sort by file name" />
             <Button Margin="1"
                     Padding="9,4"
                     Command="{Binding SortByRatingCommand}"
                     Content="{Binding RatingSortLabel}"
-                    ToolTip="Řadit podle hodnocení" />
+                    ToolTip="Sort by rating" />
           </StackPanel>
         </Border>
 
@@ -400,31 +420,40 @@
                 Background="{StaticResource PanelBrush}"
                 BorderBrush="#303541"
                 BorderThickness="0,0,0,1"
-                Padding="5">
+                Padding="6">
           <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-            <Button Content="◀" ToolTip="Previous" Command="{Binding PreviousCommand}" />
-            <Button Content="▶" ToolTip="Next" Command="{Binding NextCommand}" />
-            <Separator Margin="8,2" />
-            <Button Content="↶"
+            <Button AutomationProperties.Name="Rotate left"
+                    Content="↶"
+                    Style="{StaticResource EditorToolButtonStyle}"
                     ToolTip="Rotate left"
                     Command="{Binding SelectedPhoto.RotateLeftCommand}" />
-            <Button Content="↷"
+            <Button AutomationProperties.Name="Rotate right"
+                    Content="↷"
+                    Style="{StaticResource EditorToolButtonStyle}"
                     ToolTip="Rotate right"
                     Command="{Binding SelectedPhoto.RotateRightCommand}" />
-            <Button Content="⇋"
+            <Button AutomationProperties.Name="Flip horizontally"
+                    Content="⇋"
+                    Style="{StaticResource EditorToolButtonStyle}"
                     ToolTip="Flip horizontally"
                     Command="{Binding SelectedPhoto.FlipHorizontalCommand}" />
-            <Button Content="Reset"
+            <Button AutomationProperties.Name="Reset rotation and flip"
+                    Content="Reset edits"
+                    Style="{StaticResource EditorResetButtonStyle}"
+                    ToolTip="Reset rotation and flip"
                     Command="{Binding SelectedPhoto.ResetEditsCommand}" />
             <Separator Margin="8,2" />
             <TextBlock Margin="5,0"
                        VerticalAlignment="Center"
                        Foreground="#C8CDD8"
                        Text="Rating" />
-            <ComboBox x:Name="RatingComboBox"
-                      Width="60"
-                      ItemsSource="{Binding RatingValues}"
-                      SelectedItem="{Binding SelectedPhoto.Rating}" />
+            <controls:RatingPicker Margin="4,0,0,0"
+                                   AutomationProperties.Name="Photo rating"
+                                   RatingToolTipFormat="Set rating to {0}"
+                                   ShowUnrated="False"
+                                   UnratedToolTip="Clear rating"
+                                   Value="{Binding SelectedPhoto.Rating,
+                                                   Mode=TwoWay}" />
           </StackPanel>
         </Border>
 
@@ -439,7 +468,7 @@
                               PreviousPhotoCommand="{Binding PreviousCommand}"
                               NextPhotoCommand="{Binding NextCommand}"
                               MiddleClickCommand="{Binding ToggleFullscreenCommand}"
-                              DoubleClickCommand="{Binding ShowManagerCommand}" />
+                              DoubleClickCommand="{Binding ToggleEditorCommand}" />
       </Grid>
     </Grid>
 
@@ -538,43 +567,11 @@
           <TextBlock Margin="0,0,5,0"
                      VerticalAlignment="Center"
                      Foreground="#9299A7"
-                     Text="Hodnocení" />
-          <ItemsControl ItemsSource="{Binding RatingFilters}">
-            <ItemsControl.ItemsPanel>
-              <ItemsPanelTemplate>
-                <StackPanel Orientation="Horizontal" />
-              </ItemsPanelTemplate>
-            </ItemsControl.ItemsPanel>
-            <ItemsControl.ItemTemplate>
-              <DataTemplate>
-                <Button Width="25"
-                        Height="25"
-                        Margin="0"
-                        Padding="0"
-                        Command="{Binding DataContext.SetMinimumRatingCommand,
-                                          RelativeSource={RelativeSource AncestorType=Window}}"
-                        CommandParameter="{Binding}"
-                        ToolTip="{Binding ToolTip}">
-                  <Button.Style>
-                    <Style TargetType="Button"
-                           BasedOn="{StaticResource {x:Type Button}}">
-                      <Setter Property="Foreground" Value="#667080" />
-                      <Style.Triggers>
-                        <DataTrigger Binding="{Binding IsActive}" Value="True">
-                          <Setter Property="Foreground" Value="#FFD36A" />
-                          <Setter Property="Background" Value="#3B3526" />
-                          <Setter Property="BorderBrush" Value="#8F793A" />
-                        </DataTrigger>
-                      </Style.Triggers>
-                    </Style>
-                  </Button.Style>
-                  <TextBlock FontFamily="Segoe UI Symbol"
-                             FontSize="14"
-                             Text="{Binding Glyph}" />
-                </Button>
-              </DataTemplate>
-            </ItemsControl.ItemTemplate>
-          </ItemsControl>
+                     Text="Rating" />
+          <controls:RatingPicker AutomationProperties.Name="Minimum rating filter"
+                                 RatingToolTipFormat="At least {0} stars"
+                                 UnratedToolTip="No rating filter"
+                                 Value="{Binding MinimumRating, Mode=TwoWay}" />
         </StackPanel>
 
         <Border x:Name="StatusSeparator2"
@@ -590,7 +587,7 @@
           <TextBlock Margin="0,0,5,0"
                      VerticalAlignment="Center"
                      Foreground="#9299A7"
-                     Text="Hledat" />
+                     Text="Search" />
           <TextBox x:Name="PhotoSearchBox"
                    Width="180"
                    Height="25"

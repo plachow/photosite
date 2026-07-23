@@ -280,6 +280,14 @@ try
     Assert(
         !mainViewModel.IsEditorMode,
         "The large-photo command should return to Manager.");
+    mainViewModel.ToggleEditorCommand.Execute(null);
+    Assert(
+        mainViewModel.IsEditorMode,
+        "Double-clicking the Manager preview should open Editor.");
+    mainViewModel.ToggleEditorCommand.Execute(null);
+    Assert(
+        !mainViewModel.IsEditorMode,
+        "Double-clicking the Editor photo should return to Manager.");
 
     Assert(
         selectedViewModel.RatingText is null,

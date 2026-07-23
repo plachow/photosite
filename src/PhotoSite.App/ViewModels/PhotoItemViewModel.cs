@@ -32,7 +32,8 @@ public sealed class PhotoItemViewModel : ObservableObject
                 FlipHorizontal = !EditRecipe.FlipHorizontal
             });
         ResetEditsCommand = new RelayCommand(
-            () => EditRecipe = EditRecipe.Empty);
+            () => EditRecipe = EditRecipe.Empty,
+            () => EditRecipe != EditRecipe.Empty);
     }
 
     public PhotoRecord Record { get; }
@@ -71,6 +72,7 @@ public sealed class PhotoItemViewModel : ObservableObject
                 return;
             }
 
+            ResetEditsCommand.NotifyCanExecuteChanged();
             _ = PersistEditRecipeAsync(value);
         }
     }

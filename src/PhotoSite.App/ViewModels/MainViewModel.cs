@@ -50,6 +50,9 @@ public sealed class MainViewModel : ObservableObject
         ShowManagerCommand = new RelayCommand(
             ShowManager,
             () => IsEditorMode && !IsFullscreenMode);
+        ToggleEditorCommand = new RelayCommand(
+            ToggleEditor,
+            () => SelectedPhoto is not null && !IsFullscreenMode);
         ToggleFullscreenCommand = new RelayCommand(
             ToggleFullscreen,
             () => SelectedPhoto is not null);
@@ -59,27 +62,11 @@ public sealed class MainViewModel : ObservableObject
             () => ChangeSort(PhotoSortField.FileName));
         SortByRatingCommand = new RelayCommand(
             () => ChangeSort(PhotoSortField.Rating));
-        SetMinimumRatingCommand = new RelayCommand<RatingFilterOption>(
-            SetMinimumRating);
-        RatingFilters =
-        [
-            new RatingFilterOption(0, "★̸", "Zrušit filtr hodnocení"),
-            new RatingFilterOption(1, "★", "Alespoň 1 hvězdička"),
-            new RatingFilterOption(2, "★", "Alespoň 2 hvězdičky"),
-            new RatingFilterOption(3, "★", "Alespoň 3 hvězdičky"),
-            new RatingFilterOption(4, "★", "Alespoň 4 hvězdičky"),
-            new RatingFilterOption(5, "★", "5 hvězdiček")
-        ];
-        UpdateRatingFilterState();
     }
 
     public BulkObservableCollection<PhotoItemViewModel> Photos { get; } = new();
 
     public DirectoryTreeViewModel DirectoryTree { get; }
-
-    public IReadOnlyList<int> RatingValues { get; } = [0, 1, 2, 3, 4, 5];
-
-    public IReadOnlyList<RatingFilterOption> RatingFilters { get; }
 
     public IAsyncRelayCommand OpenFolderCommand { get; }
 
@@ -91,6 +78,8 @@ public sealed class MainViewModel : ObservableObject
 
     public IRelayCommand ShowManagerCommand { get; }
 
+    public IRelayCommand ToggleEditorCommand { get; }
+
     public IRelayCommand ToggleFullscreenCommand { get; }
 
     public IRelayCommand SortByTakenAtCommand { get; }
@@ -99,23 +88,34 @@ public sealed class MainViewModel : ObservableObject
 
     public IRelayCommand SortByRatingCommand { get; }
 
-    public IRelayCommand<RatingFilterOption> SetMinimumRatingCommand { get; }
-
     public string TakenAtSortLabel => BuildSortLabel(
         PhotoSortField.TakenAt,
-        "Pořízeno");
+        "Date taken");
 
     public string FileNameSortLabel => BuildSortLabel(
         PhotoSortField.FileName,
-        "Název");
+        "File name");
 
     public string RatingSortLabel => BuildSortLabel(
         PhotoSortField.Rating,
-        "Hodnocení");
+        "Rating");
 
     public string FolderScopeToolTip => IncludeSubfolders
-        ? "Včetně podsložek"
-        : "Pouze aktuální složka";
+        ? "Including subfolders"
+        : "Current folder only";
+
+    public int MinimumRating
+    {
+        get => minimumRating;
+        set
+        {
+            var valid = Math.Clamp(value, 0, 5);
+            if (SetProperty(ref minimumRating, valid))
+            {
+                ApplyPhotoPresentation();
+            }
+        }
+    }
 
     public string SearchText
     {
@@ -142,6 +142,7 @@ public sealed class MainViewModel : ObservableObject
             PreviousCommand.NotifyCanExecuteChanged();
             NextCommand.NotifyCanExecuteChanged();
             ShowEditorCommand.NotifyCanExecuteChanged();
+            ToggleEditorCommand.NotifyCanExecuteChanged();
             ToggleFullscreenCommand.NotifyCanExecuteChanged();
             if (value is null)
             {
@@ -187,6 +188,7 @@ public sealed class MainViewModel : ObservableObject
 
             ShowEditorCommand.NotifyCanExecuteChanged();
             ShowManagerCommand.NotifyCanExecuteChanged();
+            ToggleEditorCommand.NotifyCanExecuteChanged();
         }
     }
 
@@ -202,6 +204,7 @@ public sealed class MainViewModel : ObservableObject
 
             ShowEditorCommand.NotifyCanExecuteChanged();
             ShowManagerCommand.NotifyCanExecuteChanged();
+            ToggleEditorCommand.NotifyCanExecuteChanged();
         }
     }
 
@@ -567,29 +570,6 @@ public sealed class MainViewModel : ObservableObject
             ? $"{label} {(sortDescending ? "↓" : "↑")}"
             : label;
 
-    private void SetMinimumRating(RatingFilterOption? option)
-    {
-        if (option is null || minimumRating == option.MinimumRating)
-        {
-            return;
-        }
-
-        minimumRating = option.MinimumRating;
-        UpdateRatingFilterState();
-        ApplyPhotoPresentation();
-    }
-
-    private void UpdateRatingFilterState()
-    {
-        foreach (var option in RatingFilters)
-        {
-            option.IsActive = option.MinimumRating == 0
-                ? minimumRating == 0
-                : minimumRating > 0
-                  && option.MinimumRating <= minimumRating;
-        }
-    }
-
     private void OnPhotoPropertyChanged(
         object? sender,
         PropertyChangedEventArgs eventArgs)
@@ -639,6 +619,11 @@ public sealed class MainViewModel : ObservableObject
     private void ShowManager()
     {
         IsEditorMode = false;
+    }
+
+    private void ToggleEditor()
+    {
+        IsEditorMode = !IsEditorMode;
     }
 
     private void ToggleFullscreen()

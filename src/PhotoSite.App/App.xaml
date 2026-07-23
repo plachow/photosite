@@ -50,12 +50,61 @@
     </Style>
 
     <Style TargetType="Button">
-      <Setter Property="Background" Value="{StaticResource RaisedBrush}" />
+      <Setter Property="Background" Value="#292D36" />
       <Setter Property="Foreground" Value="#F2F4F8" />
-      <Setter Property="BorderBrush" Value="#3A3F4B" />
+      <Setter Property="BorderBrush" Value="#454B57" />
+      <Setter Property="BorderThickness" Value="1" />
       <Setter Property="Padding" Value="12,6" />
       <Setter Property="Margin" Value="3" />
       <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="HorizontalContentAlignment" Value="Center" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+      <Setter Property="SnapsToDevicePixels" Value="True" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="ButtonChrome"
+                    Padding="{TemplateBinding Padding}"
+                    Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}"
+                    CornerRadius="7"
+                    SnapsToDevicePixels="True">
+              <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                RecognizesAccessKey="True"
+                                SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}" />
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="ButtonChrome"
+                        Property="Background"
+                        Value="#343A46" />
+                <Setter TargetName="ButtonChrome"
+                        Property="BorderBrush"
+                        Value="#5D6675" />
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="ButtonChrome"
+                        Property="Background"
+                        Value="#20242B" />
+                <Setter TargetName="ButtonChrome"
+                        Property="BorderBrush"
+                        Value="#3B414C" />
+              </Trigger>
+              <Trigger Property="IsKeyboardFocused" Value="True">
+                <Setter TargetName="ButtonChrome"
+                        Property="BorderBrush"
+                        Value="{StaticResource AccentBrush}" />
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Opacity" Value="0.38" />
+                <Setter Property="Cursor" Value="Arrow" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
     </Style>
 
     <Style TargetType="CheckBox">

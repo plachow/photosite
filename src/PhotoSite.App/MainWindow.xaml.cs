@@ -476,11 +476,6 @@ public partial class MainWindow : Window
 
         if (eventArgs.Key == Key.Escape && viewModel.IsEditorMode)
         {
-            if (RatingComboBox.IsDropDownOpen)
-            {
-                return;
-            }
-
             if (viewModel.ShowManagerCommand.CanExecute(null))
             {
                 // A dirty-edit confirmation can be inserted at this boundary later.
