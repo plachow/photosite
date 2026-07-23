@@ -1,5 +1,6 @@
 using System.IO;
 using System.Windows;
+using System.Windows.Input;
 using System.Windows.Threading;
 using Microsoft.Data.Sqlite;
 using PhotoSite;
@@ -120,6 +121,22 @@ try
     mainViewModel.Photos.Add(selectedViewModel);
     mainViewModel.Photos.Add(nextViewModel);
     mainViewModel.SelectedPhoto = selectedViewModel;
+    mainViewModel.ToggleFullscreenCommand.Execute(null);
+    Assert(
+        mainViewModel.IsFullscreenMode,
+        "The middle-click command should enter fullscreen mode.");
+    Assert(
+        !mainViewModel.ShowEditorCommand.CanExecute(null),
+        "Editor mode must not be entered while fullscreen is active.");
+    mainViewModel.NextCommand.Execute(null);
+    mainViewModel.ToggleFullscreenCommand.Execute(null);
+    Assert(
+        !mainViewModel.IsFullscreenMode,
+        "The middle-click command should leave fullscreen mode.");
+    Assert(
+        ReferenceEquals(mainViewModel.SelectedPhoto, nextViewModel),
+        "The photo reached in fullscreen should remain selected after returning.");
+    mainViewModel.PreviousCommand.Execute(null);
     mainViewModel.ShowEditorCommand.Execute(null);
     Assert(
         mainViewModel.IsEditorMode,
@@ -127,6 +144,14 @@ try
     Assert(
         !mainViewModel.ShowEditorCommand.CanExecute(null),
         "The thumbnail command must not toggle back from Editor.");
+    mainViewModel.ToggleFullscreenCommand.Execute(null);
+    Assert(
+        mainViewModel.IsFullscreenMode && mainViewModel.IsEditorMode,
+        "Fullscreen entered from Editor should preserve the underlying mode.");
+    mainViewModel.ToggleFullscreenCommand.Execute(null);
+    Assert(
+        !mainViewModel.IsFullscreenMode && mainViewModel.IsEditorMode,
+        "Leaving fullscreen should return to Editor.");
     mainViewModel.NextCommand.Execute(null);
     Assert(
         ReferenceEquals(mainViewModel.SelectedPhoto, nextViewModel),
@@ -139,6 +164,34 @@ try
     Assert(
         !mainViewModel.IsEditorMode,
         "The large-photo command should return to Manager.");
+
+    Assert(
+        selectedViewModel.RatingText is null,
+        "An unrated photo should not render a meaningless zero-star label.");
+    var ratedViewModel = new PhotoItemViewModel(
+        selectedViewModel.Record with { Rating = 4 },
+        EditRecipe.Empty,
+        repository);
+    Assert(
+        ratedViewModel.RatingText == "★ 4",
+        "A rated photo should render its star rating.");
+    AssertRatingShortcut(Key.Oem3, 0);
+    AssertRatingShortcut(Key.D1, 1);
+    AssertRatingShortcut(Key.D2, 2);
+    AssertRatingShortcut(Key.D3, 3);
+    AssertRatingShortcut(Key.D4, 4);
+    AssertRatingShortcut(Key.D5, 5);
+    Assert(
+        !MainWindow.TryGetRatingShortcut(Key.NumPad1, out _),
+        "Numpad digits are reserved for viewer controls, not ratings.");
+
+    mainViewModel.SelectedPhoto = nextViewModel;
+    await mainViewModel.SaveSessionAsync();
+    var restoredViewModel = new MainViewModel(repository, indexer);
+    await restoredViewModel.InitializeAsync();
+    Assert(
+        restoredViewModel.SelectedPhoto?.Path == secondPhoto,
+        "Startup should restore the last active photo in the saved directory.");
 
     await repository.UpdateRatingAsync(firstPhoto, 4);
     var rated = await repository.GetByRootAsync(photoRoot, CancellationToken.None);
@@ -191,7 +244,11 @@ try
     var afterCleanup = await repository.GetByRootAsync(photoRoot, CancellationToken.None);
     Assert(afterCleanup.Count == 1, "A completed rescan should remove stale catalogue rows.");
 
-    await AssertWindowClosesCleanlyAsync(repository, indexer);
+    await AssertWindowClosesCleanlyAsync(
+        repository,
+        indexer,
+        selectedViewModel,
+        nextViewModel);
 
     Console.WriteLine("PhotoSite integration smoke tests passed.");
     return 0;
@@ -213,9 +270,19 @@ static void Assert(bool condition, string message)
     }
 }
 
+static void AssertRatingShortcut(Key key, int expectedRating)
+{
+    Assert(
+        MainWindow.TryGetRatingShortcut(key, out var rating)
+        && rating == expectedRating,
+        $"{key} should set rating {expectedRating}.");
+}
+
 static async Task AssertWindowClosesCleanlyAsync(
     PhotoCatalogRepository repository,
-    PhotoIndexer indexer)
+    PhotoIndexer indexer,
+    PhotoItemViewModel cataloguePhoto,
+    PhotoItemViewModel nextCataloguePhoto)
 {
     var completion = new TaskCompletionSource(
         TaskCreationOptions.RunContinuationsAsynchronously);
@@ -231,6 +298,7 @@ static async Task AssertWindowClosesCleanlyAsync(
                     SuppressStartup = true
                 };
                 application.InitializeComponent();
+                App.ValidateScrollBarDirections();
                 application.DispatcherUnhandledException += (_, eventArgs) =>
                 {
                     dispatcherException = eventArgs.Exception;
@@ -239,8 +307,15 @@ static async Task AssertWindowClosesCleanlyAsync(
                 };
 
                 var viewModel = new MainViewModel(repository, indexer);
+                viewModel.Photos.Add(cataloguePhoto);
+                viewModel.Photos.Add(nextCataloguePhoto);
+                viewModel.SelectedPhoto = cataloguePhoto;
                 var window = new MainWindow(viewModel, repository);
                 window.RestoreLayoutAsync().GetAwaiter().GetResult();
+                window.ValidatePaneScrollBarsForSmokeTest();
+                window.ValidateCatalogTileForSmokeTest(
+                    cataloguePhoto.FileName);
+                window.ValidatePreviewWheelNavigationForSmokeTest();
                 window.Loaded += (_, _) =>
                     window.Dispatcher.BeginInvoke(
                         DispatcherPriority.ApplicationIdle,

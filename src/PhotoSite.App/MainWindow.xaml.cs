@@ -6,6 +6,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
+using System.Windows.Media;
 using System.Windows.Threading;
 using PhotoSite.Infrastructure;
 using PhotoSite.ViewModels;
@@ -34,6 +35,9 @@ public partial class MainWindow : Window
     private readonly SemaphoreSlim layoutSaveGate = new(1, 1);
     private double navigatorPaneWidth = DefaultNavigatorWidth;
     private double catalogPaneWidth = DefaultCatalogWidth;
+    private WindowLayoutState? layoutBeforeFullscreen;
+    private WindowStyle windowStyleBeforeFullscreen;
+    private ResizeMode resizeModeBeforeFullscreen;
     private bool isLayoutRestored;
     private bool isLayoutClosePending;
     private bool isClosingAfterLayoutSave;
@@ -89,6 +93,85 @@ public partial class MainWindow : Window
         }
     }
 
+    internal void ValidatePaneScrollBarsForSmokeTest()
+    {
+        if (Content is not UIElement content)
+        {
+            throw new InvalidOperationException("The main window has no UI content.");
+        }
+
+        var size = new Size(1500, 900);
+        content.Measure(size);
+        content.Arrange(new Rect(size));
+        content.UpdateLayout();
+
+        var directoryScrollBar = FindVerticalScrollBar(DirectoryTreeView);
+        var thumbnailScrollBar = FindVerticalScrollBar(PhotoList);
+        if (!ReferenceEquals(
+                directoryScrollBar.Template,
+                thumbnailScrollBar.Template))
+        {
+            throw new InvalidOperationException(
+                "Directory and thumbnail panes do not share the same scrollbar template.");
+        }
+    }
+
+    internal void ValidateCatalogTileForSmokeTest(string expectedFileName)
+    {
+        if (Content is not UIElement content)
+        {
+            throw new InvalidOperationException("The main window has no UI content.");
+        }
+
+        var size = new Size(1500, 900);
+        content.Measure(size);
+        content.Arrange(new Rect(size));
+        content.UpdateLayout();
+
+        if (PhotoList.ItemContainerGenerator.ContainerFromIndex(0)
+            is not ListBoxItem item)
+        {
+            throw new InvalidOperationException(
+                "The first catalogue tile was not realized.");
+        }
+
+        var fileName = FindTextBlock(item, expectedFileName);
+        if (fileName.Foreground is not SolidColorBrush brush
+            || brush.Color != Color.FromRgb(0xF2, 0xF4, 0xF8))
+        {
+            throw new InvalidOperationException(
+                "Catalogue file names must use the light foreground color.");
+        }
+    }
+
+    internal void ValidatePreviewWheelNavigationForSmokeTest()
+    {
+        if (viewModel.Photos.Count < 2)
+        {
+            throw new InvalidOperationException(
+                "Wheel navigation requires at least two catalogue photos.");
+        }
+
+        viewModel.SelectedPhoto = viewModel.Photos[0];
+        PreviewViewer.RaiseEvent(
+            new MouseWheelEventArgs(
+                Mouse.PrimaryDevice,
+                Environment.TickCount,
+                -120)
+            {
+                RoutedEvent = Mouse.MouseWheelEvent,
+                Source = PreviewViewer
+            });
+
+        if (!ReferenceEquals(
+                viewModel.SelectedPhoto,
+                viewModel.Photos[1]))
+        {
+            throw new InvalidOperationException(
+                "The preview mouse wheel must navigate in combined view.");
+        }
+    }
+
     private void OnPhotoListMouseDoubleClick(
         object sender,
         MouseButtonEventArgs eventArgs)
@@ -108,8 +191,36 @@ public partial class MainWindow : Window
         }
     }
 
+    private void OnPhotoListPreviewMouseDown(
+        object sender,
+        MouseButtonEventArgs eventArgs)
+    {
+        if (eventArgs.ChangedButton != MouseButton.Middle
+            || eventArgs.OriginalSource is not DependencyObject source
+            || ItemsControl.ContainerFromElement(PhotoList, source)
+                is not ListBoxItem item
+            || item.DataContext is not PhotoItemViewModel photo)
+        {
+            return;
+        }
+
+        viewModel.SelectedPhoto = photo;
+        if (viewModel.ToggleFullscreenCommand.CanExecute(null))
+        {
+            viewModel.ToggleFullscreenCommand.Execute(null);
+            eventArgs.Handled = true;
+        }
+    }
+
     private void OnPreviewKeyDown(object sender, KeyEventArgs eventArgs)
     {
+        if (eventArgs.Key == Key.Escape && viewModel.IsFullscreenMode)
+        {
+            viewModel.ToggleFullscreenCommand.Execute(null);
+            eventArgs.Handled = true;
+            return;
+        }
+
         if (eventArgs.Key == Key.Escape && viewModel.IsEditorMode)
         {
             if (RatingComboBox.IsDropDownOpen)
@@ -127,14 +238,40 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (Keyboard.Modifiers == ModifierKeys.None
+            && TryHandleViewerShortcut(eventArgs.Key))
+        {
+            eventArgs.Handled = true;
+            return;
+        }
+
+        if (Keyboard.Modifiers == ModifierKeys.None
+            && viewModel.SelectedPhoto is not null
+            && TryGetRatingShortcut(eventArgs.Key, out var rating))
+        {
+            viewModel.SelectedPhoto.Rating = rating;
+            eventArgs.Handled = true;
+            return;
+        }
+
+        if ((viewModel.IsEditorMode || viewModel.IsFullscreenMode)
+            && TryGetPhotoNavigationCommand(eventArgs.Key, out var command)
+            && command.CanExecute(null))
+        {
+            command.Execute(null);
+            eventArgs.Handled = true;
+            return;
+        }
+
         if (eventArgs.Key != Key.Enter || viewModel.SelectedPhoto is null)
         {
             return;
         }
 
-        if (viewModel.IsEditorMode)
+        if (viewModel.IsEditorMode || viewModel.IsFullscreenMode)
         {
-            if (PreviewViewer.IsKeyboardFocusWithin
+            if (!viewModel.IsFullscreenMode
+                && PreviewViewer.IsKeyboardFocusWithin
                 && viewModel.ShowManagerCommand.CanExecute(null))
             {
                 viewModel.ShowManagerCommand.Execute(null);
@@ -152,20 +289,82 @@ public partial class MainWindow : Window
         }
     }
 
+    private bool TryHandleViewerShortcut(Key key)
+    {
+        switch (key)
+        {
+            case Key.NumPad0:
+                PreviewViewer.FitToViewport();
+                return true;
+            case Key.Multiply:
+                PreviewViewer.ShowActualSize();
+                return true;
+            case Key.Add:
+                PreviewViewer.ZoomIn();
+                return true;
+            case Key.Subtract:
+                PreviewViewer.ZoomOut();
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    internal static bool TryGetRatingShortcut(Key key, out int rating)
+    {
+        rating = key switch
+        {
+            Key.Oem3 => 0,
+            Key.D1 => 1,
+            Key.D2 => 2,
+            Key.D3 => 3,
+            Key.D4 => 4,
+            Key.D5 => 5,
+            _ => -1
+        };
+        return rating >= 0;
+    }
+
+    private bool TryGetPhotoNavigationCommand(
+        Key key,
+        out System.Windows.Input.ICommand command)
+    {
+        if (key is Key.Down or Key.Right or Key.PageDown)
+        {
+            command = viewModel.NextCommand;
+            return true;
+        }
+
+        if (key is Key.Up or Key.Left or Key.PageUp)
+        {
+            command = viewModel.PreviousCommand;
+            return true;
+        }
+
+        command = null!;
+        return false;
+    }
+
     private void OnViewModelPropertyChanged(
         object? sender,
         PropertyChangedEventArgs eventArgs)
     {
-        if (eventArgs.PropertyName != nameof(MainViewModel.IsEditorMode))
+        if (eventArgs.PropertyName != nameof(MainViewModel.IsEditorMode)
+            && eventArgs.PropertyName != nameof(MainViewModel.IsFullscreenMode))
         {
             return;
+        }
+
+        if (eventArgs.PropertyName == nameof(MainViewModel.IsFullscreenMode))
+        {
+            ApplyFullscreenState();
         }
 
         ApplyModeLayout();
         Dispatcher.BeginInvoke(
             () =>
             {
-                if (viewModel.IsEditorMode)
+                if (viewModel.IsEditorMode || viewModel.IsFullscreenMode)
                 {
                     PreviewViewer.Focus();
                 }
@@ -178,6 +377,31 @@ public partial class MainWindow : Window
                     }
                 }
             });
+    }
+
+    private void ApplyFullscreenState()
+    {
+        if (viewModel.IsFullscreenMode)
+        {
+            layoutBeforeFullscreen = CaptureWindowLayout(forcePaneCapture: true);
+            windowStyleBeforeFullscreen = WindowStyle;
+            resizeModeBeforeFullscreen = ResizeMode;
+            WindowStyle = WindowStyle.None;
+            ResizeMode = ResizeMode.NoResize;
+            WindowState = WindowState.Maximized;
+            return;
+        }
+
+        if (layoutBeforeFullscreen is not { } layout)
+        {
+            return;
+        }
+
+        WindowState = WindowState.Normal;
+        WindowStyle = windowStyleBeforeFullscreen;
+        ResizeMode = resizeModeBeforeFullscreen;
+        layoutBeforeFullscreen = null;
+        ApplyWindowLayout(layout);
     }
 
     private void OnPaneSplitterDragCompleted(
@@ -240,9 +464,9 @@ public partial class MainWindow : Window
 
     private void ApplyModeLayout()
     {
-        if (viewModel.IsEditorMode)
+        if (viewModel.IsEditorMode || viewModel.IsFullscreenMode)
         {
-            CapturePaneWidths();
+            CapturePaneWidths(force: true);
             NavigatorColumn.MinWidth = 0;
             CatalogColumn.MinWidth = 0;
             NavigatorColumn.Width = new GridLength(0);
@@ -261,9 +485,9 @@ public partial class MainWindow : Window
         CatalogSplitterColumn.Width = new GridLength(SplitterWidth);
     }
 
-    private void CapturePaneWidths()
+    private void CapturePaneWidths(bool force = false)
     {
-        if (viewModel.IsEditorMode)
+        if (!force && (viewModel.IsEditorMode || viewModel.IsFullscreenMode))
         {
             return;
         }
@@ -283,7 +507,8 @@ public partial class MainWindow : Window
     {
         if (!isLayoutRestored
             || isLayoutClosePending
-            || isClosingAfterLayoutSave)
+            || isClosingAfterLayoutSave
+            || viewModel.IsFullscreenMode)
         {
             return;
         }
@@ -324,9 +549,14 @@ public partial class MainWindow : Window
         }
     }
 
-    private WindowLayoutState CaptureWindowLayout()
+    private WindowLayoutState CaptureWindowLayout(bool forcePaneCapture = false)
     {
-        CapturePaneWidths();
+        if (viewModel.IsFullscreenMode && layoutBeforeFullscreen is not null)
+        {
+            return layoutBeforeFullscreen;
+        }
+
+        CapturePaneWidths(forcePaneCapture);
         var bounds = WindowState == WindowState.Normal
             ? new Rect(Left, Top, ActualWidth, ActualHeight)
             : RestoreBounds;
@@ -368,6 +598,14 @@ public partial class MainWindow : Window
         isLayoutClosePending = true;
         layoutSaveTimer.Stop();
         await SaveLayoutAsync();
+        try
+        {
+            await viewModel.SaveSessionAsync();
+        }
+        catch
+        {
+            // Session persistence is best effort and must not prevent closing.
+        }
         isClosingAfterLayoutSave = true;
         _ = Dispatcher.BeginInvoke(
             () =>
@@ -427,6 +665,65 @@ public partial class MainWindow : Window
         double.IsFinite(value)
             ? Math.Clamp(value, minimum, maximum)
             : Math.Clamp(fallback, minimum, maximum);
+
+    private static ScrollBar FindVerticalScrollBar(DependencyObject root)
+    {
+        for (var index = 0;
+             index < VisualTreeHelper.GetChildrenCount(root);
+             index++)
+        {
+            var child = VisualTreeHelper.GetChild(root, index);
+            if (child is ScrollBar
+                {
+                    Orientation: Orientation.Vertical
+                } scrollBar)
+            {
+                return scrollBar;
+            }
+
+            try
+            {
+                return FindVerticalScrollBar(child);
+            }
+            catch (InvalidOperationException)
+            {
+            }
+        }
+
+        throw new InvalidOperationException(
+            "A vertical scrollbar was not created for the pane.");
+    }
+
+    private static TextBlock FindTextBlock(
+        DependencyObject root,
+        string expectedText)
+    {
+        for (var index = 0;
+             index < VisualTreeHelper.GetChildrenCount(root);
+             index++)
+        {
+            var child = VisualTreeHelper.GetChild(root, index);
+            if (child is TextBlock textBlock
+                && string.Equals(
+                    textBlock.Text,
+                    expectedText,
+                    StringComparison.Ordinal))
+            {
+                return textBlock;
+            }
+
+            try
+            {
+                return FindTextBlock(child, expectedText);
+            }
+            catch (InvalidOperationException)
+            {
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"A text block containing '{expectedText}' was not found.");
+    }
 
     [DllImport("dwmapi.dll")]
     private static extern int DwmSetWindowAttribute(

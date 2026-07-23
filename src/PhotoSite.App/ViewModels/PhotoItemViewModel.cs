@@ -41,15 +41,7 @@ public sealed class PhotoItemViewModel : ObservableObject
 
     public string FileName => Record.FileName;
 
-    public long Length => Record.Length;
-
-    public string SizeText => Length switch
-    {
-        >= 1_073_741_824 => $"{Length / 1_073_741_824d:0.0} GB",
-        >= 1_048_576 => $"{Length / 1_048_576d:0.0} MB",
-        >= 1024 => $"{Length / 1024d:0.0} KB",
-        _ => $"{Length} B"
-    };
+    public string? RatingText => Rating == 0 ? null : $"★ {Rating}";
 
     public int Rating
     {
@@ -62,6 +54,7 @@ public sealed class PhotoItemViewModel : ObservableObject
                 return;
             }
 
+            OnPropertyChanged(nameof(RatingText));
             _ = PersistRatingAsync(valid);
         }
     }

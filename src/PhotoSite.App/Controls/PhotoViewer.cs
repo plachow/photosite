@@ -10,6 +10,9 @@ namespace PhotoSite.Controls;
 public sealed class PhotoViewer : FrameworkElement
 {
     private const double TransitionDurationMilliseconds = 180;
+    private const double ZoomStep = 1.18;
+    private const double MinimumZoom = 0.1;
+    private const double MaximumActualScale = 16;
 
     public static readonly DependencyProperty SourcePathProperty =
         DependencyProperty.Register(
@@ -40,6 +43,18 @@ public sealed class PhotoViewer : FrameworkElement
             typeof(bool),
             typeof(PhotoViewer));
 
+    public static readonly DependencyProperty IsFullscreenModeProperty =
+        DependencyProperty.Register(
+            nameof(IsFullscreenMode),
+            typeof(bool),
+            typeof(PhotoViewer));
+
+    public static readonly DependencyProperty MiddleClickCommandProperty =
+        DependencyProperty.Register(
+            nameof(MiddleClickCommand),
+            typeof(ICommand),
+            typeof(PhotoViewer));
+
     public static readonly DependencyProperty PreviousPhotoCommandProperty =
         DependencyProperty.Register(
             nameof(PreviousPhotoCommand),
@@ -64,6 +79,7 @@ public sealed class PhotoViewer : FrameworkElement
     private Point dragOrigin;
     private Vector panOrigin;
     private bool isDragging;
+    private bool isFullResolutionBitmap;
     private bool isTransitioning;
     private long transitionStartedAt;
     private string? error;
@@ -111,6 +127,18 @@ public sealed class PhotoViewer : FrameworkElement
         set => SetValue(IsEditorModeProperty, value);
     }
 
+    public bool IsFullscreenMode
+    {
+        get => (bool)GetValue(IsFullscreenModeProperty);
+        set => SetValue(IsFullscreenModeProperty, value);
+    }
+
+    public ICommand? MiddleClickCommand
+    {
+        get => (ICommand?)GetValue(MiddleClickCommandProperty);
+        set => SetValue(MiddleClickCommandProperty, value);
+    }
+
     public ICommand? PreviousPhotoCommand
     {
         get => (ICommand?)GetValue(PreviousPhotoCommandProperty);
@@ -123,7 +151,38 @@ public sealed class PhotoViewer : FrameworkElement
         set => SetValue(NextPhotoCommandProperty, value);
     }
 
-    public void FitToViewport() => ResetView();
+    public void FitToViewport()
+    {
+        ResetView();
+        if (isFullResolutionBitmap)
+        {
+            BeginLoad();
+        }
+    }
+
+    public void ShowActualSize()
+    {
+        if (bitmap is null || string.IsNullOrWhiteSpace(SourcePath))
+        {
+            return;
+        }
+
+        if (isFullResolutionBitmap
+            && string.Equals(
+                bitmapPath,
+                SourcePath,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            SetActualSize();
+            return;
+        }
+
+        BeginLoad(fullResolution: true);
+    }
+
+    public void ZoomIn() => ChangeZoom(ZoomStep);
+
+    public void ZoomOut() => ChangeZoom(1 / ZoomStep);
 
     protected override void OnRender(DrawingContext drawingContext)
     {
@@ -170,12 +229,7 @@ public sealed class PhotoViewer : FrameworkElement
         double opacity)
     {
         var rotation = (int)recipe.Rotation * 90;
-        var swapsDimensions = rotation is 90 or 270;
-        var displayedWidth = swapsDimensions ? source.PixelHeight : source.PixelWidth;
-        var displayedHeight = swapsDimensions ? source.PixelWidth : source.PixelHeight;
-        var fit = Math.Min(
-            ActualWidth / Math.Max(1, displayedWidth),
-            ActualHeight / Math.Max(1, displayedHeight));
+        var fit = GetFitScale(source, recipe);
         var scale = Math.Max(0.0001, fit * zoom);
 
         var group = new TransformGroup();
@@ -205,8 +259,7 @@ public sealed class PhotoViewer : FrameworkElement
     protected override void OnMouseWheel(MouseWheelEventArgs e)
     {
         base.OnMouseWheel(e);
-        if (IsEditorMode
-            && (Keyboard.Modifiers & ModifierKeys.Control) == 0)
+        if ((Keyboard.Modifiers & ModifierKeys.Control) == 0)
         {
             var command = e.Delta > 0
                 ? PreviousPhotoCommand
@@ -220,11 +273,7 @@ public sealed class PhotoViewer : FrameworkElement
             return;
         }
 
-        zoom = Math.Clamp(
-            zoom * (e.Delta > 0 ? 1.18 : 1 / 1.18),
-            0.1,
-            16);
-        InvalidateVisual();
+        ChangeZoom(e.Delta > 0 ? ZoomStep : 1 / ZoomStep);
         e.Handled = true;
     }
 
@@ -252,6 +301,23 @@ public sealed class PhotoViewer : FrameworkElement
         e.Handled = true;
     }
 
+    protected override void OnMouseDown(MouseButtonEventArgs e)
+    {
+        base.OnMouseDown(e);
+        if (e.ChangedButton != MouseButton.Middle)
+        {
+            return;
+        }
+
+        Focus();
+        if (MiddleClickCommand?.CanExecute(null) == true)
+        {
+            MiddleClickCommand.Execute(null);
+        }
+
+        e.Handled = true;
+    }
+
     protected override void OnMouseMove(MouseEventArgs e)
     {
         base.OnMouseMove(e);
@@ -273,14 +339,43 @@ public sealed class PhotoViewer : FrameworkElement
         Cursor = Cursors.Arrow;
     }
 
-    protected override void OnKeyDown(KeyEventArgs e)
+    private void ChangeZoom(double factor)
     {
-        base.OnKeyDown(e);
-        if (e.Key == Key.Home)
+        var maximumZoom = bitmap is null
+            ? MaximumActualScale
+            : Math.Max(
+                1,
+                MaximumActualScale / GetFitScale(bitmap, EditRecipe));
+        zoom = Math.Clamp(
+            zoom * factor,
+            MinimumZoom,
+            maximumZoom);
+        InvalidateVisual();
+    }
+
+    private void SetActualSize()
+    {
+        if (bitmap is null)
         {
-            ResetView();
-            e.Handled = true;
+            return;
         }
+
+        zoom = 1 / GetFitScale(bitmap, EditRecipe);
+        pan = default;
+        InvalidateVisual();
+    }
+
+    private double GetFitScale(BitmapSource source, EditRecipe recipe)
+    {
+        var rotation = (int)recipe.Rotation * 90;
+        var swapsDimensions = rotation is 90 or 270;
+        var displayedWidth = swapsDimensions ? source.PixelHeight : source.PixelWidth;
+        var displayedHeight = swapsDimensions ? source.PixelWidth : source.PixelHeight;
+        return Math.Max(
+            0.0001,
+            Math.Min(
+                ActualWidth / Math.Max(1, displayedWidth),
+                ActualHeight / Math.Max(1, displayedHeight)));
     }
 
     private static void OnViewerPropertyChanged(
@@ -306,7 +401,7 @@ public sealed class PhotoViewer : FrameworkElement
         }
     }
 
-    private void BeginLoad()
+    private void BeginLoad(bool fullResolution = false)
     {
         CancelLoad();
         StopTransition();
@@ -318,6 +413,7 @@ public sealed class PhotoViewer : FrameworkElement
             bitmap = null;
             bitmapPath = null;
             bitmapRecipe = EditRecipe.Empty;
+            isFullResolutionBitmap = false;
             return;
         }
 
@@ -327,17 +423,22 @@ public sealed class PhotoViewer : FrameworkElement
         }
 
         loadCancellation = new CancellationTokenSource();
-        LoadAsync(SourcePath, loadCancellation.Token);
+        LoadAsync(SourcePath, fullResolution, loadCancellation.Token);
     }
 
-    private async void LoadAsync(string path, CancellationToken cancellationToken)
+    private async void LoadAsync(
+        string path,
+        bool fullResolution,
+        CancellationToken cancellationToken)
     {
         try
         {
-            var targetWidth = Math.Clamp(
-                (int)Math.Ceiling(Math.Max(ActualWidth, 1280) * 1.5),
-                1280,
-                4096);
+            var targetWidth = fullResolution
+                ? 0
+                : Math.Clamp(
+                    (int)Math.Ceiling(Math.Max(ActualWidth, 1280) * 1.5),
+                    1280,
+                    4096);
             var loaded = await App.Services.Previews.LoadAsync(
                 path,
                 targetWidth,
@@ -345,7 +446,7 @@ public sealed class PhotoViewer : FrameworkElement
             cancellationToken.ThrowIfCancellationRequested();
             if (string.Equals(path, SourcePath, StringComparison.OrdinalIgnoreCase))
             {
-                ShowLoadedBitmap(path, loaded);
+                ShowLoadedBitmap(path, loaded, fullResolution);
             }
         }
         catch (OperationCanceledException)
@@ -365,13 +466,22 @@ public sealed class PhotoViewer : FrameworkElement
         loadCancellation = null;
     }
 
-    private void ShowLoadedBitmap(string path, BitmapSource loaded)
+    private void ShowLoadedBitmap(
+        string path,
+        BitmapSource loaded,
+        bool fullResolution)
     {
         if (bitmap is null)
         {
             bitmap = loaded;
             bitmapPath = path;
             bitmapRecipe = EditRecipe;
+            isFullResolutionBitmap = fullResolution;
+            if (fullResolution)
+            {
+                SetActualSize();
+            }
+
             InvalidateVisual();
             return;
         }
@@ -381,6 +491,12 @@ public sealed class PhotoViewer : FrameworkElement
         bitmap = loaded;
         bitmapPath = path;
         bitmapRecipe = EditRecipe;
+        isFullResolutionBitmap = fullResolution;
+        if (fullResolution)
+        {
+            SetActualSize();
+        }
+
         transitionProgress = 0;
         transitionStartedAt = Stopwatch.GetTimestamp();
         if (!isTransitioning)

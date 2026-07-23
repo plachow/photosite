@@ -36,7 +36,11 @@ public sealed class PreviewService
         image.BeginInit();
         image.CacheOption = BitmapCacheOption.OnLoad;
         image.CreateOptions = BitmapCreateOptions.PreservePixelFormat;
-        image.DecodePixelWidth = Math.Max(256, decodePixelWidth);
+        if (decodePixelWidth > 0)
+        {
+            image.DecodePixelWidth = Math.Max(256, decodePixelWidth);
+        }
+
         image.Rotation = rotation;
         image.StreamSource = stream;
         image.EndInit();

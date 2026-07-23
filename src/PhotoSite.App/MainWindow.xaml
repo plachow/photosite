@@ -11,25 +11,8 @@
         MinHeight="640"
         WindowStartupLocation="CenterScreen"
         PreviewKeyDown="OnPreviewKeyDown">
-  <Window.InputBindings>
-    <KeyBinding Key="Left" Command="{Binding PreviousCommand}" />
-    <KeyBinding Key="Right" Command="{Binding NextCommand}" />
-  </Window.InputBindings>
-
   <Grid>
     <Grid.RowDefinitions>
-      <RowDefinition>
-        <RowDefinition.Style>
-          <Style TargetType="RowDefinition">
-            <Setter Property="Height" Value="Auto" />
-            <Style.Triggers>
-              <DataTrigger Binding="{Binding IsEditorMode}" Value="True">
-                <Setter Property="Height" Value="0" />
-              </DataTrigger>
-            </Style.Triggers>
-          </Style>
-        </RowDefinition.Style>
-      </RowDefinition>
       <RowDefinition Height="*" />
       <RowDefinition>
         <RowDefinition.Style>
@@ -39,35 +22,16 @@
               <DataTrigger Binding="{Binding IsEditorMode}" Value="True">
                 <Setter Property="Height" Value="0" />
               </DataTrigger>
+              <DataTrigger Binding="{Binding IsFullscreenMode}" Value="True">
+                <Setter Property="Height" Value="0" />
+              </DataTrigger>
             </Style.Triggers>
           </Style>
         </RowDefinition.Style>
       </RowDefinition>
     </Grid.RowDefinitions>
 
-    <Border Grid.Row="0"
-            Background="{StaticResource PanelBrush}"
-            BorderBrush="#303541"
-            BorderThickness="0,0,0,1"
-            Padding="8">
-      <DockPanel LastChildFill="True">
-        <Button DockPanel.Dock="Left"
-                Content="Open folder"
-                Command="{Binding OpenFolderCommand}" />
-        <ProgressBar DockPanel.Dock="Right"
-                     Width="90"
-                     Height="4"
-                     Margin="12,0,4,0"
-                     IsIndeterminate="{Binding IsBusy}" />
-        <TextBlock Margin="10,0"
-                   VerticalAlignment="Center"
-                   Foreground="#C8CDD8"
-                   TextTrimming="CharacterEllipsis"
-                   Text="{Binding CurrentFolder, FallbackValue=No folder selected}" />
-      </DockPanel>
-    </Border>
-
-    <Grid Grid.Row="1">
+    <Grid Grid.Row="0">
       <Grid.ColumnDefinitions>
         <ColumnDefinition x:Name="NavigatorColumn"
                           Width="260"
@@ -88,12 +52,27 @@
         <Border BorderBrush="#303541"
                 BorderThickness="0,0,0,1"
                 Padding="5,4">
-          <CheckBox Content="Include subfolders"
-                    IsChecked="{Binding IncludeSubfolders, Mode=TwoWay}"
-                    ToolTip="Scan the selected folder recursively" />
+          <StackPanel Orientation="Horizontal">
+            <Button Width="30"
+                    Height="30"
+                    Margin="0,0,4,0"
+                    Padding="0"
+                    AutomationProperties.Name="Open folder"
+                    Command="{Binding OpenFolderCommand}"
+                    ToolTip="Open folder">
+              <TextBlock VerticalAlignment="Center"
+                         FontFamily="Segoe UI Emoji"
+                         FontSize="15"
+                         Text="📁" />
+            </Button>
+            <CheckBox Content="Recursive"
+                      IsChecked="{Binding IncludeSubfolders, Mode=TwoWay}"
+                      ToolTip="Scan the selected folder recursively" />
+          </StackPanel>
         </Border>
 
-        <TreeView Grid.Row="1"
+        <TreeView x:Name="DirectoryTreeView"
+                  Grid.Row="1"
                   Padding="4,8"
                   Background="{StaticResource PanelBrush}"
                   BorderThickness="0"
@@ -102,6 +81,8 @@
                   ScrollViewer.HorizontalScrollBarVisibility="Auto"
                   ScrollViewer.VerticalScrollBarVisibility="Auto">
         <TreeView.Resources>
+          <Style TargetType="ScrollBar"
+                 BasedOn="{StaticResource PaneScrollBarStyle}" />
           <HierarchicalDataTemplate DataType="{x:Type viewModels:DirectoryNodeViewModel}"
                                     ItemsSource="{Binding Children}">
             <Grid Margin="2,3">
@@ -173,11 +154,16 @@
                ItemsSource="{Binding Photos}"
                SelectedItem="{Binding SelectedPhoto}"
                MouseDoubleClick="OnPhotoListMouseDoubleClick"
+               PreviewMouseDown="OnPhotoListPreviewMouseDown"
                ScrollViewer.CanContentScroll="True"
                ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                ScrollViewer.VerticalScrollBarVisibility="Auto"
                VirtualizingPanel.IsVirtualizing="True"
                VirtualizingPanel.VirtualizationMode="Recycling">
+        <ListBox.Resources>
+          <Style TargetType="ScrollBar"
+                 BasedOn="{StaticResource PhotoListScrollBarStyle}" />
+        </ListBox.Resources>
         <ListBox.ItemsPanel>
           <ItemsPanelTemplate>
             <controls:VirtualizingTilePanel ItemWidth="204" ItemHeight="164" />
@@ -216,19 +202,17 @@
                   <ColumnDefinition Width="*" />
                   <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <StackPanel>
-                  <TextBlock FontSize="12"
-                             Text="{Binding FileName}"
-                             TextTrimming="CharacterEllipsis"
-                             ToolTip="{Binding Path}" />
-                  <TextBlock FontSize="10"
-                             Foreground="#9299A7"
-                             Text="{Binding SizeText}" />
-                </StackPanel>
+                <TextBlock VerticalAlignment="Center"
+                           FontSize="12"
+                           Foreground="#F2F4F8"
+                           Text="{Binding FileName}"
+                           TextTrimming="CharacterEllipsis"
+                           ToolTip="{Binding Path}" />
                 <TextBlock Grid.Column="1"
                            Margin="8,0,0,0"
+                           VerticalAlignment="Center"
                            Foreground="#FFD36A"
-                           Text="{Binding Rating, StringFormat=★ {0}}" />
+                           Text="{Binding RatingText}" />
               </Grid>
             </Grid>
           </DataTemplate>
@@ -247,9 +231,13 @@
               <Style TargetType="RowDefinition">
                 <Setter Property="Height" Value="0" />
                 <Style.Triggers>
-                  <DataTrigger Binding="{Binding IsEditorMode}" Value="True">
+                  <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                      <Condition Binding="{Binding IsEditorMode}" Value="True" />
+                      <Condition Binding="{Binding IsFullscreenMode}" Value="False" />
+                    </MultiDataTrigger.Conditions>
                     <Setter Property="Height" Value="Auto" />
-                  </DataTrigger>
+                  </MultiDataTrigger>
                 </Style.Triggers>
               </Style>
             </RowDefinition.Style>
@@ -294,13 +282,15 @@
                               SourcePath="{Binding SelectedPhoto.Path}"
                               EditRecipe="{Binding SelectedPhoto.EditRecipe}"
                               IsEditorMode="{Binding IsEditorMode}"
+                              IsFullscreenMode="{Binding IsFullscreenMode}"
                               PreviousPhotoCommand="{Binding PreviousCommand}"
                               NextPhotoCommand="{Binding NextCommand}"
+                              MiddleClickCommand="{Binding ToggleFullscreenCommand}"
                               DoubleClickCommand="{Binding ShowManagerCommand}" />
       </Grid>
     </Grid>
 
-    <Border Grid.Row="2"
+    <Border Grid.Row="1"
             Background="{StaticResource PanelBrush}"
             BorderBrush="#303541"
             BorderThickness="0,1,0,0"
@@ -308,7 +298,7 @@
       <DockPanel>
         <TextBlock DockPanel.Dock="Right"
                    Foreground="#9299A7"
-                   Text="Wheel: zoom · drag: pan · Home: fit · thumbnail double-click / Enter: Editor" />
+                   Text="Wheel / arrows: navigate · Ctrl+wheel / Num +/-: zoom · Num 0: fit · Num *: 100% · 1–5: rating · `: clear" />
         <TextBlock Foreground="#C8CDD8" Text="{Binding StatusText}" />
       </DockPanel>
     </Border>

@@ -11,6 +11,7 @@ public sealed class MainViewModel : ObservableObject
 {
     private const int DatabaseBatchSize = 200;
     private const string LastDirectorySetting = "last_directory";
+    private const string LastPhotoSetting = "last_photo";
     private const string IncludeSubfoldersSetting = "include_subfolders";
     private readonly PhotoCatalogRepository catalog;
     private readonly PhotoIndexer indexer;
@@ -20,6 +21,7 @@ public sealed class MainViewModel : ObservableObject
     private string statusText = "Choose a folder to begin";
     private bool isBusy;
     private bool isEditorMode;
+    private bool isFullscreenMode;
     private bool includeSubfolders = true;
 
     public MainViewModel(
@@ -35,10 +37,15 @@ public sealed class MainViewModel : ObservableObject
         NextCommand = new RelayCommand(SelectNext, () => SelectedPhoto is not null);
         ShowEditorCommand = new RelayCommand(
             ShowEditor,
-            () => SelectedPhoto is not null && !IsEditorMode);
+            () => SelectedPhoto is not null
+                  && !IsEditorMode
+                  && !IsFullscreenMode);
         ShowManagerCommand = new RelayCommand(
             ShowManager,
-            () => IsEditorMode);
+            () => IsEditorMode && !IsFullscreenMode);
+        ToggleFullscreenCommand = new RelayCommand(
+            ToggleFullscreen,
+            () => SelectedPhoto is not null);
     }
 
     public BulkObservableCollection<PhotoItemViewModel> Photos { get; } = new();
@@ -57,6 +64,8 @@ public sealed class MainViewModel : ObservableObject
 
     public IRelayCommand ShowManagerCommand { get; }
 
+    public IRelayCommand ToggleFullscreenCommand { get; }
+
     public PhotoItemViewModel? SelectedPhoto
     {
         get => selectedPhoto;
@@ -70,8 +79,10 @@ public sealed class MainViewModel : ObservableObject
             PreviousCommand.NotifyCanExecuteChanged();
             NextCommand.NotifyCanExecuteChanged();
             ShowEditorCommand.NotifyCanExecuteChanged();
+            ToggleFullscreenCommand.NotifyCanExecuteChanged();
             if (value is null)
             {
+                IsFullscreenMode = false;
                 IsEditorMode = false;
             }
         }
@@ -110,6 +121,21 @@ public sealed class MainViewModel : ObservableObject
         }
     }
 
+    public bool IsFullscreenMode
+    {
+        get => isFullscreenMode;
+        private set
+        {
+            if (!SetProperty(ref isFullscreenMode, value))
+            {
+                return;
+            }
+
+            ShowEditorCommand.NotifyCanExecuteChanged();
+            ShowManagerCommand.NotifyCanExecuteChanged();
+        }
+    }
+
     public bool IncludeSubfolders
     {
         get => includeSubfolders;
@@ -137,6 +163,9 @@ public sealed class MainViewModel : ObservableObject
         var savedDirectory = await catalog.GetSettingAsync(
             LastDirectorySetting,
             cancellationToken);
+        var savedPhoto = await catalog.GetSettingAsync(
+            LastPhotoSetting,
+            cancellationToken);
         var initialDirectory = ResolveInitialDirectory(savedDirectory);
         if (initialDirectory is null)
         {
@@ -147,10 +176,38 @@ public sealed class MainViewModel : ObservableObject
         await DirectoryTree.SelectPathAsync(
             initialDirectory,
             notifySelection: false);
-        await LoadFolderAsync(initialDirectory, cancellationToken);
+        await LoadFolderAsync(
+            initialDirectory,
+            cancellationToken,
+            savedPhoto);
     }
 
     public async Task LoadFolderAsync(string folder, CancellationToken cancellationToken)
+    {
+        await LoadFolderAsync(
+            folder,
+            cancellationToken,
+            preferredPhotoPath: null);
+    }
+
+    public async Task SaveSessionAsync(
+        CancellationToken cancellationToken = default)
+    {
+        if (SelectedPhoto is not { } photo)
+        {
+            return;
+        }
+
+        await catalog.SetSettingAsync(
+            LastPhotoSetting,
+            photo.Path,
+            cancellationToken);
+    }
+
+    private async Task LoadFolderAsync(
+        string folder,
+        CancellationToken cancellationToken,
+        string? preferredPhotoPath)
     {
         if (!Directory.Exists(folder))
         {
@@ -181,7 +238,11 @@ public sealed class MainViewModel : ObservableObject
                 includeSubfolders);
             if (cached.Count > 0)
             {
-                await ReplacePhotosAsync(cached, rootFolder, token);
+                await ReplacePhotosAsync(
+                    cached,
+                    rootFolder,
+                    preferredPhotoPath,
+                    token);
                 StatusText = BuildStatus(cached.Count, includeSubfolders, "cached · refreshing…");
             }
             else
@@ -223,7 +284,11 @@ public sealed class MainViewModel : ObservableObject
                 await catalog.GetByRootAsync(rootFolder, token),
                 rootFolder,
                 includeSubfolders);
-            await ReplacePhotosAsync(current, rootFolder, token);
+            await ReplacePhotosAsync(
+                current,
+                rootFolder,
+                preferredPhotoPath,
+                token);
             StatusText = BuildStatus(current.Count, includeSubfolders);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -289,6 +354,7 @@ public sealed class MainViewModel : ObservableObject
     private async Task ReplacePhotosAsync(
         IReadOnlyList<PhotoRecord> records,
         string rootFolder,
+        string? preferredPhotoPath,
         CancellationToken cancellationToken)
     {
         var recipes = await catalog.GetEditRecipesByRootAsync(
@@ -302,7 +368,7 @@ public sealed class MainViewModel : ObservableObject
             viewModels.Add(new PhotoItemViewModel(record, recipe, catalog));
         }
 
-        var selectedPath = SelectedPhoto?.Path;
+        var selectedPath = preferredPhotoPath ?? SelectedPhoto?.Path;
         Photos.ReplaceRange(viewModels);
         SelectedPhoto = selectedPath is null
             ? Photos.FirstOrDefault()
@@ -350,6 +416,14 @@ public sealed class MainViewModel : ObservableObject
     private void ShowManager()
     {
         IsEditorMode = false;
+    }
+
+    private void ToggleFullscreen()
+    {
+        if (SelectedPhoto is not null)
+        {
+            IsFullscreenMode = !IsFullscreenMode;
+        }
     }
 
     private async Task ApplyFolderScopeChangeAsync()
