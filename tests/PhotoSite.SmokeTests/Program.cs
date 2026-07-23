@@ -1,10 +1,16 @@
 using System.IO;
+using System.Net;
+using System.Net.Http;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using MetadataExtractor.Formats.Exif;
 using Microsoft.Data.Sqlite;
 using PhotoSite;
+using PhotoSite.Controls;
 using PhotoSite.Domain;
 using PhotoSite.Infrastructure;
 using PhotoSite.Services;
@@ -292,6 +298,25 @@ try
     Assert(
         selectedViewModel.RatingText is null,
         "An unrated photo should not render a meaningless zero-star label.");
+    selectedViewModel.BeginEditorSession();
+    selectedViewModel.RotateRightCommand.Execute(null);
+    Assert(
+        selectedViewModel.IsEditorDirty
+        && selectedViewModel.UndoEditCommand.CanExecute(null),
+        "Editor operations should create a dirty undoable draft.");
+    Assert(
+        await repository.GetEditRecipeAsync(firstPhoto) == EditRecipe.Empty,
+        "Draft editor operations must not persist before save.");
+    selectedViewModel.UndoEditCommand.Execute(null);
+    Assert(
+        !selectedViewModel.IsEditorDirty
+        && selectedViewModel.RedoEditCommand.CanExecute(null),
+        "Undo should restore the clean editor baseline.");
+    selectedViewModel.RedoEditCommand.Execute(null);
+    selectedViewModel.DiscardEditorSession();
+    Assert(
+        selectedViewModel.EditRecipe == EditRecipe.Empty,
+        "Discard should restore the recipe from editor entry.");
     var ratedViewModel = new PhotoItemViewModel(
         selectedViewModel.Record with { Rating = 4 },
         EditRecipe.Empty,
@@ -306,6 +331,35 @@ try
     AssertRatingShortcut(Key.D4, 4);
     AssertRatingShortcut(Key.D5, 5);
     Assert(
+        MainWindow.IsSelectShortcut(Key.C, ModifierKeys.None)
+        && !MainWindow.IsSelectShortcut(Key.C, ModifierKeys.Control),
+        "C should activate Select without intercepting Ctrl+C.");
+    Assert(
+        MainWindow.IsCopyImageShortcut(Key.C, ModifierKeys.Control)
+        && !MainWindow.IsCopyImageShortcut(
+            Key.C,
+            ModifierKeys.Control | ModifierKeys.Shift)
+        && MainWindow.IsQuickFileCopyShortcut(
+            Key.C,
+            ModifierKeys.Control | ModifierKeys.Shift)
+        && !MainWindow.IsQuickFileCopyShortcut(
+            Key.C,
+            ModifierKeys.Control),
+        "Manager copy shortcuts must distinguish image clipboard copy "
+        + "from quick file copy.");
+    Assert(
+        MainWindow.IsPasteImageShortcut(Key.V, ModifierKeys.Control)
+        && !MainWindow.IsPasteImageShortcut(
+            Key.V,
+            ModifierKeys.Control | ModifierKeys.Shift)
+        && MainWindow.IsSaveAsShortcut(
+            Key.S,
+            ModifierKeys.Control | ModifierKeys.Shift)
+        && !MainWindow.IsSaveAsShortcut(Key.S, ModifierKeys.Control)
+        && MainWindow.IsImgurUploadShortcut(Key.U, ModifierKeys.Control)
+        && !MainWindow.IsImgurUploadShortcut(Key.U, ModifierKeys.None),
+        "Paste, Save As, and Imgur upload shortcuts must use exact modifiers.");
+    Assert(
         !MainWindow.TryGetRatingShortcut(Key.NumPad1, out _),
         "Numpad digits are reserved for viewer controls, not ratings.");
     var explorerStartInfo = MainWindow.CreateExplorerSelectStartInfo(firstPhoto);
@@ -313,6 +367,12 @@ try
         explorerStartInfo.FileName == "explorer.exe"
         && explorerStartInfo.ArgumentList.SequenceEqual(["/select,", firstPhoto]),
         "The Explorer action should select the exact photo path.");
+    var fileCopyDestination = MainWindow.BuildFileCopyDestination(
+        firstPhoto,
+        photoRoot);
+    Assert(
+        fileCopyDestination == Path.Combine(photoRoot, "first.png"),
+        "File copy should preserve the original filename in the chosen folder.");
     Assert(
         !PhotoSite.Controls.PhotoViewer.ShouldCrossfade(
             firstPhoto,
@@ -340,10 +400,115 @@ try
 
     var recipe = new EditRecipe(
         QuarterRotation.Clockwise90,
-        FlipHorizontal: true);
+        FlipHorizontal: true,
+        Crop: new CropRegion(0.1, 0.2, 0.6, 0.5));
     await repository.SaveEditRecipeAsync(firstPhoto, recipe);
     var loadedRecipe = await repository.GetEditRecipeAsync(firstPhoto);
     Assert(loadedRecipe == recipe, "Edit recipe should survive a database round-trip.");
+    var legacyRecipe = JsonSerializer.Deserialize<EditRecipe>(
+        """{"Rotation":2,"FlipHorizontal":true}""");
+    Assert(
+        legacyRecipe is
+        {
+            Rotation: QuarterRotation.Clockwise180,
+            FlipHorizontal: true,
+            Crop: null
+        },
+        "Recipes saved before crop support should remain compatible.");
+
+    var constrainedCrop = new CropRegion(
+        0.8,
+        0.9,
+        -0.6,
+        0.4).ConstrainToUnit();
+    Assert(
+        Math.Abs(constrainedCrop.X - 0.2) < 0.000001
+        && Math.Abs(constrainedCrop.Y - 0.9) < 0.000001
+        && Math.Abs(constrainedCrop.Width - 0.6) < 0.000001
+        && Math.Abs(constrainedCrop.Height - 0.1) < 0.000001,
+        "Crop regions should normalize direction and remain inside the image.");
+
+    var constrainedPan = PhotoViewer.ConstrainPanToVisible(
+        new Rect(0, 0, 1000, 600),
+        new Size(1000, 600),
+        new Vector(5000, -5000));
+    Assert(
+        constrainedPan == new Vector(904, -504),
+        "Free pan should keep a 96-DIP grab area visible in both axes.");
+
+    var selectionFromVoid = PhotoViewer.CreateSelectionFromDrag(
+        new CropRegion(0.1, 0.2, 0.6, 0.5),
+        new Point(-0.5, -0.5),
+        new Point(0.4, 0.5));
+    Assert(
+        Math.Abs(selectionFromVoid.X - 0.1) < 0.000001
+        && Math.Abs(selectionFromVoid.Y - 0.2) < 0.000001
+        && Math.Abs(selectionFromVoid.Width - 0.3) < 0.000001
+        && Math.Abs(selectionFromVoid.Height - 0.3) < 0.000001,
+        "Selection drags may start in the void but must only select image pixels.");
+
+    Assert(
+        ReferenceEquals(
+            PhotoViewer.ResolveResizeCursor(
+                new Point(0, 0),
+                new Point(5, 5),
+                isCorner: true),
+            Cursors.SizeNWSE)
+        && ReferenceEquals(
+            PhotoViewer.ResolveResizeCursor(
+                new Point(10, 0),
+                new Point(5, 5),
+                isCorner: true),
+            Cursors.SizeNESW)
+        && ReferenceEquals(
+            PhotoViewer.ResolveResizeCursor(
+                new Point(0, 5),
+                new Point(5, 5),
+                isCorner: false),
+            Cursors.SizeWE)
+        && ReferenceEquals(
+            PhotoViewer.ResolveResizeCursor(
+                new Point(5, 0),
+                new Point(5, 5),
+                isCorner: false),
+            Cursors.SizeNS),
+        "Crop handles should expose standard side and corner resize cursors.");
+
+    var syntheticPixels = new byte[6 * 4 * 4];
+    Array.Fill<byte>(syntheticPixels, 255);
+    var syntheticBitmap = BitmapSource.Create(
+        6,
+        4,
+        96,
+        96,
+        PixelFormats.Bgra32,
+        null,
+        syntheticPixels,
+        6 * 4);
+    syntheticBitmap.Freeze();
+    var renderedSelection = PhotoViewer.RenderSelection(
+        syntheticBitmap,
+        new EditRecipe(
+            QuarterRotation.Clockwise90,
+            FlipHorizontal: true),
+        new CropRegion(0, 0, 0.5, 0.5));
+    Assert(
+        renderedSelection.PixelWidth == 2
+        && renderedSelection.PixelHeight == 3,
+        "Copied selections should preserve crop pixels and current orientation.");
+    var renderedPixels = new byte[
+        renderedSelection.PixelWidth
+        * renderedSelection.PixelHeight
+        * 4];
+    renderedSelection.CopyPixels(
+        renderedPixels,
+        renderedSelection.PixelWidth * 4,
+        0);
+    Assert(
+        renderedPixels
+            .Where((_, index) => index % 4 == 3)
+            .All(alpha => alpha > 0),
+        "Copied selections should render visible pixels after flip and rotation.");
 
     var thumbnailDirectory = Path.Combine(testRoot, "thumbnails");
     var thumbnails = new ThumbnailService(thumbnailDirectory);
@@ -361,6 +526,117 @@ try
         512,
         CancellationToken.None);
     Assert(preview.PixelWidth > 0, "Preview should decode to a WPF bitmap.");
+
+    var imageSaver = new ImageSaveService(previews);
+    var suggestedCopy = ImageSaveService.BuildVersionCopyPath(firstPhoto);
+    Assert(
+        Path.GetFileName(suggestedCopy) == "first ver 1.png",
+        "Save as copy should prefill the first available versioned filename.");
+    await imageSaver.SaveAsync(
+        firstPhoto,
+        suggestedCopy,
+        new EditRecipe(QuarterRotation.Clockwise90),
+        overwrite: false);
+    Assert(
+        File.Exists(suggestedCopy)
+        && (await previews.LoadAsync(
+            suggestedCopy,
+            0,
+            CancellationToken.None)).PixelWidth > 0,
+        "Save as copy should create a decodable edited image.");
+    File.Delete(suggestedCopy);
+
+    mainViewModel.SelectedPhoto = selectedViewModel;
+    var pastedDocument = mainViewModel.OpenPastedImage(syntheticBitmap);
+    Assert(
+        mainViewModel.IsEditorMode
+        && pastedDocument.IsTransient
+        && pastedDocument.IsUnsaved
+        && pastedDocument.IsEditorDirty
+        && ReferenceEquals(pastedDocument.SourceBitmap, syntheticBitmap),
+        "A clipboard bitmap should open as an in-memory unsaved editor image.");
+    pastedDocument.RotateRightCommand.Execute(null);
+    var pastedJpeg = Path.Combine(photoRoot, "pasted.jpg");
+    var savedPastedBitmap = await imageSaver.SaveAsync(
+        pastedDocument.SourceBitmap!,
+        pastedJpeg,
+        pastedDocument.EditRecipe,
+        overwrite: false,
+        jpegQuality: ImageSaveService.DefaultPastedJpegQuality);
+    pastedDocument.CompleteTransientSave(
+        pastedJpeg,
+        savedPastedBitmap,
+        continueEditing: true);
+    var pastedBytes = await File.ReadAllBytesAsync(pastedJpeg);
+    Assert(
+        pastedBytes.Length > 2
+        && pastedBytes[0] == 0xFF
+        && pastedBytes[1] == 0xD8
+        && savedPastedBitmap.PixelWidth == 4
+        && savedPastedBitmap.PixelHeight == 6
+        && !pastedDocument.IsUnsaved
+        && !pastedDocument.IsEditorDirty
+        && pastedDocument.Path == pastedJpeg,
+        "Save As should write a rotated JPEG and adopt it as the clean "
+        + "in-memory document.");
+    mainViewModel.ShowManagerCommand.Execute(null);
+    Assert(
+        ReferenceEquals(mainViewModel.SelectedPhoto, selectedViewModel),
+        "Closing the pasted document should restore the previous catalogue photo.");
+    File.Delete(pastedJpeg);
+
+    var directImgurUrl = ImgurUploadService.ReadDirectLink(
+        """{"data":{"link":"http://i.imgur.com/vv462pA.png"}}""");
+    Assert(
+        directImgurUrl == "https://i.imgur.com/vv462pA.png",
+        "Imgur responses should yield a secure direct image URL.");
+    var rejectedNonDirectUrl = false;
+    try
+    {
+        ImgurUploadService.ReadDirectLink(
+            """{"data":{"link":"https://imgur.com/vv462pA"}}""");
+    }
+    catch (InvalidOperationException)
+    {
+        rejectedNonDirectUrl = true;
+    }
+
+    Assert(
+        rejectedNonDirectUrl,
+        "Imgur page URLs must not be copied in place of direct image URLs.");
+
+    using var recordingHandler = new RecordingHttpMessageHandler();
+    using var imgurHttpClient = new HttpClient(recordingHandler);
+    var imgurUploader = new ImgurUploadService(imgurHttpClient);
+    var uploadedUrl = await imgurUploader.UploadAsync(
+        syntheticBitmap,
+        "  smoke-client-id  ",
+        "Smoke upload");
+    var multipartText = System.Text.Encoding.Latin1.GetString(
+        recordingHandler.RequestBody
+        ?? throw new InvalidOperationException(
+            "The Imgur request body was not recorded."));
+    Assert(
+        uploadedUrl == "https://i.imgur.com/vv462pA.png"
+        && recordingHandler.Method == HttpMethod.Post
+        && recordingHandler.RequestUri
+            == new Uri("https://api.imgur.com/3/image")
+        && recordingHandler.AuthorizationScheme == "Client-ID"
+        && recordingHandler.AuthorizationParameter == "smoke-client-id"
+        && recordingHandler.ContentType?.StartsWith(
+            "multipart/form-data",
+            StringComparison.OrdinalIgnoreCase) == true
+        && multipartText.Contains(
+            "PhotoSite.png",
+            StringComparison.Ordinal)
+        && multipartText.Contains(
+            "image/png",
+            StringComparison.OrdinalIgnoreCase)
+        && multipartText.Contains(
+            "Smoke upload",
+            StringComparison.Ordinal),
+        "Imgur upload should POST a PNG multipart body with Client-ID "
+        + "authorization and return the direct URL.");
 
     File.Delete(secondPhoto);
     const long secondScan = 200;
@@ -405,7 +681,8 @@ try
         repository,
         indexer,
         selectedViewModel,
-        nextViewModel);
+        nextViewModel,
+        syntheticBitmap);
 
     Console.WriteLine("PhotoSite integration smoke tests passed.");
     return 0;
@@ -439,7 +716,8 @@ static async Task AssertWindowClosesCleanlyAsync(
     PhotoCatalogRepository repository,
     PhotoIndexer indexer,
     PhotoItemViewModel cataloguePhoto,
-    PhotoItemViewModel nextCataloguePhoto)
+    PhotoItemViewModel nextCataloguePhoto,
+    BitmapSource pastedBitmap)
 {
     var completion = new TaskCompletionSource(
         TaskCreationOptions.RunContinuationsAsynchronously);
@@ -473,6 +751,8 @@ static async Task AssertWindowClosesCleanlyAsync(
                 window.ValidatePhotoContextMenuForSmokeTest();
                 window.ValidateDarkThemeIconsForSmokeTest();
                 window.ValidateStatusBarLayoutForSmokeTest();
+                window.ValidateSelectionToolsForSmokeTest();
+                window.ValidatePastedImageBindingForSmokeTest(pastedBitmap);
                 window.ValidateCatalogTileForSmokeTest(
                     cataloguePhoto.FileName);
                 window.ValidateCatalogScrollResetForSmokeTest();
@@ -505,4 +785,39 @@ static async Task AssertWindowClosesCleanlyAsync(
     thread.Start();
 
     await completion.Task.WaitAsync(TimeSpan.FromSeconds(10));
+}
+
+sealed class RecordingHttpMessageHandler : HttpMessageHandler
+{
+    public HttpMethod? Method { get; private set; }
+
+    public Uri? RequestUri { get; private set; }
+
+    public string? AuthorizationScheme { get; private set; }
+
+    public string? AuthorizationParameter { get; private set; }
+
+    public string? ContentType { get; private set; }
+
+    public byte[]? RequestBody { get; private set; }
+
+    protected override async Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        Method = request.Method;
+        RequestUri = request.RequestUri;
+        AuthorizationScheme = request.Headers.Authorization?.Scheme;
+        AuthorizationParameter = request.Headers.Authorization?.Parameter;
+        ContentType = request.Content?.Headers.ContentType?.ToString();
+        RequestBody = request.Content is null
+            ? null
+            : await request.Content.ReadAsByteArrayAsync(cancellationToken);
+
+        return new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                """{"data":{"link":"https://i.imgur.com/vv462pA.png"}}""")
+        };
+    }
 }

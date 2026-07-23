@@ -2,6 +2,7 @@ using System.ComponentModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Win32;
+using System.Windows.Media.Imaging;
 using PhotoSite.Domain;
 using PhotoSite.Infrastructure;
 using PhotoSite.Services;
@@ -19,6 +20,7 @@ public sealed class MainViewModel : ObservableObject
     private readonly List<PhotoItemViewModel> allPhotos = [];
     private CancellationTokenSource? scanCancellation;
     private PhotoItemViewModel? selectedPhoto;
+    private PhotoItemViewModel? selectionBeforeTransientDocument;
     private string? currentFolder;
     private string photoCountText = "0 photos";
     private string statusText = "Choose a folder to begin";
@@ -221,6 +223,11 @@ public sealed class MainViewModel : ObservableObject
         }
     }
 
+    public void ReportStatus(string message)
+    {
+        StatusText = message;
+    }
+
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
         var savedScope = await catalog.GetSettingAsync(
@@ -267,7 +274,7 @@ public sealed class MainViewModel : ObservableObject
     public async Task SaveSessionAsync(
         CancellationToken cancellationToken = default)
     {
-        if (SelectedPhoto is not { } photo)
+        if (SelectedPhoto is not { IsTransient: false } photo)
         {
             return;
         }
@@ -485,6 +492,7 @@ public sealed class MainViewModel : ObservableObject
 
     private void ApplyPhotoPresentation(string? preferredPhotoPath = null)
     {
+        var transientSelection = SelectedPhoto is { IsTransient: true };
         var selectedPath = preferredPhotoPath ?? SelectedPhoto?.Path;
         var presented = BuildPhotoPresentation(
             allPhotos,
@@ -493,6 +501,11 @@ public sealed class MainViewModel : ObservableObject
             minimumRating,
             searchText);
         Photos.ReplaceRange(presented);
+        if (transientSelection)
+        {
+            return;
+        }
+
         SelectedPhoto = selectedPath is null
             ? Photos.FirstOrDefault()
             : Photos.FirstOrDefault(photo =>
@@ -619,11 +632,45 @@ public sealed class MainViewModel : ObservableObject
     private void ShowManager()
     {
         IsEditorMode = false;
+        RestoreSelectionAfterTransientDocument();
     }
 
     private void ToggleEditor()
     {
         IsEditorMode = !IsEditorMode;
+        if (!IsEditorMode)
+        {
+            RestoreSelectionAfterTransientDocument();
+        }
+    }
+
+    public PhotoItemViewModel OpenPastedImage(BitmapSource bitmap)
+    {
+        if (SelectedPhoto is not { IsTransient: true })
+        {
+            selectionBeforeTransientDocument = SelectedPhoto;
+        }
+
+        IsFullscreenMode = false;
+        var document = PhotoItemViewModel.CreateUnsaved(bitmap, catalog);
+        SelectedPhoto = document;
+        document.BeginEditorSession();
+        IsEditorMode = true;
+        return document;
+    }
+
+    private void RestoreSelectionAfterTransientDocument()
+    {
+        if (SelectedPhoto is not { IsTransient: true })
+        {
+            return;
+        }
+
+        var previous = selectionBeforeTransientDocument;
+        selectionBeforeTransientDocument = null;
+        SelectedPhoto = previous is not null && Photos.Contains(previous)
+            ? previous
+            : Photos.FirstOrDefault();
     }
 
     private void ToggleFullscreen()

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -13,11 +14,30 @@ public sealed class PhotoViewer : FrameworkElement
     private const double ZoomStep = 1.18;
     private const double MinimumZoom = 0.1;
     private const double MaximumActualScale = 16;
+    private const double MinimumGrabArea = 48;
+    private const double MaximumGrabArea = 96;
+    private const double GrabAreaFraction = 0.2;
+    private const double SelectionHitTolerance = 8;
+    private const double MinimumSelectionSize = 4;
+
+    private static readonly Brush SelectionShadeBrush =
+        CreateFrozenBrush(Color.FromArgb(142, 0, 0, 0));
+    private static readonly Brush SelectionHandleBrush =
+        CreateFrozenBrush(Color.FromRgb(242, 244, 248));
+    private static readonly Pen SelectionBorderPen =
+        CreateFrozenPen(Color.FromRgb(103, 183, 255), 1.5);
 
     public static readonly DependencyProperty SourcePathProperty =
         DependencyProperty.Register(
             nameof(SourcePath),
             typeof(string),
+            typeof(PhotoViewer),
+            new FrameworkPropertyMetadata(null, OnViewerPropertyChanged));
+
+    public static readonly DependencyProperty SourceBitmapProperty =
+        DependencyProperty.Register(
+            nameof(SourceBitmap),
+            typeof(BitmapSource),
             typeof(PhotoViewer),
             new FrameworkPropertyMetadata(null, OnViewerPropertyChanged));
 
@@ -67,6 +87,26 @@ public sealed class PhotoViewer : FrameworkElement
             typeof(ICommand),
             typeof(PhotoViewer));
 
+    public static readonly DependencyProperty IsSelectionModeProperty =
+        DependencyProperty.Register(
+            nameof(IsSelectionMode),
+            typeof(bool),
+            typeof(PhotoViewer),
+            new FrameworkPropertyMetadata(
+                false,
+                FrameworkPropertyMetadataOptions.AffectsRender,
+                OnSelectionModeChanged));
+
+    private static readonly DependencyPropertyKey HasSelectionPropertyKey =
+        DependencyProperty.RegisterReadOnly(
+            nameof(HasSelection),
+            typeof(bool),
+            typeof(PhotoViewer),
+            new FrameworkPropertyMetadata(false));
+
+    public static readonly DependencyProperty HasSelectionProperty =
+        HasSelectionPropertyKey.DependencyProperty;
+
     private BitmapSource? bitmap;
     private BitmapSource? previousBitmap;
     private CancellationTokenSource? loadCancellation;
@@ -79,10 +119,26 @@ public sealed class PhotoViewer : FrameworkElement
     private Point dragOrigin;
     private Vector panOrigin;
     private bool isDragging;
+    private CropRegion? selection;
+    private CropRegion selectionAtDragStart;
+    private Point selectionDragOrigin;
+    private SelectionOperation selectionOperation;
     private bool isFullResolutionBitmap;
     private bool isTransitioning;
     private long transitionStartedAt;
     private string? error;
+
+    [Flags]
+    private enum SelectionOperation
+    {
+        None = 0,
+        Create = 1,
+        Move = 2,
+        Left = 4,
+        Top = 8,
+        Right = 16,
+        Bottom = 32
+    }
 
     public PhotoViewer()
     {
@@ -99,7 +155,11 @@ public sealed class PhotoViewer : FrameworkElement
             if (bitmap is null)
             {
                 BeginLoad();
+                return;
             }
+
+            ConstrainPan();
+            InvalidateVisual();
         };
     }
 
@@ -107,6 +167,12 @@ public sealed class PhotoViewer : FrameworkElement
     {
         get => (string?)GetValue(SourcePathProperty);
         set => SetValue(SourcePathProperty, value);
+    }
+
+    public BitmapSource? SourceBitmap
+    {
+        get => (BitmapSource?)GetValue(SourceBitmapProperty);
+        set => SetValue(SourceBitmapProperty, value);
     }
 
     public EditRecipe EditRecipe
@@ -151,6 +217,60 @@ public sealed class PhotoViewer : FrameworkElement
         set => SetValue(NextPhotoCommandProperty, value);
     }
 
+    public bool IsSelectionMode
+    {
+        get => (bool)GetValue(IsSelectionModeProperty);
+        set => SetValue(IsSelectionModeProperty, value);
+    }
+
+    public bool HasSelection => (bool)GetValue(HasSelectionProperty);
+
+    public CropRegion? SelectionRegion => selection;
+
+    public void ToggleSelectionMode()
+    {
+        IsSelectionMode = !IsSelectionMode;
+    }
+
+    public void EndSelectionMode()
+    {
+        IsSelectionMode = false;
+    }
+
+    public void ClearSelection()
+    {
+        SetSelection(null);
+    }
+
+    public async Task<(int Width, int Height)> CopySelectionToClipboardAsync(
+        CancellationToken cancellationToken = default)
+    {
+        if (selection is not { } selected)
+        {
+            return default;
+        }
+
+        var recipe = EditRecipe;
+        var source = SourceBitmap;
+        if (source is null)
+        {
+            if (string.IsNullOrWhiteSpace(SourcePath))
+            {
+                return default;
+            }
+
+            source = await App.Services.Previews.LoadAsync(
+                SourcePath,
+                0,
+                cancellationToken);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        var rendered = RenderSelection(source, recipe, selected);
+        await SetClipboardImageAsync(rendered, cancellationToken);
+        return (rendered.PixelWidth, rendered.PixelHeight);
+    }
+
     public void FitToViewport()
     {
         ResetView();
@@ -162,7 +282,18 @@ public sealed class PhotoViewer : FrameworkElement
 
     public void ShowActualSize()
     {
-        if (bitmap is null || string.IsNullOrWhiteSpace(SourcePath))
+        if (bitmap is null)
+        {
+            return;
+        }
+
+        if (SourceBitmap is not null)
+        {
+            SetActualSize();
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(SourcePath))
         {
             return;
         }
@@ -183,6 +314,12 @@ public sealed class PhotoViewer : FrameworkElement
     public void ZoomIn() => ChangeZoom(ZoomStep);
 
     public void ZoomOut() => ChangeZoom(1 / ZoomStep);
+
+    public void Reload()
+    {
+        ResetView();
+        BeginLoad();
+    }
 
     protected override void OnRender(DrawingContext drawingContext)
     {
@@ -216,10 +353,12 @@ public sealed class PhotoViewer : FrameworkElement
                 bitmap,
                 bitmapRecipe,
                 easedProgress);
+            DrawSelection(drawingContext);
             return;
         }
 
         DrawBitmap(drawingContext, bitmap, bitmapRecipe, 1);
+        DrawSelection(drawingContext);
     }
 
     private void DrawBitmap(
@@ -228,32 +367,153 @@ public sealed class PhotoViewer : FrameworkElement
         EditRecipe recipe,
         double opacity)
     {
-        var rotation = (int)recipe.Rotation * 90;
         var fit = GetFitScale(source, recipe);
         var scale = Math.Max(0.0001, fit * zoom);
+        var crop = GetCropPixelRect(source, recipe);
 
-        var group = new TransformGroup();
-        group.Children.Add(
-            new ScaleTransform(
-                recipe.FlipHorizontal ? -scale : scale,
-                scale));
-        group.Children.Add(new RotateTransform(rotation));
-        group.Children.Add(
-            new TranslateTransform(
-                (ActualWidth / 2) + pan.X,
-                (ActualHeight / 2) + pan.Y));
+        var group = CreateViewerTransform(source, recipe, pan);
 
         drawingContext.PushOpacity(opacity);
         drawingContext.PushTransform(group);
+        drawingContext.PushClip(
+            new RectangleGeometry(
+                new Rect(
+                    -crop.Width / 2,
+                    -crop.Height / 2,
+                    crop.Width,
+                    crop.Height)));
         drawingContext.DrawImage(
             source,
             new Rect(
-                -source.PixelWidth / 2d,
-                -source.PixelHeight / 2d,
+                -crop.X - (crop.Width / 2),
+                -crop.Y - (crop.Height / 2),
                 source.PixelWidth,
                 source.PixelHeight));
         drawingContext.Pop();
         drawingContext.Pop();
+        drawingContext.Pop();
+    }
+
+    private void DrawSelection(DrawingContext drawingContext)
+    {
+        if (!IsSelectionMode
+            || selection is not { } selected
+            || bitmap is null)
+        {
+            return;
+        }
+
+        var imageBounds = GetScreenBounds(
+            bitmap,
+            EditRecipe,
+            GetRecipeCrop(EditRecipe),
+            pan);
+        var selectionBounds = GetScreenBounds(
+            bitmap,
+            EditRecipe,
+            selected,
+            pan);
+        var visibleImage = Rect.Intersect(
+            imageBounds,
+            new Rect(RenderSize));
+        var visibleSelection = Rect.Intersect(
+            selectionBounds,
+            visibleImage);
+
+        if (!visibleImage.IsEmpty && !visibleSelection.IsEmpty)
+        {
+            DrawSelectionShade(
+                drawingContext,
+                visibleImage,
+                visibleSelection);
+        }
+
+        drawingContext.DrawRectangle(
+            Brushes.Transparent,
+            SelectionBorderPen,
+            selectionBounds);
+        DrawSelectionHandles(drawingContext, selectionBounds);
+    }
+
+    private static void DrawSelectionShade(
+        DrawingContext drawingContext,
+        Rect image,
+        Rect selectionBounds)
+    {
+        DrawShadeRect(
+            drawingContext,
+            new Rect(
+                image.Left,
+                image.Top,
+                image.Width,
+                Math.Max(0, selectionBounds.Top - image.Top)));
+        DrawShadeRect(
+            drawingContext,
+            new Rect(
+                image.Left,
+                selectionBounds.Bottom,
+                image.Width,
+                Math.Max(0, image.Bottom - selectionBounds.Bottom)));
+        DrawShadeRect(
+            drawingContext,
+            new Rect(
+                image.Left,
+                selectionBounds.Top,
+                Math.Max(0, selectionBounds.Left - image.Left),
+                selectionBounds.Height));
+        DrawShadeRect(
+            drawingContext,
+            new Rect(
+                selectionBounds.Right,
+                selectionBounds.Top,
+                Math.Max(0, image.Right - selectionBounds.Right),
+                selectionBounds.Height));
+    }
+
+    private static void DrawShadeRect(
+        DrawingContext drawingContext,
+        Rect rectangle)
+    {
+        if (rectangle.Width > 0 && rectangle.Height > 0)
+        {
+            drawingContext.DrawRectangle(
+                SelectionShadeBrush,
+                null,
+                rectangle);
+        }
+    }
+
+    private static void DrawSelectionHandles(
+        DrawingContext drawingContext,
+        Rect bounds)
+    {
+        const double handleSize = 7;
+        var radius = handleSize / 2;
+        var points = new[]
+        {
+            bounds.TopLeft,
+            new Point(bounds.Left + bounds.Width / 2, bounds.Top),
+            bounds.TopRight,
+            new Point(bounds.Right, bounds.Top + bounds.Height / 2),
+            bounds.BottomRight,
+            new Point(bounds.Left + bounds.Width / 2, bounds.Bottom),
+            bounds.BottomLeft,
+            new Point(bounds.Left, bounds.Top + bounds.Height / 2)
+        };
+
+        foreach (var point in points)
+        {
+            drawingContext.DrawRoundedRectangle(
+                SelectionHandleBrush,
+                SelectionBorderPen,
+                new Rect(
+                    point.X - radius,
+                    point.Y - radius,
+                    handleSize,
+                    handleSize),
+                1.5,
+                1.5);
+        }
     }
 
     protected override void OnMouseWheel(MouseWheelEventArgs e)
@@ -281,6 +541,19 @@ public sealed class PhotoViewer : FrameworkElement
     {
         base.OnMouseLeftButtonDown(e);
         Focus();
+
+        if (IsSelectionMode
+            && (Keyboard.Modifiers & ModifierKeys.Control) == 0
+            && !Keyboard.IsKeyDown(Key.Space))
+        {
+            if (e.ClickCount == 1)
+            {
+                BeginSelectionDrag(e.GetPosition(this));
+            }
+
+            e.Handled = true;
+            return;
+        }
 
         if (e.ClickCount == 2)
         {
@@ -321,22 +594,40 @@ public sealed class PhotoViewer : FrameworkElement
     protected override void OnMouseMove(MouseEventArgs e)
     {
         base.OnMouseMove(e);
-        if (!isDragging)
+        var current = e.GetPosition(this);
+        if (selectionOperation != SelectionOperation.None)
         {
+            UpdateSelectionDrag(current);
+            e.Handled = true;
             return;
         }
 
-        var current = e.GetPosition(this);
+        if (!isDragging)
+        {
+            UpdateCursor(current);
+            return;
+        }
+
         pan = panOrigin + (current - dragOrigin);
+        ConstrainPan();
         InvalidateVisual();
     }
 
     protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e)
     {
         base.OnMouseLeftButtonUp(e);
+        if (selectionOperation != SelectionOperation.None)
+        {
+            FinishSelectionDrag();
+        }
+
         isDragging = false;
-        ReleaseMouseCapture();
-        Cursor = Cursors.Arrow;
+        if (IsMouseCaptured)
+        {
+            ReleaseMouseCapture();
+        }
+
+        UpdateCursor(e.GetPosition(this));
     }
 
     private void ChangeZoom(double factor)
@@ -350,6 +641,7 @@ public sealed class PhotoViewer : FrameworkElement
             zoom * factor,
             MinimumZoom,
             maximumZoom);
+        ConstrainPan();
         InvalidateVisual();
     }
 
@@ -362,6 +654,7 @@ public sealed class PhotoViewer : FrameworkElement
 
         zoom = 1 / GetFitScale(bitmap, EditRecipe);
         pan = default;
+        ConstrainPan();
         InvalidateVisual();
     }
 
@@ -369,8 +662,9 @@ public sealed class PhotoViewer : FrameworkElement
     {
         var rotation = (int)recipe.Rotation * 90;
         var swapsDimensions = rotation is 90 or 270;
-        var displayedWidth = swapsDimensions ? source.PixelHeight : source.PixelWidth;
-        var displayedHeight = swapsDimensions ? source.PixelWidth : source.PixelHeight;
+        var crop = GetCropPixelRect(source, recipe);
+        var displayedWidth = swapsDimensions ? crop.Height : crop.Width;
+        var displayedHeight = swapsDimensions ? crop.Width : crop.Height;
         return Math.Max(
             0.0001,
             Math.Min(
@@ -383,6 +677,7 @@ public sealed class PhotoViewer : FrameworkElement
         DependencyPropertyChangedEventArgs eventArgs)
     {
         var viewer = (PhotoViewer)dependencyObject;
+        viewer.ClearSelection();
         viewer.ResetView();
         viewer.BeginLoad();
     }
@@ -399,6 +694,729 @@ public sealed class PhotoViewer : FrameworkElement
         {
             viewer.bitmapRecipe = (EditRecipe)eventArgs.NewValue;
         }
+
+        viewer.ConstrainPan();
+        viewer.InvalidateVisual();
+    }
+
+    private static void OnSelectionModeChanged(
+        DependencyObject dependencyObject,
+        DependencyPropertyChangedEventArgs eventArgs)
+    {
+        var viewer = (PhotoViewer)dependencyObject;
+        if (!(bool)eventArgs.NewValue)
+        {
+            viewer.ClearSelection();
+            viewer.selectionOperation = SelectionOperation.None;
+            viewer.isDragging = false;
+            if (viewer.IsMouseCaptured)
+            {
+                viewer.ReleaseMouseCapture();
+            }
+        }
+
+        viewer.ConstrainPan();
+        viewer.UpdateCursor(Mouse.GetPosition(viewer));
+        viewer.InvalidateVisual();
+    }
+
+    private void BeginSelectionDrag(Point position)
+    {
+        if (!TryGetNormalizedSourcePoint(
+                position,
+                clampToImage: false,
+                out var sourcePoint,
+                out _))
+        {
+            return;
+        }
+
+        selectionOperation = HitTestSelection(sourcePoint);
+        selectionDragOrigin = sourcePoint;
+        selectionAtDragStart = selection ?? default;
+        if (selectionOperation == SelectionOperation.None)
+        {
+            selectionOperation = SelectionOperation.Create;
+            SetSelection(null);
+        }
+
+        isDragging = true;
+        CaptureMouse();
+        UpdateCursor(position);
+    }
+
+    private void UpdateSelectionDrag(Point position)
+    {
+        if (!TryGetNormalizedSourcePoint(
+                position,
+                clampToImage:
+                    selectionOperation != SelectionOperation.Create,
+                out var current,
+                out _))
+        {
+            return;
+        }
+
+        var imageBounds = GetRecipeCrop(EditRecipe);
+        CropRegion updated;
+        if (selectionOperation == SelectionOperation.Create)
+        {
+            updated = CreateSelectionFromDrag(
+                imageBounds,
+                selectionDragOrigin,
+                current);
+        }
+        else if (selectionOperation == SelectionOperation.Move)
+        {
+            var delta = current - selectionDragOrigin;
+            updated = MoveRegionWithin(
+                selectionAtDragStart,
+                delta,
+                imageBounds);
+        }
+        else
+        {
+            updated = ResizeSelection(current, imageBounds);
+        }
+
+        SetSelection(updated);
+        UpdateCursor(position);
+    }
+
+    private CropRegion ResizeSelection(
+        Point current,
+        CropRegion imageBounds)
+    {
+        var left = selectionAtDragStart.X;
+        var top = selectionAtDragStart.Y;
+        var right = selectionAtDragStart.Right;
+        var bottom = selectionAtDragStart.Bottom;
+        var minimum = GetMinimumSelectionSize();
+
+        if (selectionOperation.HasFlag(SelectionOperation.Left))
+        {
+            left = Math.Clamp(
+                current.X,
+                imageBounds.X,
+                Math.Max(imageBounds.X, right - minimum.Width));
+        }
+        else if (selectionOperation.HasFlag(SelectionOperation.Right))
+        {
+            right = Math.Clamp(
+                current.X,
+                Math.Min(imageBounds.Right, left + minimum.Width),
+                imageBounds.Right);
+        }
+
+        if (selectionOperation.HasFlag(SelectionOperation.Top))
+        {
+            top = Math.Clamp(
+                current.Y,
+                imageBounds.Y,
+                Math.Max(imageBounds.Y, bottom - minimum.Height));
+        }
+        else if (selectionOperation.HasFlag(SelectionOperation.Bottom))
+        {
+            bottom = Math.Clamp(
+                current.Y,
+                Math.Min(imageBounds.Bottom, top + minimum.Height),
+                imageBounds.Bottom);
+        }
+
+        return new CropRegion(
+            left,
+            top,
+            Math.Max(0, right - left),
+            Math.Max(0, bottom - top));
+    }
+
+    private void FinishSelectionDrag()
+    {
+        selectionOperation = SelectionOperation.None;
+        if (selection is { } selected && bitmap is not null)
+        {
+            var bounds = GetScreenBounds(
+                bitmap,
+                EditRecipe,
+                selected,
+                pan);
+            if (bounds.Width < MinimumSelectionSize
+                || bounds.Height < MinimumSelectionSize)
+            {
+                SetSelection(null);
+            }
+        }
+
+        ConstrainPan();
+        InvalidateVisual();
+    }
+
+    private SelectionOperation HitTestSelection(Point sourcePoint)
+    {
+        if (selection is not { } selected || bitmap is null)
+        {
+            return SelectionOperation.None;
+        }
+
+        var tolerance = GetNormalizedSelectionTolerance();
+        var withinHorizontal = sourcePoint.X >= selected.X - tolerance.Width
+            && sourcePoint.X <= selected.Right + tolerance.Width;
+        var withinVertical = sourcePoint.Y >= selected.Y - tolerance.Height
+            && sourcePoint.Y <= selected.Bottom + tolerance.Height;
+        if (!withinHorizontal || !withinVertical)
+        {
+            return SelectionOperation.None;
+        }
+
+        var operation = SelectionOperation.None;
+        if (Math.Abs(sourcePoint.X - selected.X) <= tolerance.Width)
+        {
+            operation |= SelectionOperation.Left;
+        }
+        else if (Math.Abs(sourcePoint.X - selected.Right) <= tolerance.Width)
+        {
+            operation |= SelectionOperation.Right;
+        }
+
+        if (Math.Abs(sourcePoint.Y - selected.Y) <= tolerance.Height)
+        {
+            operation |= SelectionOperation.Top;
+        }
+        else if (Math.Abs(sourcePoint.Y - selected.Bottom) <= tolerance.Height)
+        {
+            operation |= SelectionOperation.Bottom;
+        }
+
+        if (operation != SelectionOperation.None)
+        {
+            return operation;
+        }
+
+        return sourcePoint.X >= selected.X
+               && sourcePoint.X <= selected.Right
+               && sourcePoint.Y >= selected.Y
+               && sourcePoint.Y <= selected.Bottom
+            ? SelectionOperation.Move
+            : SelectionOperation.None;
+    }
+
+    private void UpdateCursor(Point position)
+    {
+        if (!IsSelectionMode)
+        {
+            Cursor = isDragging ? Cursors.SizeAll : Cursors.Arrow;
+            return;
+        }
+
+        if (Keyboard.IsKeyDown(Key.Space))
+        {
+            Cursor = Cursors.SizeAll;
+            return;
+        }
+
+        if (selectionOperation != SelectionOperation.None)
+        {
+            Cursor = GetSelectionOperationCursor(selectionOperation);
+            return;
+        }
+
+        if (TryGetNormalizedSourcePoint(
+                position,
+                clampToImage: false,
+                out var sourcePoint,
+                out var isInsideImage)
+            && isInsideImage)
+        {
+            Cursor = GetSelectionOperationCursor(
+                HitTestSelection(sourcePoint));
+            return;
+        }
+
+        Cursor = Cursors.Cross;
+    }
+
+    private Cursor GetSelectionOperationCursor(
+        SelectionOperation operation)
+    {
+        if (operation == SelectionOperation.Move)
+        {
+            return Cursors.SizeAll;
+        }
+
+        if (operation is SelectionOperation.None
+            or SelectionOperation.Create
+            || bitmap is null
+            || selection is not { } selected)
+        {
+            return Cursors.Cross;
+        }
+
+        var hasHorizontalEdge =
+            (operation
+             & (SelectionOperation.Left | SelectionOperation.Right)) != 0;
+        var hasVerticalEdge =
+            (operation
+             & (SelectionOperation.Top | SelectionOperation.Bottom)) != 0;
+        var handle = new Point(
+            operation.HasFlag(SelectionOperation.Left)
+                ? selected.X
+                : operation.HasFlag(SelectionOperation.Right)
+                    ? selected.Right
+                    : selected.X + selected.Width / 2,
+            operation.HasFlag(SelectionOperation.Top)
+                ? selected.Y
+                : operation.HasFlag(SelectionOperation.Bottom)
+                    ? selected.Bottom
+                    : selected.Y + selected.Height / 2);
+        var center = new Point(
+            selected.X + selected.Width / 2,
+            selected.Y + selected.Height / 2);
+        return ResolveResizeCursor(
+            GetScreenPoint(bitmap, EditRecipe, handle, pan),
+            GetScreenPoint(bitmap, EditRecipe, center, pan),
+            hasHorizontalEdge && hasVerticalEdge);
+    }
+
+    internal static Cursor ResolveResizeCursor(
+        Point handle,
+        Point center,
+        bool isCorner)
+    {
+        var offset = handle - center;
+        if (!isCorner)
+        {
+            return Math.Abs(offset.X) >= Math.Abs(offset.Y)
+                ? Cursors.SizeWE
+                : Cursors.SizeNS;
+        }
+
+        return offset.X * offset.Y >= 0
+            ? Cursors.SizeNWSE
+            : Cursors.SizeNESW;
+    }
+
+    private bool TryGetNormalizedSourcePoint(
+        Point viewerPoint,
+        bool clampToImage,
+        out Point sourcePoint,
+        out bool isInsideImage)
+    {
+        sourcePoint = default;
+        isInsideImage = false;
+        if (bitmap is null)
+        {
+            return false;
+        }
+
+        var transform = CreateViewerTransform(bitmap, EditRecipe, pan);
+        var inverse = transform.Inverse;
+        if (inverse is null)
+        {
+            return false;
+        }
+
+        var crop = GetCropPixelRect(bitmap, EditRecipe);
+        var local = inverse.Transform(viewerPoint);
+        var sourceX = local.X + crop.X + crop.Width / 2;
+        var sourceY = local.Y + crop.Y + crop.Height / 2;
+        var normalized = new Point(
+            sourceX / Math.Max(1, bitmap.PixelWidth),
+            sourceY / Math.Max(1, bitmap.PixelHeight));
+        var imageRegion = GetRecipeCrop(EditRecipe);
+        isInsideImage =
+            normalized.X >= imageRegion.X
+            && normalized.X <= imageRegion.Right
+            && normalized.Y >= imageRegion.Y
+            && normalized.Y <= imageRegion.Bottom;
+
+        sourcePoint = clampToImage
+            ? new Point(
+                Math.Clamp(normalized.X, imageRegion.X, imageRegion.Right),
+                Math.Clamp(normalized.Y, imageRegion.Y, imageRegion.Bottom))
+            : normalized;
+        return true;
+    }
+
+    private void SetSelection(CropRegion? value)
+    {
+        CropRegion? normalized = null;
+        if (value is { } candidate)
+        {
+            var constrained = IntersectRegions(
+                candidate.ConstrainToUnit(),
+                GetRecipeCrop(EditRecipe));
+            if (!constrained.IsEmpty)
+            {
+                normalized = constrained;
+            }
+        }
+
+        selection = normalized;
+        SetValue(HasSelectionPropertyKey, normalized is not null);
+        InvalidateVisual();
+    }
+
+    private Size GetNormalizedSelectionTolerance()
+    {
+        if (bitmap is null)
+        {
+            return default;
+        }
+
+        var scale = Math.Max(
+            0.0001,
+            GetFitScale(bitmap, EditRecipe) * zoom);
+        return new Size(
+            SelectionHitTolerance
+            / Math.Max(1, scale * bitmap.PixelWidth),
+            SelectionHitTolerance
+            / Math.Max(1, scale * bitmap.PixelHeight));
+    }
+
+    private Size GetMinimumSelectionSize()
+    {
+        if (bitmap is null)
+        {
+            return default;
+        }
+
+        var scale = Math.Max(
+            0.0001,
+            GetFitScale(bitmap, EditRecipe) * zoom);
+        return new Size(
+            MinimumSelectionSize
+            / Math.Max(1, scale * bitmap.PixelWidth),
+            MinimumSelectionSize
+            / Math.Max(1, scale * bitmap.PixelHeight));
+    }
+
+    private void ConstrainPan()
+    {
+        if (bitmap is null || ActualWidth <= 0 || ActualHeight <= 0)
+        {
+            return;
+        }
+
+        var anchor = IsSelectionMode && selection is { } selected
+            ? selected
+            : GetRecipeCrop(EditRecipe);
+        var baseBounds = GetScreenBounds(
+            bitmap,
+            EditRecipe,
+            anchor,
+            default);
+        if (baseBounds.IsEmpty)
+        {
+            return;
+        }
+
+        pan = ConstrainPanToVisible(
+            baseBounds,
+            new Size(ActualWidth, ActualHeight),
+            pan);
+    }
+
+    internal static Vector ConstrainPanToVisible(
+        Rect baseBounds,
+        Size viewport,
+        Vector requestedPan)
+    {
+        var visibleWidth = CalculateGrabSize(baseBounds.Width);
+        var visibleHeight = CalculateGrabSize(baseBounds.Height);
+        return ConstrainPanToVisible(
+            baseBounds,
+            viewport,
+            requestedPan,
+            visibleWidth,
+            visibleHeight);
+    }
+
+    private static Vector ConstrainPanToVisible(
+        Rect baseBounds,
+        Size viewport,
+        Vector requestedPan,
+        double visibleWidth,
+        double visibleHeight)
+    {
+        visibleWidth = Math.Min(visibleWidth, viewport.Width);
+        visibleHeight = Math.Min(visibleHeight, viewport.Height);
+        var minimumX = visibleWidth - baseBounds.Right;
+        var maximumX = viewport.Width - visibleWidth - baseBounds.Left;
+        var minimumY = visibleHeight - baseBounds.Bottom;
+        var maximumY = viewport.Height - visibleHeight - baseBounds.Top;
+        return new Vector(
+            Math.Clamp(requestedPan.X, minimumX, maximumX),
+            Math.Clamp(requestedPan.Y, minimumY, maximumY));
+    }
+
+    private TransformGroup CreateViewerTransform(
+        BitmapSource source,
+        EditRecipe recipe,
+        Vector translation)
+    {
+        var scale = Math.Max(
+            0.0001,
+            GetFitScale(source, recipe) * zoom);
+        var group = new TransformGroup();
+        group.Children.Add(
+            new ScaleTransform(
+                recipe.FlipHorizontal ? -scale : scale,
+                scale));
+        group.Children.Add(
+            new RotateTransform((int)recipe.Rotation * 90));
+        group.Children.Add(
+            new TranslateTransform(
+                (ActualWidth / 2) + translation.X,
+                (ActualHeight / 2) + translation.Y));
+        return group;
+    }
+
+    private Rect GetScreenBounds(
+        BitmapSource source,
+        EditRecipe recipe,
+        CropRegion region,
+        Vector translation)
+    {
+        var crop = GetCropPixelRect(source, recipe);
+        var regionPixels = GetPixelRect(source, region);
+        var localLeft = regionPixels.X - crop.X - crop.Width / 2;
+        var localTop = regionPixels.Y - crop.Y - crop.Height / 2;
+        var localRight = localLeft + regionPixels.Width;
+        var localBottom = localTop + regionPixels.Height;
+        var transform = CreateViewerTransform(
+            source,
+            recipe,
+            translation);
+        var points = new[]
+        {
+            transform.Transform(new Point(localLeft, localTop)),
+            transform.Transform(new Point(localRight, localTop)),
+            transform.Transform(new Point(localRight, localBottom)),
+            transform.Transform(new Point(localLeft, localBottom))
+        };
+        var left = points.Min(point => point.X);
+        var top = points.Min(point => point.Y);
+        var right = points.Max(point => point.X);
+        var bottom = points.Max(point => point.Y);
+        return new Rect(
+            left,
+            top,
+            Math.Max(0, right - left),
+            Math.Max(0, bottom - top));
+    }
+
+    private Point GetScreenPoint(
+        BitmapSource source,
+        EditRecipe recipe,
+        Point normalizedSourcePoint,
+        Vector translation)
+    {
+        var crop = GetCropPixelRect(source, recipe);
+        var local = new Point(
+            normalizedSourcePoint.X * source.PixelWidth
+            - crop.X
+            - crop.Width / 2,
+            normalizedSourcePoint.Y * source.PixelHeight
+            - crop.Y
+            - crop.Height / 2);
+        return CreateViewerTransform(
+            source,
+            recipe,
+            translation).Transform(local);
+    }
+
+    private static double CalculateGrabSize(double displayedSize) =>
+        Math.Min(
+            displayedSize,
+            Math.Clamp(
+                displayedSize * GrabAreaFraction,
+                MinimumGrabArea,
+                MaximumGrabArea));
+
+    private static CropRegion GetRecipeCrop(EditRecipe recipe)
+    {
+        var crop = recipe.Crop?.ConstrainToUnit();
+        return crop is { IsEmpty: false }
+            ? crop.Value
+            : new CropRegion(0, 0, 1, 1);
+    }
+
+    private static Rect GetCropPixelRect(
+        BitmapSource source,
+        EditRecipe recipe) =>
+        GetPixelRect(source, GetRecipeCrop(recipe));
+
+    private static Rect GetPixelRect(
+        BitmapSource source,
+        CropRegion region) =>
+        new(
+            region.X * source.PixelWidth,
+            region.Y * source.PixelHeight,
+            region.Width * source.PixelWidth,
+            region.Height * source.PixelHeight);
+
+    internal static Int32Rect GetPixelSelectionRect(
+        BitmapSource source,
+        CropRegion region)
+    {
+        var constrained = region.ConstrainToUnit();
+        var left = Math.Clamp(
+            (int)Math.Floor(constrained.X * source.PixelWidth),
+            0,
+            Math.Max(0, source.PixelWidth - 1));
+        var top = Math.Clamp(
+            (int)Math.Floor(constrained.Y * source.PixelHeight),
+            0,
+            Math.Max(0, source.PixelHeight - 1));
+        var right = Math.Clamp(
+            (int)Math.Ceiling(constrained.Right * source.PixelWidth),
+            left + 1,
+            source.PixelWidth);
+        var bottom = Math.Clamp(
+            (int)Math.Ceiling(constrained.Bottom * source.PixelHeight),
+            top + 1,
+            source.PixelHeight);
+        return new Int32Rect(
+            left,
+            top,
+            right - left,
+            bottom - top);
+    }
+
+    internal static BitmapSource RenderSelection(
+        BitmapSource source,
+        EditRecipe recipe,
+        CropRegion region)
+    {
+        var pixelRegion = GetPixelSelectionRect(source, region);
+        var cropped = new CroppedBitmap(source, pixelRegion);
+        cropped.Freeze();
+        var swapsDimensions =
+            recipe.Rotation is QuarterRotation.Clockwise90
+            or QuarterRotation.Clockwise270;
+        var outputWidth = swapsDimensions
+            ? cropped.PixelHeight
+            : cropped.PixelWidth;
+        var outputHeight = swapsDimensions
+            ? cropped.PixelWidth
+            : cropped.PixelHeight;
+        var visual = new DrawingVisual();
+        RenderOptions.SetBitmapScalingMode(
+            visual,
+            BitmapScalingMode.HighQuality);
+        using (var drawingContext = visual.RenderOpen())
+        {
+            var transform = new TransformGroup();
+            transform.Children.Add(
+                new ScaleTransform(
+                    recipe.FlipHorizontal ? -1 : 1,
+                    1));
+            transform.Children.Add(
+                new RotateTransform((int)recipe.Rotation * 90));
+            transform.Children.Add(
+                new TranslateTransform(
+                    outputWidth / 2d,
+                    outputHeight / 2d));
+            drawingContext.PushTransform(transform);
+            drawingContext.DrawImage(
+                cropped,
+                new Rect(
+                    -cropped.PixelWidth / 2d,
+                    -cropped.PixelHeight / 2d,
+                    cropped.PixelWidth,
+                    cropped.PixelHeight));
+            drawingContext.Pop();
+        }
+
+        var rendered = new RenderTargetBitmap(
+            outputWidth,
+            outputHeight,
+            96,
+            96,
+            PixelFormats.Pbgra32);
+        rendered.Render(visual);
+        rendered.Freeze();
+        return rendered;
+    }
+
+    private static async Task SetClipboardImageAsync(
+        BitmapSource image,
+        CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                Clipboard.SetImage(image);
+                return;
+            }
+            catch (ExternalException) when (attempt < 2)
+            {
+                await Task.Delay(35, cancellationToken);
+            }
+        }
+    }
+
+    private static CropRegion IntersectRegions(
+        CropRegion first,
+        CropRegion second)
+    {
+        var left = Math.Max(first.X, second.X);
+        var top = Math.Max(first.Y, second.Y);
+        var right = Math.Min(first.Right, second.Right);
+        var bottom = Math.Min(first.Bottom, second.Bottom);
+        return new CropRegion(
+            left,
+            top,
+            Math.Max(0, right - left),
+            Math.Max(0, bottom - top));
+    }
+
+    internal static CropRegion CreateSelectionFromDrag(
+        CropRegion imageBounds,
+        Point dragStart,
+        Point dragEnd) =>
+        IntersectRegions(
+            CropRegion.FromPoints(
+                dragStart.X,
+                dragStart.Y,
+                dragEnd.X,
+                dragEnd.Y),
+            imageBounds);
+
+    private static CropRegion MoveRegionWithin(
+        CropRegion region,
+        Vector delta,
+        CropRegion bounds)
+    {
+        var x = Math.Clamp(
+            region.X + delta.X,
+            bounds.X,
+            Math.Max(bounds.X, bounds.Right - region.Width));
+        var y = Math.Clamp(
+            region.Y + delta.Y,
+            bounds.Y,
+            Math.Max(bounds.Y, bounds.Bottom - region.Height));
+        return region with { X = x, Y = y };
+    }
+
+    private static SolidColorBrush CreateFrozenBrush(Color color)
+    {
+        var brush = new SolidColorBrush(color);
+        brush.Freeze();
+        return brush;
+    }
+
+    private static Pen CreateFrozenPen(
+        Color color,
+        double thickness)
+    {
+        var pen = new Pen(
+            CreateFrozenBrush(color),
+            thickness);
+        pen.Freeze();
+        return pen;
     }
 
     private void BeginLoad(bool fullResolution = false)
@@ -407,6 +1425,16 @@ public sealed class PhotoViewer : FrameworkElement
         StopTransition();
         error = null;
         InvalidateVisual();
+
+        if (SourceBitmap is { } inMemory)
+        {
+            bitmap = inMemory;
+            bitmapPath = null;
+            bitmapRecipe = EditRecipe;
+            isFullResolutionBitmap = true;
+            InvalidateVisual();
+            return;
+        }
 
         if (string.IsNullOrWhiteSpace(SourcePath))
         {
