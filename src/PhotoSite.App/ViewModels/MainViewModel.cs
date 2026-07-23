@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Win32;
@@ -15,14 +16,20 @@ public sealed class MainViewModel : ObservableObject
     private const string IncludeSubfoldersSetting = "include_subfolders";
     private readonly PhotoCatalogRepository catalog;
     private readonly PhotoIndexer indexer;
+    private readonly List<PhotoItemViewModel> allPhotos = [];
     private CancellationTokenSource? scanCancellation;
     private PhotoItemViewModel? selectedPhoto;
     private string? currentFolder;
+    private string photoCountText = "0 photos";
     private string statusText = "Choose a folder to begin";
     private bool isBusy;
     private bool isEditorMode;
     private bool isFullscreenMode;
     private bool includeSubfolders = true;
+    private PhotoSortField sortField = PhotoSortField.TakenAt;
+    private bool sortDescending = true;
+    private int minimumRating;
+    private string searchText = string.Empty;
 
     public MainViewModel(
         PhotoCatalogRepository catalog,
@@ -46,6 +53,24 @@ public sealed class MainViewModel : ObservableObject
         ToggleFullscreenCommand = new RelayCommand(
             ToggleFullscreen,
             () => SelectedPhoto is not null);
+        SortByTakenAtCommand = new RelayCommand(
+            () => ChangeSort(PhotoSortField.TakenAt));
+        SortByFileNameCommand = new RelayCommand(
+            () => ChangeSort(PhotoSortField.FileName));
+        SortByRatingCommand = new RelayCommand(
+            () => ChangeSort(PhotoSortField.Rating));
+        SetMinimumRatingCommand = new RelayCommand<RatingFilterOption>(
+            SetMinimumRating);
+        RatingFilters =
+        [
+            new RatingFilterOption(0, "★̸", "Zrušit filtr hodnocení"),
+            new RatingFilterOption(1, "★", "Alespoň 1 hvězdička"),
+            new RatingFilterOption(2, "★", "Alespoň 2 hvězdičky"),
+            new RatingFilterOption(3, "★", "Alespoň 3 hvězdičky"),
+            new RatingFilterOption(4, "★", "Alespoň 4 hvězdičky"),
+            new RatingFilterOption(5, "★", "5 hvězdiček")
+        ];
+        UpdateRatingFilterState();
     }
 
     public BulkObservableCollection<PhotoItemViewModel> Photos { get; } = new();
@@ -53,6 +78,8 @@ public sealed class MainViewModel : ObservableObject
     public DirectoryTreeViewModel DirectoryTree { get; }
 
     public IReadOnlyList<int> RatingValues { get; } = [0, 1, 2, 3, 4, 5];
+
+    public IReadOnlyList<RatingFilterOption> RatingFilters { get; }
 
     public IAsyncRelayCommand OpenFolderCommand { get; }
 
@@ -65,6 +92,42 @@ public sealed class MainViewModel : ObservableObject
     public IRelayCommand ShowManagerCommand { get; }
 
     public IRelayCommand ToggleFullscreenCommand { get; }
+
+    public IRelayCommand SortByTakenAtCommand { get; }
+
+    public IRelayCommand SortByFileNameCommand { get; }
+
+    public IRelayCommand SortByRatingCommand { get; }
+
+    public IRelayCommand<RatingFilterOption> SetMinimumRatingCommand { get; }
+
+    public string TakenAtSortLabel => BuildSortLabel(
+        PhotoSortField.TakenAt,
+        "Pořízeno");
+
+    public string FileNameSortLabel => BuildSortLabel(
+        PhotoSortField.FileName,
+        "Název");
+
+    public string RatingSortLabel => BuildSortLabel(
+        PhotoSortField.Rating,
+        "Hodnocení");
+
+    public string FolderScopeToolTip => IncludeSubfolders
+        ? "Včetně podsložek"
+        : "Pouze aktuální složka";
+
+    public string SearchText
+    {
+        get => searchText;
+        set
+        {
+            if (SetProperty(ref searchText, value ?? string.Empty))
+            {
+                ApplyPhotoPresentation();
+            }
+        }
+    }
 
     public PhotoItemViewModel? SelectedPhoto
     {
@@ -98,6 +161,12 @@ public sealed class MainViewModel : ObservableObject
     {
         get => statusText;
         private set => SetProperty(ref statusText, value);
+    }
+
+    public string PhotoCountText
+    {
+        get => photoCountText;
+        private set => SetProperty(ref photoCountText, value);
     }
 
     public bool IsBusy
@@ -143,6 +212,7 @@ public sealed class MainViewModel : ObservableObject
         {
             if (SetProperty(ref includeSubfolders, value))
             {
+                NotifyFolderScopeChanged();
                 _ = ApplyFolderScopeChangeAsync();
             }
         }
@@ -158,6 +228,7 @@ public sealed class MainViewModel : ObservableObject
         {
             includeSubfolders = savedIncludeSubfolders;
             OnPropertyChanged(nameof(IncludeSubfolders));
+            NotifyFolderScopeChanged();
         }
 
         var savedDirectory = await catalog.GetSettingAsync(
@@ -236,6 +307,9 @@ public sealed class MainViewModel : ObservableObject
                 await catalog.GetByRootAsync(rootFolder, token),
                 rootFolder,
                 includeSubfolders);
+            var cachedByPath = cached.ToDictionary(
+                record => record.Path,
+                StringComparer.OrdinalIgnoreCase);
             if (cached.Count > 0)
             {
                 await ReplacePhotosAsync(
@@ -243,43 +317,57 @@ public sealed class MainViewModel : ObservableObject
                     rootFolder,
                     preferredPhotoPath,
                     token);
-                StatusText = BuildStatus(cached.Count, includeSubfolders, "cached · refreshing…");
+                SetPhotoStatus(
+                    cached.Count,
+                    "cached · checking for changes…");
             }
             else
             {
-                Photos.ReplaceRange([]);
-                SelectedPhoto = null;
-                StatusText = "Indexing…";
+                ReplaceAllPhotos([], preferredPhotoPath: null);
+                SetPhotoStatus(0, "Indexing…");
             }
 
             var scanId = DateTime.UtcNow.Ticks;
             var batch = new List<PhotoRecord>(DatabaseBatchSize);
+            var seenPaths = new HashSet<string>(
+                StringComparer.OrdinalIgnoreCase);
             var discovered = 0;
 
-            await foreach (var record in indexer.ScanAsync(
+            await foreach (var result in indexer.ScanAsync(
                                rootFolder,
                                scanId,
                                includeSubfolders,
-                               token))
+                               token,
+                               cachedByPath))
             {
-                batch.Add(record);
+                var record = result.Record;
+                seenPaths.Add(record.Path);
                 discovered++;
-                if (batch.Count < DatabaseBatchSize)
+
+                if (result.RequiresUpsert)
                 {
-                    continue;
+                    batch.Add(record);
+                    if (batch.Count >= DatabaseBatchSize)
+                    {
+                        await catalog.UpsertBatchAsync(batch, token);
+                        batch.Clear();
+                    }
                 }
 
-                await catalog.UpsertBatchAsync(batch, token);
-                batch.Clear();
-                StatusText = BuildStatus(discovered, includeSubfolders, "indexing");
+                if (discovered % 1000 == 0)
+                {
+                    SetPhotoStatus(
+                        cached.Count > 0 ? cached.Count : discovered,
+                        $"{discovered:N0} checked…");
+                }
             }
 
             await catalog.UpsertBatchAsync(batch, token);
-            await catalog.CompleteScanAsync(
-                rootFolder,
-                scanId,
-                includeSubfolders,
-                token);
+            var missingPaths = cached
+                .Where(record => !seenPaths.Contains(record.Path))
+                .Select(record => record.Path)
+                .ToArray();
+            await catalog.DeleteByPathsAsync(missingPaths, token);
             var current = FilterRecordsForScope(
                 await catalog.GetByRootAsync(rootFolder, token),
                 rootFolder,
@@ -289,7 +377,7 @@ public sealed class MainViewModel : ObservableObject
                 rootFolder,
                 preferredPhotoPath,
                 token);
-            StatusText = BuildStatus(current.Count, includeSubfolders);
+            SetPhotoStatus(current.Count);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
@@ -368,13 +456,148 @@ public sealed class MainViewModel : ObservableObject
             viewModels.Add(new PhotoItemViewModel(record, recipe, catalog));
         }
 
+        ReplaceAllPhotos(
+            viewModels,
+            preferredPhotoPath ?? SelectedPhoto?.Path);
+    }
+
+    private void ReplaceAllPhotos(
+        IReadOnlyList<PhotoItemViewModel> viewModels,
+        string? preferredPhotoPath)
+    {
+        foreach (var photo in allPhotos)
+        {
+            photo.PropertyChanged -= OnPhotoPropertyChanged;
+        }
+
+        allPhotos.Clear();
+        allPhotos.AddRange(viewModels);
+        foreach (var photo in allPhotos)
+        {
+            photo.PropertyChanged += OnPhotoPropertyChanged;
+        }
+
+        ApplyPhotoPresentation(preferredPhotoPath);
+    }
+
+    private void ApplyPhotoPresentation(string? preferredPhotoPath = null)
+    {
         var selectedPath = preferredPhotoPath ?? SelectedPhoto?.Path;
-        Photos.ReplaceRange(viewModels);
+        var presented = BuildPhotoPresentation(
+            allPhotos,
+            sortField,
+            sortDescending,
+            minimumRating,
+            searchText);
+        Photos.ReplaceRange(presented);
         SelectedPhoto = selectedPath is null
             ? Photos.FirstOrDefault()
             : Photos.FirstOrDefault(photo =>
                 string.Equals(photo.Path, selectedPath, StringComparison.OrdinalIgnoreCase))
               ?? Photos.FirstOrDefault();
+    }
+
+    internal static IReadOnlyList<PhotoItemViewModel> BuildPhotoPresentation(
+        IEnumerable<PhotoItemViewModel> source,
+        PhotoSortField sortField,
+        bool descending,
+        int minimumRating,
+        string? searchText)
+    {
+        var normalizedSearch = searchText?.Trim();
+        var filtered = source.Where(
+            photo => photo.Rating >= minimumRating
+                     && (string.IsNullOrEmpty(normalizedSearch)
+                         || photo.FileName.Contains(
+                             normalizedSearch,
+                             StringComparison.OrdinalIgnoreCase)));
+
+        IOrderedEnumerable<PhotoItemViewModel> ordered = sortField switch
+        {
+            PhotoSortField.TakenAt when descending => filtered
+                .OrderBy(photo => photo.TakenAtTicks is null)
+                .ThenByDescending(photo => photo.TakenAtTicks),
+            PhotoSortField.TakenAt => filtered
+                .OrderBy(photo => photo.TakenAtTicks is null)
+                .ThenBy(photo => photo.TakenAtTicks),
+            PhotoSortField.FileName when descending => filtered
+                .OrderByDescending(
+                    photo => photo.FileName,
+                    StringComparer.OrdinalIgnoreCase),
+            PhotoSortField.FileName => filtered
+                .OrderBy(
+                    photo => photo.FileName,
+                    StringComparer.OrdinalIgnoreCase),
+            PhotoSortField.Rating when descending => filtered
+                .OrderByDescending(photo => photo.Rating),
+            PhotoSortField.Rating => filtered
+                .OrderBy(photo => photo.Rating),
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(sortField),
+                sortField,
+                null)
+        };
+
+        return ordered
+            .ThenBy(photo => photo.FileName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(photo => photo.Path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private void ChangeSort(PhotoSortField field)
+    {
+        if (sortField == field)
+        {
+            sortDescending = !sortDescending;
+        }
+        else
+        {
+            sortField = field;
+            sortDescending = field != PhotoSortField.FileName;
+        }
+
+        OnPropertyChanged(nameof(TakenAtSortLabel));
+        OnPropertyChanged(nameof(FileNameSortLabel));
+        OnPropertyChanged(nameof(RatingSortLabel));
+        ApplyPhotoPresentation();
+    }
+
+    private string BuildSortLabel(PhotoSortField field, string label) =>
+        sortField == field
+            ? $"{label} {(sortDescending ? "↓" : "↑")}"
+            : label;
+
+    private void SetMinimumRating(RatingFilterOption? option)
+    {
+        if (option is null || minimumRating == option.MinimumRating)
+        {
+            return;
+        }
+
+        minimumRating = option.MinimumRating;
+        UpdateRatingFilterState();
+        ApplyPhotoPresentation();
+    }
+
+    private void UpdateRatingFilterState()
+    {
+        foreach (var option in RatingFilters)
+        {
+            option.IsActive = option.MinimumRating == 0
+                ? minimumRating == 0
+                : minimumRating > 0
+                  && option.MinimumRating <= minimumRating;
+        }
+    }
+
+    private void OnPhotoPropertyChanged(
+        object? sender,
+        PropertyChangedEventArgs eventArgs)
+    {
+        if (eventArgs.PropertyName == nameof(PhotoItemViewModel.Rating))
+        {
+            ApplyPhotoPresentation();
+        }
     }
 
     private void SelectPrevious()
@@ -462,14 +685,16 @@ public sealed class MainViewModel : ObservableObject
             .ToArray();
     }
 
-    private static string BuildStatus(
+    private void SetPhotoStatus(
         int count,
-        bool includeSubfolders,
         string? activity = null)
     {
-        var scope = includeSubfolders ? "including subfolders" : "current folder only";
-        return activity is null
-            ? $"{count:N0} photos · {scope}"
-            : $"{count:N0} photos · {scope} · {activity}";
+        PhotoCountText = $"{count:N0} photos";
+        StatusText = activity ?? string.Empty;
+    }
+
+    private void NotifyFolderScopeChanged()
+    {
+        OnPropertyChanged(nameof(FolderScopeToolTip));
     }
 }

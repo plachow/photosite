@@ -57,6 +57,12 @@ public sealed class VirtualizingTilePanel : VirtualizingPanel, IScrollInfo
         extent = new Size(
             width,
             Math.Ceiling(itemCount / (double)itemsPerRow) * ItemHeight);
+        var maximumOffset = Math.Max(0, extent.Height - viewport.Height);
+        if (offset.Y > maximumOffset)
+        {
+            offset.Y = maximumOffset;
+        }
+
         ScrollOwner?.InvalidateScrollInfo();
 
         if (itemCount == 0)

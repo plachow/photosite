@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Windows;
@@ -10,6 +11,7 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using PhotoSite.Infrastructure;
 using PhotoSite.ViewModels;
+using ShapePath = System.Windows.Shapes.Path;
 
 namespace PhotoSite;
 
@@ -116,6 +118,147 @@ public partial class MainWindow : Window
         }
     }
 
+    internal void ValidatePhotoContextMenuForSmokeTest()
+    {
+        if (Resources["PhotoContextMenuItemStyle"] is not Style itemStyle
+            || Resources["PhotoContextMenuStyle"] is not Style contextMenuStyle
+            || Resources["PhotoFileContextMenu"] is not ContextMenu contextMenu)
+        {
+            throw new InvalidOperationException(
+                "The photo context menu styles were not created.");
+        }
+
+        contextMenu.ApplyTemplate();
+        contextMenu.Measure(new Size(260, 80));
+        contextMenu.Arrange(new Rect(0, 0, 260, 80));
+        if (!ReferenceEquals(contextMenu.Style, contextMenuStyle)
+            || VisualTreeHelper.GetChildrenCount(contextMenu) != 1
+            || VisualTreeHelper.GetChild(contextMenu, 0) is not Border
+            {
+                Background: SolidColorBrush
+                {
+                    Color: var menuBackground
+                }
+            }
+            || menuBackground != Color.FromRgb(0x24, 0x28, 0x32))
+        {
+            throw new InvalidOperationException(
+                "The context menu must replace the system light gutter "
+                + "with a fully dark root template.");
+        }
+
+        var items = contextMenu.Items.OfType<MenuItem>().ToArray();
+        if (items.Length != 2
+            || items.Any(item => item.Icon is null
+                                 || !ReferenceEquals(item.Style, itemStyle)))
+        {
+            throw new InvalidOperationException(
+                "Photo context-menu items must use the dark icon template.");
+        }
+
+        foreach (var item in items)
+        {
+            item.ApplyTemplate();
+            item.Measure(new Size(260, 34));
+            item.Arrange(new Rect(0, 0, 260, 34));
+            if (VisualTreeHelper.GetChildrenCount(item) != 1
+                || VisualTreeHelper.GetChild(item, 0) is not Border
+                {
+                    Background: SolidColorBrush
+                    {
+                        Color: var color
+                    }
+                }
+                || color != Color.FromRgb(0x24, 0x28, 0x32))
+            {
+                throw new InvalidOperationException(
+                    "Context-menu rows must cover the system icon gutter "
+                    + "with an opaque dark background.");
+            }
+        }
+    }
+
+    internal void ValidateDarkThemeIconsForSmokeTest()
+    {
+        var icons = FolderScopeIcon.Child is Grid icon
+            ? icon.Children.OfType<ShapePath>().ToArray()
+            : [];
+        if (icons.Length != 2
+            || icons.Any(path => path.Stroke is not SolidColorBrush brush
+                                 || brush.Color
+                                 != Color.FromRgb(0xC8, 0xCD, 0xD8)))
+        {
+            throw new InvalidOperationException(
+                "Status icons must use explicit colors that remain visible "
+                + "on the dark application background.");
+        }
+    }
+
+    internal void ValidateStatusBarLayoutForSmokeTest()
+    {
+        if (FindName("PhotoScopeSection") is not FrameworkElement
+            {
+                Width: 130
+            }
+            || FindName("FlatFolderIcon") is not ShapePath
+            {
+                Stroke: SolidColorBrush
+                {
+                    Color: var flatColor
+                }
+            }
+            || FindName("RecursiveTreeIcon") is not ShapePath
+            {
+                Stroke: SolidColorBrush
+                {
+                    Color: var recursiveColor
+                }
+            }
+            || flatColor != Color.FromRgb(0xC8, 0xCD, 0xD8)
+            || recursiveColor != Color.FromRgb(0xC8, 0xCD, 0xD8)
+            || FindName("StatusSeparator1") is not Border
+            || FindName("StatusSeparator2") is not Border
+            || FindName("StatusSeparator3") is not Border
+            || FindName("RatingFilterSection") is not FrameworkElement ratingSection)
+        {
+            throw new InvalidOperationException(
+                "Status sections must use stable widths, visible vector icons, "
+                + "and explicit separators.");
+        }
+
+        var originalFlatVisibility = FlatFolderIcon.Visibility;
+        var originalRecursiveVisibility = RecursiveTreeIcon.Visibility;
+        var initialRatingPosition = ratingSection.TranslatePoint(
+            new Point(),
+            this).X;
+        try
+        {
+            FlatFolderIcon.Visibility = originalFlatVisibility == Visibility.Visible
+                ? Visibility.Collapsed
+                : Visibility.Visible;
+            RecursiveTreeIcon.Visibility =
+                originalRecursiveVisibility == Visibility.Visible
+                    ? Visibility.Collapsed
+                    : Visibility.Visible;
+            UpdateLayout();
+            var toggledRatingPosition = ratingSection.TranslatePoint(
+                new Point(),
+                this).X;
+            if (Math.Abs(toggledRatingPosition - initialRatingPosition) > 0.1)
+            {
+                throw new InvalidOperationException(
+                    "Switching between flat and recursive icons must not move "
+                    + "the rating or search filters.");
+            }
+        }
+        finally
+        {
+            FlatFolderIcon.ClearValue(VisibilityProperty);
+            RecursiveTreeIcon.ClearValue(VisibilityProperty);
+            UpdateLayout();
+        }
+    }
+
     internal void ValidateCatalogTileForSmokeTest(string expectedFileName)
     {
         if (Content is not UIElement content)
@@ -141,6 +284,74 @@ public partial class MainWindow : Window
         {
             throw new InvalidOperationException(
                 "Catalogue file names must use the light foreground color.");
+        }
+    }
+
+    internal void ValidateCatalogScrollResetForSmokeTest()
+    {
+        if (Content is not UIElement content)
+        {
+            throw new InvalidOperationException("The main window has no UI content.");
+        }
+
+        var originalPhotos = viewModel.Photos.ToArray();
+        var originalSelection = viewModel.SelectedPhoto;
+        if (originalPhotos.Length == 0)
+        {
+            throw new InvalidOperationException(
+                "The scroll reset test requires at least one catalogue photo.");
+        }
+
+        try
+        {
+            viewModel.Photos.ReplaceRange(
+                Enumerable.Range(0, 100)
+                    .Select(index => originalPhotos[index % originalPhotos.Length]));
+            var size = new Size(1500, 900);
+            content.Measure(size);
+            content.Arrange(new Rect(size));
+            content.UpdateLayout();
+
+            var scrollViewer = FindScrollViewer(PhotoList);
+            scrollViewer.ScrollToBottom();
+            content.UpdateLayout();
+            if (scrollViewer.VerticalOffset <= 0)
+            {
+                throw new InvalidOperationException(
+                    "The catalogue test could not establish a non-zero scroll offset.");
+            }
+
+            viewModel.Photos.ReplaceRange(originalPhotos);
+            content.UpdateLayout();
+            if (scrollViewer.VerticalOffset > 0)
+            {
+                throw new InvalidOperationException(
+                    "Shrinking the catalogue must clamp an obsolete scroll offset.");
+            }
+
+            viewModel.Photos.ReplaceRange(
+                Enumerable.Range(0, 100)
+                    .Select(index => originalPhotos[index % originalPhotos.Length]));
+            content.UpdateLayout();
+            scrollViewer.ScrollToBottom();
+            content.UpdateLayout();
+
+            OnViewModelPropertyChanged(
+                viewModel,
+                new PropertyChangedEventArgs(nameof(MainViewModel.CurrentFolder)));
+            content.UpdateLayout();
+            if (scrollViewer.VerticalOffset > 0)
+            {
+                throw new InvalidOperationException(
+                    "Changing folders must reset the catalogue scroll position.");
+            }
+        }
+        finally
+        {
+            viewModel.Photos.ReplaceRange(originalPhotos);
+            viewModel.SelectedPhoto = originalSelection;
+            ResetCatalogScrollPosition();
+            content.UpdateLayout();
         }
     }
 
@@ -212,8 +423,50 @@ public partial class MainWindow : Window
         }
     }
 
+    private void OnShowInExplorerClick(object sender, RoutedEventArgs eventArgs)
+    {
+        if (sender is not MenuItem
+            {
+                DataContext: PhotoItemViewModel photo
+            }
+            || !File.Exists(photo.Path))
+        {
+            return;
+        }
+
+        Process.Start(CreateExplorerSelectStartInfo(photo.Path));
+    }
+
+    private void OnCopyFullPathClick(object sender, RoutedEventArgs eventArgs)
+    {
+        if (sender is MenuItem
+            {
+                DataContext: PhotoItemViewModel photo
+            })
+        {
+            Clipboard.SetText(photo.Path);
+        }
+    }
+
+    internal static ProcessStartInfo CreateExplorerSelectStartInfo(string path)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "explorer.exe",
+            UseShellExecute = true
+        };
+        startInfo.ArgumentList.Add("/select,");
+        startInfo.ArgumentList.Add(path);
+        return startInfo;
+    }
+
     private void OnPreviewKeyDown(object sender, KeyEventArgs eventArgs)
     {
+        if (PhotoSearchBox.IsKeyboardFocusWithin)
+        {
+            return;
+        }
+
         if (eventArgs.Key == Key.Escape && viewModel.IsFullscreenMode)
         {
             viewModel.ToggleFullscreenCommand.Execute(null);
@@ -349,6 +602,12 @@ public partial class MainWindow : Window
         object? sender,
         PropertyChangedEventArgs eventArgs)
     {
+        if (eventArgs.PropertyName == nameof(MainViewModel.CurrentFolder))
+        {
+            ResetCatalogScrollPosition();
+            return;
+        }
+
         if (eventArgs.PropertyName != nameof(MainViewModel.IsEditorMode)
             && eventArgs.PropertyName != nameof(MainViewModel.IsFullscreenMode))
         {
@@ -377,6 +636,18 @@ public partial class MainWindow : Window
                     }
                 }
             });
+    }
+
+    private void ResetCatalogScrollPosition()
+    {
+        if (FindScrollViewerOrDefault(PhotoList) is { } scrollViewer)
+        {
+            scrollViewer.ScrollToTop();
+        }
+
+        _ = Dispatcher.BeginInvoke(
+            DispatcherPriority.Loaded,
+            () => FindScrollViewerOrDefault(PhotoList)?.ScrollToTop());
     }
 
     private void ApplyFullscreenState()
@@ -692,6 +963,33 @@ public partial class MainWindow : Window
 
         throw new InvalidOperationException(
             "A vertical scrollbar was not created for the pane.");
+    }
+
+    private static ScrollViewer FindScrollViewer(DependencyObject root) =>
+        FindScrollViewerOrDefault(root)
+        ?? throw new InvalidOperationException(
+            "A scroll viewer was not created for the catalogue.");
+
+    private static ScrollViewer? FindScrollViewerOrDefault(DependencyObject root)
+    {
+        if (root is ScrollViewer scrollViewer)
+        {
+            return scrollViewer;
+        }
+
+        for (var index = 0;
+             index < VisualTreeHelper.GetChildrenCount(root);
+             index++)
+        {
+            var match = FindScrollViewerOrDefault(
+                VisualTreeHelper.GetChild(root, index));
+            if (match is not null)
+            {
+                return match;
+            }
+        }
+
+        return null;
     }
 
     private static TextBlock FindTextBlock(

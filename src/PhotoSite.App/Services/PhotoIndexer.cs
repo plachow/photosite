@@ -3,6 +3,10 @@ using PhotoSite.Domain;
 
 namespace PhotoSite.Services;
 
+public readonly record struct PhotoScanResult(
+    PhotoRecord Record,
+    bool RequiresUpsert);
+
 public sealed class PhotoIndexer
 {
     private static readonly HashSet<string> SupportedExtensions =
@@ -25,13 +29,14 @@ public sealed class PhotoIndexer
             .ToArray() ?? [];
     }
 
-    public IAsyncEnumerable<PhotoRecord> ScanAsync(
+    public IAsyncEnumerable<PhotoScanResult> ScanAsync(
         string rootPath,
         long scanId,
         bool includeSubfolders,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlyDictionary<string, PhotoRecord>? cachedRecords = null)
     {
-        var channel = Channel.CreateBounded<PhotoRecord>(
+        var channel = Channel.CreateBounded<PhotoScanResult>(
             new BoundedChannelOptions(256)
             {
                 FullMode = BoundedChannelFullMode.Wait,
@@ -59,6 +64,21 @@ public sealed class PhotoIndexer
                         try
                         {
                             var file = new FileInfo(path);
+                            if (cachedRecords is not null
+                                && cachedRecords.TryGetValue(
+                                    file.FullName,
+                                    out var cached)
+                                && CanReuseMetadata(file, cached))
+                            {
+                                await channel.Writer.WriteAsync(
+                                    new PhotoScanResult(
+                                        cached,
+                                        RequiresUpsert: false),
+                                    cancellationToken);
+                                continue;
+                            }
+
+                            var takenAt = PhotoMetadataReader.ReadTakenAt(file.FullName);
                             var record = new PhotoRecord(
                                 file.FullName,
                                 rootPath,
@@ -67,8 +87,15 @@ public sealed class PhotoIndexer
                                 file.Length,
                                 file.LastWriteTimeUtc.Ticks,
                                 0,
-                                scanId);
-                            await channel.Writer.WriteAsync(record, cancellationToken);
+                                scanId,
+                                takenAt.Ticks,
+                                takenAt.Source,
+                                MetadataIndexed: true);
+                            await channel.Writer.WriteAsync(
+                                new PhotoScanResult(
+                                    record,
+                                    RequiresUpsert: true),
+                                cancellationToken);
                         }
                         catch (IOException)
                         {
@@ -91,6 +118,21 @@ public sealed class PhotoIndexer
 
         return channel.Reader.ReadAllAsync(cancellationToken);
     }
+
+    internal static bool CanReuseMetadata(
+        FileInfo file,
+        PhotoRecord cached) =>
+        cached.MetadataIndexed
+        && cached.Length == file.Length
+        && cached.ModifiedUtcTicks == file.LastWriteTimeUtc.Ticks
+        && string.Equals(
+            cached.FileName,
+            file.Name,
+            StringComparison.Ordinal)
+        && string.Equals(
+            cached.Extension,
+            file.Extension,
+            StringComparison.OrdinalIgnoreCase);
 
     private IEnumerable<string> EnumerateFiles(
         string rootPath,

@@ -8,4 +8,7 @@ public sealed record PhotoRecord(
     long Length,
     long ModifiedUtcTicks,
     int Rating,
-    long ScanId);
+    long ScanId,
+    long? TakenAtTicks = null,
+    PhotoDateSource TakenAtSource = PhotoDateSource.None,
+    bool MetadataIndexed = false);

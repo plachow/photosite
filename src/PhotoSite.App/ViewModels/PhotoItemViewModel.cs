@@ -41,6 +41,8 @@ public sealed class PhotoItemViewModel : ObservableObject
 
     public string FileName => Record.FileName;
 
+    public long? TakenAtTicks => Record.TakenAtTicks;
+
     public string? RatingText => Rating == 0 ? null : $"★ {Rating}";
 
     public int Rating

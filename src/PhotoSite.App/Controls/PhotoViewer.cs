@@ -486,6 +486,21 @@ public sealed class PhotoViewer : FrameworkElement
             return;
         }
 
+        if (!ShouldCrossfade(bitmapPath, path))
+        {
+            bitmap = loaded;
+            bitmapPath = path;
+            bitmapRecipe = EditRecipe;
+            isFullResolutionBitmap = fullResolution;
+            if (fullResolution)
+            {
+                SetActualSize();
+            }
+
+            InvalidateVisual();
+            return;
+        }
+
         previousBitmap = bitmap;
         previousBitmapRecipe = bitmapRecipe;
         bitmap = loaded;
@@ -507,6 +522,15 @@ public sealed class PhotoViewer : FrameworkElement
 
         InvalidateVisual();
     }
+
+    internal static bool ShouldCrossfade(
+        string? currentPath,
+        string loadedPath) =>
+        currentPath is not null
+        && !string.Equals(
+            currentPath,
+            loadedPath,
+            StringComparison.OrdinalIgnoreCase);
 
     private void OnTransitionFrame(object? sender, EventArgs eventArgs)
     {

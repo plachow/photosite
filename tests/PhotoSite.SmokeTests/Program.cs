@@ -2,6 +2,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Threading;
+using MetadataExtractor.Formats.Exif;
 using Microsoft.Data.Sqlite;
 using PhotoSite;
 using PhotoSite.Domain;
@@ -32,6 +33,30 @@ try
     await File.WriteAllTextAsync(ignoredFile, "not a photograph");
 
     var databasePath = Path.Combine(testRoot, "catalogue.db");
+    await using (var legacyConnection = new SqliteConnection(
+                     new SqliteConnectionStringBuilder
+                     {
+                         DataSource = databasePath
+                     }.ToString()))
+    {
+        await legacyConnection.OpenAsync();
+        await using var legacySchema = legacyConnection.CreateCommand();
+        legacySchema.CommandText =
+            """
+            CREATE TABLE photos (
+                path                TEXT PRIMARY KEY COLLATE NOCASE,
+                root_path           TEXT NOT NULL COLLATE NOCASE,
+                file_name           TEXT NOT NULL COLLATE NOCASE,
+                extension           TEXT NOT NULL COLLATE NOCASE,
+                length              INTEGER NOT NULL,
+                modified_utc_ticks  INTEGER NOT NULL,
+                rating              INTEGER NOT NULL DEFAULT 0,
+                scan_id             INTEGER NOT NULL
+            );
+            """;
+        await legacySchema.ExecuteNonQueryAsync();
+    }
+
     var repository = new PhotoCatalogRepository(databasePath);
     await repository.InitializeAsync();
 
@@ -56,31 +81,50 @@ try
 
     var indexer = new PhotoIndexer();
     var directRecords = new List<PhotoRecord>();
-    await foreach (var record in indexer.ScanAsync(
+    await foreach (var result in indexer.ScanAsync(
                        photoRoot,
                        50,
                        includeSubfolders: false,
                        CancellationToken.None))
     {
-        directRecords.Add(record);
+        directRecords.Add(result.Record);
     }
 
     Assert(
         directRecords.Count == 1 && directRecords[0].Path == firstPhoto,
         "A non-recursive scan should only discover photos in the selected folder.");
 
+    var exifDirectory = new ExifSubIfdDirectory();
+    exifDirectory.Set(
+        ExifDirectoryBase.TagDateTimeDigitized,
+        "2025:03:04 05:06:07");
+    exifDirectory.Set(
+        ExifDirectoryBase.TagDateTimeOriginal,
+        "2024:01:02 03:04:05");
+    var takenAt = PhotoMetadataReader.ReadTakenAt([exifDirectory]);
+    Assert(
+        takenAt.Ticks == new DateTime(2024, 1, 2, 3, 4, 5).Ticks
+        && takenAt.Source == PhotoDateSource.ExifDateTimeOriginal,
+        "EXIF DateTimeOriginal should be preferred over DateTimeDigitized.");
+
     const long firstScan = 100;
     var records = new List<PhotoRecord>();
-    await foreach (var record in indexer.ScanAsync(
+    await foreach (var result in indexer.ScanAsync(
                        photoRoot,
                        firstScan,
                        includeSubfolders: true,
                        CancellationToken.None))
     {
-        records.Add(record);
+        records.Add(result.Record);
     }
 
     Assert(records.Count == 2, "Indexer should discover the two PNG files only.");
+    var datedRecordIndex = records.FindIndex(record => record.Path == firstPhoto);
+    records[datedRecordIndex] = records[datedRecordIndex] with
+    {
+        TakenAtTicks = takenAt.Ticks,
+        TakenAtSource = takenAt.Source
+    };
     await repository.UpsertBatchAsync(records, CancellationToken.None);
     await repository.CompleteScanAsync(
         photoRoot,
@@ -90,6 +134,32 @@ try
 
     var loaded = await repository.GetByRootAsync(photoRoot, CancellationToken.None);
     Assert(loaded.Count == 2, "Catalogue should contain both indexed photos.");
+    Assert(
+        loaded.Single(record => record.Path == firstPhoto).TakenAtTicks
+        == takenAt.Ticks,
+        "The catalogue should persist the photo capture date.");
+    Assert(
+        loaded.All(record => record.MetadataIndexed),
+        "A completed first scan should mark photo metadata as indexed.");
+
+    var cachedByPath = loaded.ToDictionary(
+        record => record.Path,
+        StringComparer.OrdinalIgnoreCase);
+    var repeatedScan = new List<PhotoScanResult>();
+    await foreach (var result in indexer.ScanAsync(
+                       photoRoot,
+                       scanId: 125,
+                       includeSubfolders: true,
+                       CancellationToken.None,
+                       cachedByPath))
+    {
+        repeatedScan.Add(result);
+    }
+
+    Assert(
+        repeatedScan.Count == loaded.Count
+        && repeatedScan.All(result => !result.RequiresUpsert),
+        "An unchanged repeat scan should reuse cached metadata and require no database writes.");
 
     const long directScan = 150;
     var refreshedDirectRecords = directRecords
@@ -111,13 +181,59 @@ try
 
     var mainViewModel = new MainViewModel(repository, indexer);
     var selectedViewModel = new PhotoItemViewModel(
-        afterDirectRefresh.Single(item => item.Path == firstPhoto),
+        afterDirectRefresh.Single(item => item.Path == firstPhoto) with
+        {
+            TakenAtTicks = new DateTime(2024, 1, 2, 3, 4, 5).Ticks,
+            TakenAtSource = PhotoDateSource.ExifDateTimeOriginal
+        },
         EditRecipe.Empty,
         repository);
     var nextViewModel = new PhotoItemViewModel(
-        afterDirectRefresh.Single(item => item.Path == secondPhoto),
+        afterDirectRefresh.Single(item => item.Path == secondPhoto) with
+        {
+            FileName = "holiday-favourite.png",
+            TakenAtTicks = new DateTime(2025, 6, 7, 8, 9, 10).Ticks,
+            TakenAtSource = PhotoDateSource.ExifDateTimeOriginal,
+            Rating = 4
+        },
         EditRecipe.Empty,
         repository);
+
+    var unknownDateViewModel = new PhotoItemViewModel(
+        selectedViewModel.Record with
+        {
+            Path = Path.Combine(photoRoot, "undated.png"),
+            FileName = "undated.png",
+            TakenAtTicks = null,
+            TakenAtSource = PhotoDateSource.None,
+            Rating = 5
+        },
+        EditRecipe.Empty,
+        repository);
+    var presented = MainViewModel.BuildPhotoPresentation(
+        [selectedViewModel, nextViewModel, unknownDateViewModel],
+        PhotoSortField.TakenAt,
+        descending: true,
+        minimumRating: 3,
+        searchText: "d");
+    Assert(
+        presented.Count == 2
+        && ReferenceEquals(presented[0], nextViewModel)
+        && ReferenceEquals(presented[1], unknownDateViewModel),
+        "Presentation should combine filename search and minimum-rating filtering, "
+        + "sort dated photos newest-first, and keep unknown dates last.");
+    var oldestFirst = MainViewModel.BuildPhotoPresentation(
+        [unknownDateViewModel, nextViewModel, selectedViewModel],
+        PhotoSortField.TakenAt,
+        descending: false,
+        minimumRating: 0,
+        searchText: null);
+    Assert(
+        ReferenceEquals(oldestFirst[0], selectedViewModel)
+        && ReferenceEquals(oldestFirst[1], nextViewModel)
+        && ReferenceEquals(oldestFirst[2], unknownDateViewModel),
+        "Ascending capture-date sorting should keep unknown dates last.");
+
     mainViewModel.Photos.Add(selectedViewModel);
     mainViewModel.Photos.Add(nextViewModel);
     mainViewModel.SelectedPhoto = selectedViewModel;
@@ -184,6 +300,21 @@ try
     Assert(
         !MainWindow.TryGetRatingShortcut(Key.NumPad1, out _),
         "Numpad digits are reserved for viewer controls, not ratings.");
+    var explorerStartInfo = MainWindow.CreateExplorerSelectStartInfo(firstPhoto);
+    Assert(
+        explorerStartInfo.FileName == "explorer.exe"
+        && explorerStartInfo.ArgumentList.SequenceEqual(["/select,", firstPhoto]),
+        "The Explorer action should select the exact photo path.");
+    Assert(
+        !PhotoSite.Controls.PhotoViewer.ShouldCrossfade(
+            firstPhoto,
+            firstPhoto),
+        "Reloading another resolution of the same photo must not crossfade.");
+    Assert(
+        PhotoSite.Controls.PhotoViewer.ShouldCrossfade(
+            firstPhoto,
+            secondPhoto),
+        "Navigating to a different photo should crossfade.");
 
     mainViewModel.SelectedPhoto = nextViewModel;
     await mainViewModel.SaveSessionAsync();
@@ -225,24 +356,42 @@ try
 
     File.Delete(secondPhoto);
     const long secondScan = 200;
-    var secondRecords = new List<PhotoRecord>();
-    await foreach (var record in indexer.ScanAsync(
+    var beforeCleanup = await repository.GetByRootAsync(
+        photoRoot,
+        CancellationToken.None);
+    var beforeCleanupByPath = beforeCleanup.ToDictionary(
+        record => record.Path,
+        StringComparer.OrdinalIgnoreCase);
+    var secondResults = new List<PhotoScanResult>();
+    await foreach (var result in indexer.ScanAsync(
                        photoRoot,
                        secondScan,
                        includeSubfolders: true,
-                       CancellationToken.None))
+                       CancellationToken.None,
+                       beforeCleanupByPath))
     {
-        secondRecords.Add(record);
+        secondResults.Add(result);
     }
 
-    await repository.UpsertBatchAsync(secondRecords, CancellationToken.None);
-    await repository.CompleteScanAsync(
-        photoRoot,
-        secondScan,
-        includeSubfolders: true,
+    await repository.UpsertBatchAsync(
+        secondResults
+            .Where(result => result.RequiresUpsert)
+            .Select(result => result.Record)
+            .ToArray(),
+        CancellationToken.None);
+    var seenPaths = secondResults
+        .Select(result => result.Record.Path)
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    await repository.DeleteByPathsAsync(
+        beforeCleanup
+            .Where(record => !seenPaths.Contains(record.Path))
+            .Select(record => record.Path)
+            .ToArray(),
         CancellationToken.None);
     var afterCleanup = await repository.GetByRootAsync(photoRoot, CancellationToken.None);
-    Assert(afterCleanup.Count == 1, "A completed rescan should remove stale catalogue rows.");
+    Assert(
+        afterCleanup.Count == 1,
+        "An incremental rescan should remove stale catalogue rows.");
 
     await AssertWindowClosesCleanlyAsync(
         repository,
@@ -313,8 +462,12 @@ static async Task AssertWindowClosesCleanlyAsync(
                 var window = new MainWindow(viewModel, repository);
                 window.RestoreLayoutAsync().GetAwaiter().GetResult();
                 window.ValidatePaneScrollBarsForSmokeTest();
+                window.ValidatePhotoContextMenuForSmokeTest();
+                window.ValidateDarkThemeIconsForSmokeTest();
+                window.ValidateStatusBarLayoutForSmokeTest();
                 window.ValidateCatalogTileForSmokeTest(
                     cataloguePhoto.FileName);
+                window.ValidateCatalogScrollResetForSmokeTest();
                 window.ValidatePreviewWheelNavigationForSmokeTest();
                 window.Loaded += (_, _) =>
                     window.Dispatcher.BeginInvoke(

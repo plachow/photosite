@@ -37,7 +37,10 @@ public sealed class PhotoCatalogRepository
                 modified_utc_ticks  INTEGER NOT NULL,
                 rating              INTEGER NOT NULL DEFAULT 0
                                     CHECK (rating BETWEEN 0 AND 5),
-                scan_id             INTEGER NOT NULL
+                scan_id             INTEGER NOT NULL,
+                taken_at_ticks      INTEGER NULL,
+                taken_at_source     INTEGER NOT NULL DEFAULT 0,
+                metadata_indexed    INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE INDEX IF NOT EXISTS ix_photos_root_name
@@ -65,6 +68,30 @@ public sealed class PhotoCatalogRepository
             );
             """;
         await command.ExecuteNonQueryAsync(cancellationToken);
+
+        await EnsureColumnAsync(
+            connection,
+            "taken_at_ticks",
+            "INTEGER NULL",
+            cancellationToken);
+        await EnsureColumnAsync(
+            connection,
+            "taken_at_source",
+            "INTEGER NOT NULL DEFAULT 0",
+            cancellationToken);
+        await EnsureColumnAsync(
+            connection,
+            "metadata_indexed",
+            "INTEGER NOT NULL DEFAULT 0",
+            cancellationToken);
+
+        await using var indexCommand = connection.CreateCommand();
+        indexCommand.CommandText =
+            """
+            CREATE INDEX IF NOT EXISTS ix_photos_root_taken
+                ON photos(root_path, taken_at_ticks);
+            """;
+        await indexCommand.ExecuteNonQueryAsync(cancellationToken);
     }
 
     public async Task UpsertBatchAsync(
@@ -84,17 +111,22 @@ public sealed class PhotoCatalogRepository
             """
             INSERT INTO photos (
                 path, root_path, file_name, extension, length,
-                modified_utc_ticks, rating, scan_id)
+                modified_utc_ticks, rating, scan_id,
+                taken_at_ticks, taken_at_source, metadata_indexed)
             VALUES (
                 $path, $root, $name, $extension, $length,
-                $modified, $rating, $scan)
+                $modified, $rating, $scan,
+                $takenAt, $takenAtSource, $metadataIndexed)
             ON CONFLICT(path) DO UPDATE SET
                 root_path = excluded.root_path,
                 file_name = excluded.file_name,
                 extension = excluded.extension,
                 length = excluded.length,
                 modified_utc_ticks = excluded.modified_utc_ticks,
-                scan_id = excluded.scan_id;
+                scan_id = excluded.scan_id,
+                taken_at_ticks = excluded.taken_at_ticks,
+                taken_at_source = excluded.taken_at_source,
+                metadata_indexed = excluded.metadata_indexed;
             """;
 
         var path = command.Parameters.Add("$path", SqliteType.Text);
@@ -105,6 +137,13 @@ public sealed class PhotoCatalogRepository
         var modified = command.Parameters.Add("$modified", SqliteType.Integer);
         var rating = command.Parameters.Add("$rating", SqliteType.Integer);
         var scan = command.Parameters.Add("$scan", SqliteType.Integer);
+        var takenAt = command.Parameters.Add("$takenAt", SqliteType.Integer);
+        var takenAtSource = command.Parameters.Add(
+            "$takenAtSource",
+            SqliteType.Integer);
+        var metadataIndexed = command.Parameters.Add(
+            "$metadataIndexed",
+            SqliteType.Integer);
 
         foreach (var record in records)
         {
@@ -117,6 +156,11 @@ public sealed class PhotoCatalogRepository
             modified.Value = record.ModifiedUtcTicks;
             rating.Value = record.Rating;
             scan.Value = record.ScanId;
+            takenAt.Value = record.TakenAtTicks is { } ticks
+                ? ticks
+                : DBNull.Value;
+            takenAtSource.Value = (int)record.TakenAtSource;
+            metadataIndexed.Value = record.MetadataIndexed ? 1 : 0;
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
 
@@ -161,6 +205,33 @@ public sealed class PhotoCatalogRepository
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
+    public async Task DeleteByPathsAsync(
+        IReadOnlyCollection<string> paths,
+        CancellationToken cancellationToken)
+    {
+        if (paths.Count == 0)
+        {
+            return;
+        }
+
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(
+            cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)transaction;
+        command.CommandText = "DELETE FROM photos WHERE path = $path;";
+        var path = command.Parameters.Add("$path", SqliteType.Text);
+
+        foreach (var value in paths)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            path.Value = value;
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+    }
+
     public async Task<IReadOnlyList<PhotoRecord>> GetByRootAsync(
         string rootPath,
         CancellationToken cancellationToken)
@@ -171,7 +242,8 @@ public sealed class PhotoCatalogRepository
         command.CommandText =
             """
             SELECT path, root_path, file_name, extension, length,
-                   modified_utc_ticks, rating, scan_id
+                   modified_utc_ticks, rating, scan_id,
+                   taken_at_ticks, taken_at_source, metadata_indexed
             FROM photos
             WHERE root_path = $root
             ORDER BY file_name COLLATE NOCASE, path COLLATE NOCASE;
@@ -189,7 +261,10 @@ public sealed class PhotoCatalogRepository
                 reader.GetInt64(4),
                 reader.GetInt64(5),
                 reader.GetInt32(6),
-                reader.GetInt64(7)));
+                reader.GetInt64(7),
+                reader.IsDBNull(8) ? null : reader.GetInt64(8),
+                (PhotoDateSource)reader.GetInt32(9),
+                reader.GetInt32(10) != 0));
         }
 
         return result;
@@ -359,5 +434,33 @@ public sealed class PhotoCatalogRepository
         command.CommandText = "PRAGMA busy_timeout = 5000;";
         await command.ExecuteNonQueryAsync(cancellationToken);
         return connection;
+    }
+
+    private static async Task EnsureColumnAsync(
+        SqliteConnection connection,
+        string columnName,
+        string declaration,
+        CancellationToken cancellationToken)
+    {
+        await using (var inspect = connection.CreateCommand())
+        {
+            inspect.CommandText = "PRAGMA table_info(photos);";
+            await using var reader = await inspect.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                if (string.Equals(
+                        reader.GetString(1),
+                        columnName,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+            }
+        }
+
+        await using var alter = connection.CreateCommand();
+        alter.CommandText =
+            $"ALTER TABLE photos ADD COLUMN {columnName} {declaration};";
+        await alter.ExecuteNonQueryAsync(cancellationToken);
     }
 }
