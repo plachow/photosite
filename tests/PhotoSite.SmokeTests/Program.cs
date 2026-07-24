@@ -392,6 +392,37 @@ try
         restoredViewModel.SelectedPhoto?.Path == secondPhoto,
         "Startup should restore the last active photo in the saved directory.");
 
+    var directoryStartupViewModel = new MainViewModel(repository, indexer);
+    await directoryStartupViewModel.InitializeAsync(
+        nested,
+        CancellationToken.None);
+    Assert(
+        directoryStartupViewModel.CurrentFolder == nested
+        && directoryStartupViewModel.SelectedPhoto?.Path == secondPhoto
+        && !directoryStartupViewModel.IsEditorMode,
+        "A command-line directory should open that folder in Manager.");
+
+    var photoStartupViewModel = new MainViewModel(repository, indexer);
+    await photoStartupViewModel.InitializeAsync(
+        firstPhoto,
+        CancellationToken.None);
+    Assert(
+        photoStartupViewModel.CurrentFolder == photoRoot
+        && photoStartupViewModel.SelectedPhoto?.Path == firstPhoto
+        && photoStartupViewModel.IsEditorMode,
+        "A command-line photo should open its folder and select it in Editor.");
+
+    var unsupportedStartupViewModel = new MainViewModel(repository, indexer);
+    await unsupportedStartupViewModel.InitializeAsync(
+        ignoredFile,
+        CancellationToken.None);
+    Assert(
+        !unsupportedStartupViewModel.IsEditorMode
+        && unsupportedStartupViewModel.StatusText.StartsWith(
+            "Unsupported photo format:",
+            StringComparison.Ordinal),
+        "An unsupported command-line file should stay in Manager and report the problem.");
+
     await repository.UpdateRatingAsync(firstPhoto, 4);
     var rated = await repository.GetByRootAsync(photoRoot, CancellationToken.None);
     Assert(

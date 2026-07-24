@@ -29,6 +29,9 @@ public sealed class PhotoIndexer
             .ToArray() ?? [];
     }
 
+    internal static bool IsSupportedFile(string path) =>
+        SupportedExtensions.Contains(Path.GetExtension(path));
+
     public IAsyncEnumerable<PhotoScanResult> ScanAsync(
         string rootPath,
         long scanId,
@@ -55,8 +58,7 @@ public sealed class PhotoIndexer
                                  cancellationToken))
                     {
                         cancellationToken.ThrowIfCancellationRequested();
-                        var extension = Path.GetExtension(path);
-                        if (!SupportedExtensions.Contains(extension))
+                        if (!IsSupportedFile(path))
                         {
                             continue;
                         }
@@ -64,6 +66,7 @@ public sealed class PhotoIndexer
                         try
                         {
                             var file = new FileInfo(path);
+                            var extension = file.Extension;
                             if (cachedRecords is not null
                                 && cachedRecords.TryGetValue(
                                     file.FullName,

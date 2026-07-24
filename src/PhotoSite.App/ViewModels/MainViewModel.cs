@@ -228,7 +228,12 @@ public sealed class MainViewModel : ObservableObject
         StatusText = message;
     }
 
-    public async Task InitializeAsync(CancellationToken cancellationToken = default)
+    public Task InitializeAsync(CancellationToken cancellationToken = default) =>
+        InitializeAsync(startupPath: null, cancellationToken);
+
+    public async Task InitializeAsync(
+        string? startupPath,
+        CancellationToken cancellationToken)
     {
         var savedScope = await catalog.GetSettingAsync(
             IncludeSubfoldersSetting,
@@ -247,7 +252,9 @@ public sealed class MainViewModel : ObservableObject
         var savedPhoto = await catalog.GetSettingAsync(
             LastPhotoSetting,
             cancellationToken);
-        var initialDirectory = ResolveInitialDirectory(savedDirectory);
+        var startupTarget = ResolveStartupTarget(startupPath);
+        var initialDirectory = startupTarget.DirectoryPath
+                               ?? ResolveInitialDirectory(savedDirectory);
         if (initialDirectory is null)
         {
             StatusText = "No accessible directory was found";
@@ -260,7 +267,35 @@ public sealed class MainViewModel : ObservableObject
         await LoadFolderAsync(
             initialDirectory,
             cancellationToken,
-            savedPhoto);
+            startupTarget.PhotoPath
+            ?? (startupTarget.DirectoryPath is null ? savedPhoto : null));
+
+        if (startupTarget.PhotoPath is not null)
+        {
+            var startupPhoto = Photos.FirstOrDefault(
+                photo => string.Equals(
+                    photo.Path,
+                    startupTarget.PhotoPath,
+                    StringComparison.OrdinalIgnoreCase));
+            if (startupPhoto is not null)
+            {
+                SelectedPhoto = startupPhoto;
+                ShowEditor();
+            }
+            else
+            {
+                StatusText = $"Photo could not be opened: {startupTarget.PhotoPath}";
+            }
+        }
+        else
+        {
+            IsEditorMode = false;
+        }
+
+        if (startupTarget.ErrorMessage is not null)
+        {
+            StatusText = startupTarget.ErrorMessage;
+        }
     }
 
     public async Task LoadFolderAsync(string folder, CancellationToken cancellationToken)
@@ -447,6 +482,56 @@ public sealed class MainViewModel : ObservableObject
 
         return fallbacks.FirstOrDefault(
             path => !string.IsNullOrWhiteSpace(path) && Directory.Exists(path));
+    }
+
+    private static StartupTarget ResolveStartupTarget(string? startupPath)
+    {
+        if (string.IsNullOrWhiteSpace(startupPath))
+        {
+            return default;
+        }
+
+        string fullPath;
+        try
+        {
+            fullPath = Path.GetFullPath(startupPath);
+        }
+        catch (Exception exception)
+            when (exception is ArgumentException
+                  or NotSupportedException
+                  or PathTooLongException)
+        {
+            return new StartupTarget(
+                ErrorMessage: $"Cannot open path: {startupPath}");
+        }
+
+        if (Directory.Exists(fullPath))
+        {
+            return new StartupTarget(DirectoryPath: fullPath);
+        }
+
+        if (!File.Exists(fullPath))
+        {
+            return new StartupTarget(
+                ErrorMessage: $"Path does not exist: {fullPath}");
+        }
+
+        if (!PhotoIndexer.IsSupportedFile(fullPath))
+        {
+            return new StartupTarget(
+                ErrorMessage: $"Unsupported photo format: {fullPath}");
+        }
+
+        var directory = Path.GetDirectoryName(fullPath);
+        if (string.IsNullOrWhiteSpace(directory))
+        {
+            return new StartupTarget(
+                ErrorMessage: $"Cannot determine photo directory: {fullPath}");
+        }
+
+        return new StartupTarget(
+            DirectoryPath: directory,
+            PhotoPath: fullPath);
     }
 
     private async Task ReplacePhotosAsync(
@@ -729,4 +814,9 @@ public sealed class MainViewModel : ObservableObject
     {
         OnPropertyChanged(nameof(FolderScopeToolTip));
     }
+
+    private readonly record struct StartupTarget(
+        string? DirectoryPath = null,
+        string? PhotoPath = null,
+        string? ErrorMessage = null);
 }

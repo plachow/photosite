@@ -38,6 +38,10 @@ public partial class App : Application
         var isSmokeTest = e.Args.Contains(
             "--smoke-test",
             StringComparer.OrdinalIgnoreCase);
+        var startupPath = e.Args.FirstOrDefault(
+            argument => !argument.Equals(
+                "--smoke-test",
+                StringComparison.OrdinalIgnoreCase));
 
         try
         {
@@ -58,7 +62,9 @@ public partial class App : Application
             }
 
             window.Show();
-            await viewModel.InitializeAsync();
+            await viewModel.InitializeAsync(
+                startupPath,
+                updateCancellation.Token);
             _ = CheckForUpdatesAsync(window, viewModel);
         }
         catch (Exception exception)

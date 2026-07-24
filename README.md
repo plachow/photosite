@@ -29,6 +29,14 @@ dotnet run --project src/PhotoSite.App/PhotoSite.App.csproj
 Runtime data is stored under `%LOCALAPPDATA%\PhotoSite`. Source photographs
 remain unchanged unless the user explicitly chooses **Overwrite original**.
 
+Pass a photo to open it directly in Editor, or pass a directory to open it in
+Manager:
+
+```powershell
+PhotoSite.exe "C:\Photos\portrait.jpg"
+PhotoSite.exe "C:\Photos"
+```
+
 ## Releases and automatic updates
 
 Production releases are created from semantic version tags. The release
