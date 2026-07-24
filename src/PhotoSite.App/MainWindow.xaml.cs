@@ -420,6 +420,76 @@ public partial class MainWindow : Window
         }
     }
 
+    internal void ValidatePastedImageCropForSmokeTest(BitmapSource bitmap)
+    {
+        var originalSelection = viewModel.SelectedPhoto;
+        var crop = new CropRegion(0.2, 0.25, 0.5, 0.5);
+        var pasted = viewModel.OpenPastedImage(bitmap);
+        UpdateLayout();
+        PreviewViewer.IsSelectionMode = true;
+        PreviewViewer.SetSelectionForSmokeTest(crop);
+        var selectedBeforeAction = viewModel.SelectedPhoto;
+        var selectionBeforeAction = PreviewViewer.SelectionRegion;
+        CropSelectionButton.RaiseEvent(
+            new RoutedEventArgs(Button.ClickEvent));
+        UpdateLayout();
+
+        string? failure = null;
+        if (!ReferenceEquals(selectedBeforeAction, pasted))
+        {
+            failure = "The pasted document was not selected before Crop.";
+        }
+        else if (selectionBeforeAction is not { } appliedSelection
+                 || !CropRegionsAreClose(appliedSelection, crop))
+        {
+            failure =
+                $"Crop received selection {selectionBeforeAction?.ToString() ?? "null"}.";
+        }
+        else if (pasted.EditRecipe.Crop is not { } documentCrop
+                 || !CropRegionsAreClose(documentCrop, appliedSelection))
+        {
+            failure = "The Crop action did not update the document recipe.";
+        }
+        else if (PreviewViewer.EditRecipe.Crop is not { } boundCrop
+                 || !CropRegionsAreClose(boundCrop, appliedSelection))
+        {
+            failure =
+                "The viewer binding did not receive the document crop recipe.";
+        }
+        else if (PreviewViewer.DisplayedRecipeForSmokeTest.Crop
+                     is not { } displayedCrop
+                 || !CropRegionsAreClose(displayedCrop, appliedSelection))
+        {
+            failure =
+                "The pasted bitmap renderer did not adopt the crop recipe.";
+        }
+        else if (PreviewViewer.HasSelection)
+        {
+            failure = "The applied crop selection was not cleared.";
+        }
+
+        pasted.DiscardEditorSession();
+        viewModel.ShowManagerCommand.Execute(null);
+        if (!ReferenceEquals(viewModel.SelectedPhoto, originalSelection))
+        {
+            failure ??=
+                "Leaving the crop repro did not restore the catalogue selection.";
+        }
+
+        if (failure is not null)
+        {
+            throw new InvalidOperationException(failure);
+        }
+    }
+
+    private static bool CropRegionsAreClose(
+        CropRegion first,
+        CropRegion second) =>
+        Math.Abs(first.X - second.X) < 0.0000001
+        && Math.Abs(first.Y - second.Y) < 0.0000001
+        && Math.Abs(first.Width - second.Width) < 0.0000001
+        && Math.Abs(first.Height - second.Height) < 0.0000001;
+
     internal void ValidateCatalogTileForSmokeTest(string expectedFileName)
     {
         if (Content is not UIElement content)

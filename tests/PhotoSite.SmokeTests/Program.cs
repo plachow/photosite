@@ -753,6 +753,7 @@ static async Task AssertWindowClosesCleanlyAsync(
                 window.ValidateStatusBarLayoutForSmokeTest();
                 window.ValidateSelectionToolsForSmokeTest();
                 window.ValidatePastedImageBindingForSmokeTest(pastedBitmap);
+                window.ValidatePastedImageCropForSmokeTest(pastedBitmap);
                 window.ValidateCatalogTileForSmokeTest(
                     cataloguePhoto.FileName);
                 window.ValidateCatalogScrollResetForSmokeTest();

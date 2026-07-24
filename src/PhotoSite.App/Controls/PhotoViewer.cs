@@ -227,6 +227,11 @@ public sealed class PhotoViewer : FrameworkElement
 
     public CropRegion? SelectionRegion => selection;
 
+    internal EditRecipe DisplayedRecipeForSmokeTest => bitmapRecipe;
+
+    internal void SetSelectionForSmokeTest(CropRegion region) =>
+        SetSelection(region);
+
     public void ToggleSelectionMode()
     {
         IsSelectionMode = !IsSelectionMode;
@@ -687,10 +692,17 @@ public sealed class PhotoViewer : FrameworkElement
         DependencyPropertyChangedEventArgs eventArgs)
     {
         var viewer = (PhotoViewer)dependencyObject;
-        if (string.Equals(
+        var displaysInMemorySource =
+            viewer.SourceBitmap is { } sourceBitmap
+            && ReferenceEquals(viewer.bitmap, sourceBitmap);
+        var displaysPathSource =
+            viewer.SourceBitmap is null
+            && !string.IsNullOrWhiteSpace(viewer.SourcePath)
+            && string.Equals(
                 viewer.bitmapPath,
                 viewer.SourcePath,
-                StringComparison.OrdinalIgnoreCase))
+                StringComparison.OrdinalIgnoreCase);
+        if (displaysInMemorySource || displaysPathSource)
         {
             viewer.bitmapRecipe = (EditRecipe)eventArgs.NewValue;
         }

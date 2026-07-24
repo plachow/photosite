@@ -276,7 +276,10 @@ public sealed class PhotoItemViewModel : ObservableObject
         EditRecipe value,
         bool persist = true)
     {
-        if (!SetProperty(ref editRecipe, value))
+        if (!SetProperty(
+                ref editRecipe,
+                value,
+                nameof(EditRecipe)))
         {
             return;
         }
