@@ -26,8 +26,12 @@ try
     Directory.CreateDirectory(testRoot);
     var photoRoot = Directory.CreateDirectory(Path.Combine(testRoot, "photos")).FullName;
     var nested = Directory.CreateDirectory(Path.Combine(photoRoot, "nested")).FullName;
+    var directLaunchRoot = Directory.CreateDirectory(
+        Path.Combine(testRoot, "direct-launch")).FullName;
     var firstPhoto = Path.Combine(photoRoot, "first.png");
     var secondPhoto = Path.Combine(nested, "second.png");
+    var directLaunchPhoto = Path.Combine(directLaunchRoot, "opened.png");
+    var directLaunchNeighbor = Path.Combine(directLaunchRoot, "neighbor.png");
     var ignoredFile = Path.Combine(photoRoot, "notes.txt");
 
     // A valid one-pixel PNG is enough to exercise WIC/MagicScaler without
@@ -36,6 +40,8 @@ try
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZlEsAAAAASUVORK5CYII=");
     await File.WriteAllBytesAsync(firstPhoto, png);
     await File.WriteAllBytesAsync(secondPhoto, png);
+    await File.WriteAllBytesAsync(directLaunchPhoto, png);
+    await File.WriteAllBytesAsync(directLaunchNeighbor, png);
     await File.WriteAllTextAsync(ignoredFile, "not a photograph");
 
     var databasePath = Path.Combine(testRoot, "catalogue.db");
@@ -402,6 +408,48 @@ try
         && !directoryStartupViewModel.IsEditorMode,
         "A command-line directory should open that folder in Manager.");
 
+    var uncachedPhotoStartupViewModel = new MainViewModel(repository, indexer);
+    await uncachedPhotoStartupViewModel.InitializeAsync(
+        directLaunchPhoto,
+        CancellationToken.None);
+    var directLaunchRecords = await repository.GetByRootAsync(
+        directLaunchRoot,
+        CancellationToken.None);
+    Assert(
+        uncachedPhotoStartupViewModel.CurrentFolder == directLaunchRoot
+        && uncachedPhotoStartupViewModel.SelectedPhoto?.Path == directLaunchPhoto
+        && uncachedPhotoStartupViewModel.Photos.Count == 1
+        && directLaunchRecords.Count == 1
+        && directLaunchRecords[0].Path == directLaunchPhoto,
+        "A directly opened uncached photo should become editable without "
+        + "waiting for its whole folder to be indexed.");
+
+    var directStartupOrder = new List<string>();
+    await App.StartWindowAsync(
+        directLaunchPhoto,
+        () =>
+        {
+            directStartupOrder.Add("editor-ready");
+            return Task.CompletedTask;
+        },
+        () => directStartupOrder.Add("visible"));
+    Assert(
+        directStartupOrder.SequenceEqual(["editor-ready", "visible"]),
+        "A direct photo window must not become visible before Editor is ready.");
+
+    var managerStartupOrder = new List<string>();
+    await App.StartWindowAsync(
+        directLaunchRoot,
+        () =>
+        {
+            managerStartupOrder.Add("manager-ready");
+            return Task.CompletedTask;
+        },
+        () => managerStartupOrder.Add("visible"));
+    Assert(
+        managerStartupOrder.SequenceEqual(["visible", "manager-ready"]),
+        "A normal Manager launch should remain visible while it initializes.");
+
     var photoStartupViewModel = new MainViewModel(repository, indexer);
     await photoStartupViewModel.InitializeAsync(
         firstPhoto,
@@ -434,12 +482,10 @@ try
         == DirectPhotoLaunchKeyAction.None,
         "Normal Editor launches must keep their existing Escape behavior.");
 
-    photoStartupViewModel.SelectedPhoto =
-        photoStartupViewModel.Photos.Single(photo => photo.Path == secondPhoto);
     await photoStartupViewModel.OpenSelectedPhotoFolderInManagerAsync();
     Assert(
-        photoStartupViewModel.CurrentFolder == nested
-        && photoStartupViewModel.SelectedPhoto?.Path == secondPhoto
+        photoStartupViewModel.CurrentFolder == photoRoot
+        && photoStartupViewModel.SelectedPhoto?.Path == firstPhoto
         && !photoStartupViewModel.IsEditorMode
         && !photoStartupViewModel.IsDirectPhotoLaunch,
         "Enter from direct viewing should open Manager in the current photo's directory.");

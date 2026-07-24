@@ -237,6 +237,7 @@ public sealed class MainViewModel : ObservableObject
         string? startupPath,
         CancellationToken cancellationToken)
     {
+        var startupTarget = ResolveStartupTarget(startupPath);
         var savedScope = await catalog.GetSettingAsync(
             IncludeSubfoldersSetting,
             cancellationToken);
@@ -248,13 +249,22 @@ public sealed class MainViewModel : ObservableObject
             NotifyFolderScopeChanged();
         }
 
+        if (startupTarget.PhotoPath is not null
+            && startupTarget.DirectoryPath is not null)
+        {
+            await InitializeDirectPhotoAsync(
+                startupTarget.DirectoryPath,
+                startupTarget.PhotoPath,
+                cancellationToken);
+            return;
+        }
+
         var savedDirectory = await catalog.GetSettingAsync(
             LastDirectorySetting,
             cancellationToken);
         var savedPhoto = await catalog.GetSettingAsync(
             LastPhotoSetting,
             cancellationToken);
-        var startupTarget = ResolveStartupTarget(startupPath);
         var initialDirectory = startupTarget.DirectoryPath
                                ?? ResolveInitialDirectory(savedDirectory);
         if (initialDirectory is null)
@@ -272,33 +282,124 @@ public sealed class MainViewModel : ObservableObject
             startupTarget.PhotoPath
             ?? (startupTarget.DirectoryPath is null ? savedPhoto : null));
 
-        if (startupTarget.PhotoPath is not null)
-        {
-            var startupPhoto = Photos.FirstOrDefault(
-                photo => string.Equals(
-                    photo.Path,
-                    startupTarget.PhotoPath,
-                    StringComparison.OrdinalIgnoreCase));
-            if (startupPhoto is not null)
-            {
-                SelectedPhoto = startupPhoto;
-                IsDirectPhotoLaunch = true;
-                ShowEditor();
-            }
-            else
-            {
-                StatusText = $"Photo could not be opened: {startupTarget.PhotoPath}";
-            }
-        }
-        else
-        {
-            IsEditorMode = false;
-        }
+        IsEditorMode = false;
 
         if (startupTarget.ErrorMessage is not null)
         {
             StatusText = startupTarget.ErrorMessage;
         }
+    }
+
+    internal static bool IsDirectPhotoStartup(string? startupPath) =>
+        ResolveStartupTarget(startupPath).PhotoPath is not null;
+
+    private async Task InitializeDirectPhotoAsync(
+        string directoryPath,
+        string photoPath,
+        CancellationToken cancellationToken)
+    {
+        var rootFolder = Path.GetFullPath(directoryPath);
+        var fullPhotoPath = Path.GetFullPath(photoPath);
+        CurrentFolder = rootFolder;
+        IsBusy = true;
+
+        try
+        {
+            await catalog.SetSettingAsync(
+                LastDirectorySetting,
+                rootFolder,
+                cancellationToken);
+
+            var cached = FilterRecordsForScope(
+                    await catalog.GetByRootAsync(rootFolder, cancellationToken),
+                    rootFolder,
+                    IncludeSubfolders)
+                .ToList();
+            var targetIndex = cached.FindIndex(
+                record => string.Equals(
+                    record.Path,
+                    fullPhotoPath,
+                    StringComparison.OrdinalIgnoreCase));
+            var cachedTarget = targetIndex >= 0
+                ? cached[targetIndex]
+                : await catalog.GetByPathAsync(
+                    fullPhotoPath,
+                    cancellationToken);
+            var target = CreateDirectPhotoRecord(
+                fullPhotoPath,
+                rootFolder,
+                cachedTarget);
+
+            await catalog.UpsertBatchAsync([target], cancellationToken);
+            if (targetIndex >= 0)
+            {
+                cached[targetIndex] = target;
+            }
+            else
+            {
+                cached.Add(target);
+            }
+
+            await ReplacePhotosAsync(
+                cached,
+                rootFolder,
+                fullPhotoPath,
+                cancellationToken);
+            var startupPhoto = Photos.FirstOrDefault(
+                photo => string.Equals(
+                    photo.Path,
+                    fullPhotoPath,
+                    StringComparison.OrdinalIgnoreCase));
+            if (startupPhoto is null)
+            {
+                StatusText = $"Photo could not be opened: {fullPhotoPath}";
+                return;
+            }
+
+            SelectedPhoto = startupPhoto;
+            IsDirectPhotoLaunch = true;
+            ShowEditor();
+            SetPhotoStatus(cached.Count);
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    private static PhotoRecord CreateDirectPhotoRecord(
+        string photoPath,
+        string rootFolder,
+        PhotoRecord? cached)
+    {
+        var file = new FileInfo(photoPath);
+        file.Refresh();
+        if (!file.Exists)
+        {
+            throw new FileNotFoundException(
+                "The directly opened photo no longer exists.",
+                photoPath);
+        }
+
+        var scanId = DateTime.UtcNow.Ticks;
+        if (cached is not null && PhotoIndexer.CanReuseMetadata(file, cached))
+        {
+            return cached with
+            {
+                RootPath = rootFolder,
+                ScanId = scanId
+            };
+        }
+
+        return new PhotoRecord(
+            file.FullName,
+            rootFolder,
+            file.Name,
+            file.Extension,
+            file.Length,
+            file.LastWriteTimeUtc.Ticks,
+            cached?.Rating ?? 0,
+            scanId);
     }
 
     public async Task LoadFolderAsync(string folder, CancellationToken cancellationToken)

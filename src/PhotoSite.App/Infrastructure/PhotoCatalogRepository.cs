@@ -270,6 +270,42 @@ public sealed class PhotoCatalogRepository
         return result;
     }
 
+    public async Task<PhotoRecord?> GetByPathAsync(
+        string path,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT path, root_path, file_name, extension, length,
+                   modified_utc_ticks, rating, scan_id,
+                   taken_at_ticks, taken_at_source, metadata_indexed
+            FROM photos
+            WHERE path = $path;
+            """;
+        command.Parameters.AddWithValue("$path", path);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            return null;
+        }
+
+        return new PhotoRecord(
+            reader.GetString(0),
+            reader.GetString(1),
+            reader.GetString(2),
+            reader.GetString(3),
+            reader.GetInt64(4),
+            reader.GetInt64(5),
+            reader.GetInt32(6),
+            reader.GetInt64(7),
+            reader.IsDBNull(8) ? null : reader.GetInt64(8),
+            (PhotoDateSource)reader.GetInt32(9),
+            reader.GetInt32(10) != 0);
+    }
+
     public async Task UpdateRatingAsync(
         string path,
         int rating,

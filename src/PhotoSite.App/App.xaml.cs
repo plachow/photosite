@@ -61,10 +61,12 @@ public partial class App : Application
                 return;
             }
 
-            window.Show();
-            await viewModel.InitializeAsync(
+            await StartWindowAsync(
                 startupPath,
-                updateCancellation.Token);
+                () => viewModel.InitializeAsync(
+                    startupPath,
+                    updateCancellation.Token),
+                window.Show);
             _ = CheckForUpdatesAsync(window, viewModel);
         }
         catch (Exception exception)
@@ -83,6 +85,22 @@ public partial class App : Application
                 MessageBoxImage.Error);
             Shutdown(-1);
         }
+    }
+
+    internal static async Task StartWindowAsync(
+        string? startupPath,
+        Func<Task> initializeAsync,
+        Action show)
+    {
+        if (MainViewModel.IsDirectPhotoStartup(startupPath))
+        {
+            await initializeAsync();
+            show();
+            return;
+        }
+
+        show();
+        await initializeAsync();
     }
 
     protected override void OnExit(ExitEventArgs e)
