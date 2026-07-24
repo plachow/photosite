@@ -409,8 +409,40 @@ try
     Assert(
         photoStartupViewModel.CurrentFolder == photoRoot
         && photoStartupViewModel.SelectedPhoto?.Path == firstPhoto
-        && photoStartupViewModel.IsEditorMode,
+        && photoStartupViewModel.IsEditorMode
+        && photoStartupViewModel.IsDirectPhotoLaunch,
         "A command-line photo should open its folder and select it in Editor.");
+    Assert(
+        MainWindow.GetDirectPhotoLaunchKeyAction(
+            Key.Escape,
+            isDirectPhotoLaunch: true,
+            isEditorMode: true)
+        == DirectPhotoLaunchKeyAction.CloseWindow,
+        "Escape should close a directly opened photo window.");
+    Assert(
+        MainWindow.GetDirectPhotoLaunchKeyAction(
+            Key.Enter,
+            isDirectPhotoLaunch: true,
+            isEditorMode: true)
+        == DirectPhotoLaunchKeyAction.OpenManager,
+        "Enter should open Manager from a directly opened photo.");
+    Assert(
+        MainWindow.GetDirectPhotoLaunchKeyAction(
+            Key.Escape,
+            isDirectPhotoLaunch: false,
+            isEditorMode: true)
+        == DirectPhotoLaunchKeyAction.None,
+        "Normal Editor launches must keep their existing Escape behavior.");
+
+    photoStartupViewModel.SelectedPhoto =
+        photoStartupViewModel.Photos.Single(photo => photo.Path == secondPhoto);
+    await photoStartupViewModel.OpenSelectedPhotoFolderInManagerAsync();
+    Assert(
+        photoStartupViewModel.CurrentFolder == nested
+        && photoStartupViewModel.SelectedPhoto?.Path == secondPhoto
+        && !photoStartupViewModel.IsEditorMode
+        && !photoStartupViewModel.IsDirectPhotoLaunch,
+        "Enter from direct viewing should open Manager in the current photo's directory.");
 
     var unsupportedStartupViewModel = new MainViewModel(repository, indexer);
     await unsupportedStartupViewModel.InitializeAsync(

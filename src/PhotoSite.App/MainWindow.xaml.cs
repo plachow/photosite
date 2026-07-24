@@ -1884,6 +1884,28 @@ public partial class MainWindow : Window
             return;
         }
 
+        var directPhotoLaunchAction = GetDirectPhotoLaunchKeyAction(
+            eventArgs.Key,
+            viewModel.IsDirectPhotoLaunch,
+            viewModel.IsEditorMode);
+        if (directPhotoLaunchAction == DirectPhotoLaunchKeyAction.CloseWindow)
+        {
+            eventArgs.Handled = true;
+            Close();
+            return;
+        }
+
+        if (directPhotoLaunchAction == DirectPhotoLaunchKeyAction.OpenManager)
+        {
+            eventArgs.Handled = true;
+            if (await ConfirmEditorExitAsync())
+            {
+                await viewModel.OpenSelectedPhotoFolderInManagerAsync();
+            }
+
+            return;
+        }
+
         if (eventArgs.Key == Key.Escape && viewModel.IsEditorMode)
         {
             await LeaveEditorAsync();
@@ -1940,6 +1962,24 @@ public partial class MainWindow : Window
             viewModel.ShowEditorCommand.Execute(null);
             eventArgs.Handled = true;
         }
+    }
+
+    internal static DirectPhotoLaunchKeyAction GetDirectPhotoLaunchKeyAction(
+        Key key,
+        bool isDirectPhotoLaunch,
+        bool isEditorMode)
+    {
+        if (!isDirectPhotoLaunch || !isEditorMode)
+        {
+            return DirectPhotoLaunchKeyAction.None;
+        }
+
+        return key switch
+        {
+            Key.Escape => DirectPhotoLaunchKeyAction.CloseWindow,
+            Key.Enter => DirectPhotoLaunchKeyAction.OpenManager,
+            _ => DirectPhotoLaunchKeyAction.None
+        };
     }
 
     private bool TryHandleViewerShortcut(Key key)
@@ -2527,4 +2567,11 @@ public partial class MainWindow : Window
         WindowState State,
         double NavigatorPaneWidth,
         double CatalogPaneWidth);
+}
+
+internal enum DirectPhotoLaunchKeyAction
+{
+    None,
+    CloseWindow,
+    OpenManager
 }

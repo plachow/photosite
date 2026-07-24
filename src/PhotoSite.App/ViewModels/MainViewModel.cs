@@ -178,6 +178,8 @@ public sealed class MainViewModel : ObservableObject
         private set => SetProperty(ref isBusy, value);
     }
 
+    public bool IsDirectPhotoLaunch { get; private set; }
+
     public bool IsEditorMode
     {
         get => isEditorMode;
@@ -280,6 +282,7 @@ public sealed class MainViewModel : ObservableObject
             if (startupPhoto is not null)
             {
                 SelectedPhoto = startupPhoto;
+                IsDirectPhotoLaunch = true;
                 ShowEditor();
             }
             else
@@ -304,6 +307,33 @@ public sealed class MainViewModel : ObservableObject
             folder,
             cancellationToken,
             preferredPhotoPath: null);
+    }
+
+    public async Task OpenSelectedPhotoFolderInManagerAsync(
+        CancellationToken cancellationToken = default)
+    {
+        if (SelectedPhoto is not { IsTransient: false } photo)
+        {
+            return;
+        }
+
+        var folder = Path.GetDirectoryName(photo.Path);
+        if (string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder))
+        {
+            StatusText = $"Photo directory does not exist: {folder}";
+            return;
+        }
+
+        var photoPath = photo.Path;
+        await DirectoryTree.SelectPathAsync(
+            folder,
+            notifySelection: false);
+        await LoadFolderAsync(
+            folder,
+            cancellationToken,
+            photoPath);
+        IsFullscreenMode = false;
+        ShowManager();
     }
 
     public async Task SaveSessionAsync(
@@ -716,6 +746,7 @@ public sealed class MainViewModel : ObservableObject
 
     private void ShowManager()
     {
+        IsDirectPhotoLaunch = false;
         IsEditorMode = false;
         RestoreSelectionAfterTransientDocument();
     }
@@ -725,6 +756,7 @@ public sealed class MainViewModel : ObservableObject
         IsEditorMode = !IsEditorMode;
         if (!IsEditorMode)
         {
+            IsDirectPhotoLaunch = false;
             RestoreSelectionAfterTransientDocument();
         }
     }

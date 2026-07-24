@@ -37,6 +37,9 @@ PhotoSite.exe "C:\Photos\portrait.jpg"
 PhotoSite.exe "C:\Photos"
 ```
 
+A directly opened photo behaves like a lightweight viewer: `Esc` closes the
+window and `Enter` opens Manager in the current photo's directory.
+
 ## Releases and automatic updates
 
 Production releases are created from semantic version tags. The release
