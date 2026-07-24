@@ -1,0 +1,76 @@
+name: Release PhotoSite
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Validate release version
+        id: version
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart("v")
+          if ($version -notmatch '^\d+\.\d+\.\d+$') {
+            throw "Tag '${{ github.ref_name }}' is not a supported release version."
+          }
+          "number=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Build
+        run: dotnet build PhotoSite.slnx -c Release
+
+      - name: Run smoke tests
+        run: dotnet run --project tests/PhotoSite.SmokeTests/PhotoSite.SmokeTests.csproj -c Release --no-build
+
+      - name: Publish self-contained application
+        run: >
+          dotnet publish src/PhotoSite.App/PhotoSite.App.csproj
+          -c Release
+          -r win-x64
+          --self-contained true
+          -p:Version=${{ steps.version.outputs.number }}
+          -o artifacts/publish
+
+      - name: Download previous Velopack release
+        continue-on-error: true
+        run: >
+          dnx vpk --version 1.2.0 download github
+          --repoUrl https://github.com/${{ github.repository }}
+          --token ${{ secrets.GITHUB_TOKEN }}
+          --outputDir artifacts/releases
+
+      - name: Package release
+        run: >
+          dnx vpk --version 1.2.0 pack
+          --packId PhotoSite
+          --packVersion ${{ steps.version.outputs.number }}
+          --packDir artifacts/publish
+          --mainExe PhotoSite.exe
+          --packTitle PhotoSite
+          --packAuthors plachow
+          --outputDir artifacts/releases
+
+      - name: Publish GitHub release
+        run: >
+          dnx vpk --version 1.2.0 upload github
+          --repoUrl https://github.com/${{ github.repository }}
+          --token ${{ secrets.GITHUB_TOKEN }}
+          --outputDir artifacts/releases
+          --publish
+          --releaseName "PhotoSite ${{ steps.version.outputs.number }}"
+          --tag ${{ github.ref_name }}

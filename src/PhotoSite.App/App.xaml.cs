@@ -2,15 +2,30 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using PhotoSite.Infrastructure;
+using PhotoSite.Services;
 using PhotoSite.ViewModels;
+using Velopack;
 
 namespace PhotoSite;
 
 public partial class App : Application
 {
-    public static AppServices Services { get; } = new();
+    private readonly CancellationTokenSource updateCancellation = new();
+    private static readonly Lazy<AppServices> services = new();
+
+    public static AppServices Services => services.Value;
 
     internal bool SuppressStartup { get; init; }
+
+    [STAThread]
+    private static void Main(string[] args)
+    {
+        VelopackApp.Build().Run();
+
+        var app = new App();
+        app.InitializeComponent();
+        app.Run();
+    }
 
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -44,6 +59,7 @@ public partial class App : Application
 
             window.Show();
             await viewModel.InitializeAsync();
+            _ = CheckForUpdatesAsync(window, viewModel);
         }
         catch (Exception exception)
         {
@@ -60,6 +76,67 @@ public partial class App : Application
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
             Shutdown(-1);
+        }
+    }
+
+    protected override void OnExit(ExitEventArgs e)
+    {
+        updateCancellation.Cancel();
+        updateCancellation.Dispose();
+        base.OnExit(e);
+    }
+
+    private async Task CheckForUpdatesAsync(
+        MainWindow window,
+        MainViewModel viewModel)
+    {
+        if (!Services.Updates.CanCheckForUpdates)
+        {
+            return;
+        }
+
+        try
+        {
+            viewModel.ReportStatus("Checking for PhotoSite updates…");
+            IProgress<int> progress = new Progress<int>(
+                percentage => viewModel.ReportStatus(
+                    $"Downloading PhotoSite update… {percentage}%"));
+            var update = await Services.Updates.CheckAndDownloadAsync(
+                progress.Report,
+                updateCancellation.Token);
+            if (update is null)
+            {
+                viewModel.ReportStatus("PhotoSite is up to date");
+                return;
+            }
+
+            viewModel.ReportStatus(
+                $"PhotoSite {update.Version} is ready to install");
+            var choice = MessageBox.Show(
+                window,
+                $"PhotoSite {update.Version} has been downloaded.\n\n"
+                + "Restart now to finish the update?",
+                "PhotoSite update ready",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Information,
+                MessageBoxResult.Yes);
+            if (choice != MessageBoxResult.Yes
+                || !await window.PrepareForUpdateRestartAsync())
+            {
+                return;
+            }
+
+            Services.Updates.ApplyAndRestart(update);
+        }
+        catch (OperationCanceledException)
+            when (updateCancellation.IsCancellationRequested)
+        {
+            // Normal application shutdown.
+        }
+        catch (Exception exception)
+        {
+            viewModel.ReportStatus(
+                $"Update check failed: {exception.Message}");
         }
     }
 

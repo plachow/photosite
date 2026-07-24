@@ -29,6 +29,33 @@ dotnet run --project src/PhotoSite.App/PhotoSite.App.csproj
 Runtime data is stored under `%LOCALAPPDATA%\PhotoSite`. Source photographs
 remain unchanged unless the user explicitly chooses **Overwrite original**.
 
+## Releases and automatic updates
+
+Production releases are created from semantic version tags. The release
+workflow builds and smoke-tests the application, publishes a self-contained
+`win-x64` build, packages it with Velopack, and uploads the installer and update
+feed to GitHub Releases.
+
+```powershell
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Install `PhotoSite-Setup.exe` from the first GitHub Release once. Installed
+copies then check the stable release feed after startup, download newer versions
+in the background, and ask before restarting. Unsaved editor changes keep the
+same save/discard/cancel protection during an update restart.
+
+The update client accesses GitHub Releases anonymously. The release repository
+must therefore be publicly readable; never embed a GitHub access token in the
+desktop application. If the source repository remains private, publish the
+Velopack artifacts to a separate public release repository or an HTTPS static
+file host and update `AppUpdateService.ReleaseRepository`.
+
+Release artifacts are not code-signed yet. Configure Velopack's
+`--signTemplate` with a trusted RSA code-signing certificate before distributing
+PhotoSite outside a controlled test group.
+
 ## Editor shortcuts
 
 - `Ctrl+V` — open a clipboard bitmap as a new unsaved image;

@@ -92,6 +92,41 @@ public partial class MainWindow : Window
 
     public IAsyncRelayCommand GuardedToggleEditorCommand { get; }
 
+    internal async Task<bool> PrepareForUpdateRestartAsync()
+    {
+        if (viewModel.IsEditorMode
+            && viewModel.SelectedPhoto?.IsEditorDirty == true)
+        {
+            if (isEditorExitPromptActive)
+            {
+                return false;
+            }
+
+            isEditorExitPromptActive = true;
+            var canRestart = await ConfirmEditorExitAsync();
+            isEditorExitPromptActive = false;
+            if (!canRestart)
+            {
+                return false;
+            }
+        }
+
+        layoutSaveTimer.Stop();
+        await SaveLayoutAsync();
+        try
+        {
+            await viewModel.SaveSessionAsync();
+        }
+        catch
+        {
+            // Session persistence is best effort and must not block an update.
+        }
+
+        copySelectionCancellation?.Cancel();
+        imgurUploadCancellation?.Cancel();
+        return true;
+    }
+
     public async Task RestoreLayoutAsync()
     {
         try

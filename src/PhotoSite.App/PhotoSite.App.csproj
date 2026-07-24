@@ -6,6 +6,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <RootNamespace>PhotoSite</RootNamespace>
     <AssemblyName>PhotoSite</AssemblyName>
+    <StartupObject>PhotoSite.App</StartupObject>
   </PropertyGroup>
 
   <ItemGroup>
@@ -14,9 +15,15 @@
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.10" />
     <PackageReference Include="PhotoSauce.MagicScaler" Version="0.15.0" />
     <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.12" />
+    <PackageReference Include="Velopack" Version="1.2.0" />
   </ItemGroup>
 
   <ItemGroup>
     <InternalsVisibleTo Include="PhotoSite.SmokeTests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ApplicationDefinition Remove="App.xaml" />
+    <Page Include="App.xaml" />
   </ItemGroup>
 </Project>

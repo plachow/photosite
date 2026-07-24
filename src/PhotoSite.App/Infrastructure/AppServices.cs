@@ -18,6 +18,7 @@ public sealed class AppServices
             {
                 Timeout = TimeSpan.FromMinutes(2)
             });
+        Updates = new AppUpdateService();
     }
 
     public AppPaths Paths { get; }
@@ -33,6 +34,8 @@ public sealed class AppServices
     public ImageSaveService ImageSaver { get; }
 
     public ImgurUploadService ImgurUploader { get; }
+
+    public AppUpdateService Updates { get; }
 
     public async Task InitializeAsync()
     {
