@@ -83,8 +83,20 @@ public partial class MainWindow : Window
         StateChanged += (_, _) => ScheduleLayoutSave();
         Closing += OnWindowClosing;
         viewModel.PropertyChanged += OnViewModelPropertyChanged;
+        viewModel.SelectionRevealRequested += OnSelectionRevealRequested;
         Closed += OnWindowClosed;
     }
+
+    private void OnSelectionRevealRequested() =>
+        Dispatcher.BeginInvoke(
+            DispatcherPriority.Loaded,
+            () =>
+            {
+                if (viewModel.SelectedPhoto is { } photo)
+                {
+                    PhotoList.ScrollIntoView(photo);
+                }
+            });
 
     public IAsyncRelayCommand GuardedPreviousCommand { get; }
 
@@ -1749,7 +1761,8 @@ public partial class MainWindow : Window
         object sender,
         KeyEventArgs eventArgs)
     {
-        if (PhotoSearchBox.IsKeyboardFocusWithin)
+        if (PhotoSearchBox.IsKeyboardFocusWithin
+            || eventArgs.OriginalSource is TextBoxBase)
         {
             return;
         }
@@ -1881,6 +1894,27 @@ public partial class MainWindow : Window
         {
             viewModel.ToggleFullscreenCommand.Execute(null);
             eventArgs.Handled = true;
+            return;
+        }
+
+        if (eventArgs.Key == Key.Delete
+            && Keyboard.Modifiers == ModifierKeys.None
+            && viewModel.SelectedPhoto is { IsTransient: false })
+        {
+            eventArgs.Handled = true;
+            await viewModel.DeleteSelectedPhotoAsync();
+            return;
+        }
+
+        if (eventArgs.Key == Key.F5
+            && !viewModel.IsEditorMode
+            && !viewModel.IsFullscreenMode
+            && viewModel.CurrentFolder is { } currentFolder)
+        {
+            eventArgs.Handled = true;
+            await viewModel.LoadFolderAsync(
+                currentFolder,
+                CancellationToken.None);
             return;
         }
 

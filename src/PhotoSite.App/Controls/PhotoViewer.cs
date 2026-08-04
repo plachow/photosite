@@ -10,7 +10,7 @@ namespace PhotoSite.Controls;
 
 public sealed class PhotoViewer : FrameworkElement
 {
-    private const double TransitionDurationMilliseconds = 180;
+    private const double TransitionDurationMilliseconds = 60;
     private const double ZoomStep = 1.18;
     private const double MinimumZoom = 0.1;
     private const double MaximumActualScale = 16;

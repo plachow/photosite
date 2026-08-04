@@ -15,9 +15,32 @@ public sealed class MainViewModel : ObservableObject
     private const string LastDirectorySetting = "last_directory";
     private const string LastPhotoSetting = "last_photo";
     private const string IncludeSubfoldersSetting = "include_subfolders";
+    // Only a backstop against spinning on a permanently locked file - a large
+    // RAW landing over a slow link legitimately stays open for a while.
+    private const int MaxWatcherRetries = 40;
+    private static readonly TimeSpan WatcherDebounceDelay =
+        TimeSpan.FromMilliseconds(600);
+    // A sustained copy fires events faster than the debounce window, so cap
+    // how long the oldest pending change may be held back - without this the
+    // gallery stays empty until the whole import goes quiet.
+    private static readonly TimeSpan WatcherMaxWait = TimeSpan.FromSeconds(2);
     private readonly PhotoCatalogRepository catalog;
     private readonly PhotoIndexer indexer;
     private readonly List<PhotoItemViewModel> allPhotos = [];
+    private readonly Dictionary<string, int> photoIndexByPath =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly SynchronizationContext? uiContext;
+    private readonly object watcherGate = new();
+    private readonly Dictionary<string, WatcherChangeTypes> pendingWatcherPaths =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, int> watcherRetryCounts =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly System.Threading.Timer watcherTimer;
+    private DateTime firstPendingUtc = DateTime.MaxValue;
+    private int folderGeneration;
+    private bool watcherFlushRunning;
+    private bool suppressPresentationRefresh;
+    private FileSystemWatcher? folderWatcher;
     private CancellationTokenSource? scanCancellation;
     private PhotoItemViewModel? selectedPhoto;
     private PhotoItemViewModel? selectionBeforeTransientDocument;
@@ -39,6 +62,12 @@ public sealed class MainViewModel : ObservableObject
     {
         this.catalog = catalog;
         this.indexer = indexer;
+        uiContext = SynchronizationContext.Current;
+        watcherTimer = new System.Threading.Timer(
+            _ => PostWatcherFlush(),
+            null,
+            Timeout.InfiniteTimeSpan,
+            Timeout.InfiniteTimeSpan);
         DirectoryTree = new DirectoryTreeViewModel(
             path => _ = LoadFolderAsync(path, CancellationToken.None));
         OpenFolderCommand = new AsyncRelayCommand(OpenFolderAsync);
@@ -301,6 +330,7 @@ public sealed class MainViewModel : ObservableObject
         var rootFolder = Path.GetFullPath(directoryPath);
         var fullPhotoPath = Path.GetFullPath(photoPath);
         CurrentFolder = rootFolder;
+        StartFolderWatcher(rootFolder, IncludeSubfolders);
         IsBusy = true;
 
         try
@@ -391,6 +421,7 @@ public sealed class MainViewModel : ObservableObject
             };
         }
 
+        var metadata = PhotoMetadataReader.ReadAll(file.FullName);
         return new PhotoRecord(
             file.FullName,
             rootFolder,
@@ -398,8 +429,15 @@ public sealed class MainViewModel : ObservableObject
             file.Extension,
             file.Length,
             file.LastWriteTimeUtc.Ticks,
-            cached?.Rating ?? 0,
-            scanId);
+            metadata.Rating > 0 ? metadata.Rating : cached?.Rating ?? 0,
+            scanId,
+            metadata.TakenAt.Ticks,
+            metadata.TakenAt.Source,
+            MetadataVersion: PhotoMetadataReader.CurrentVersion,
+            metadata.Title,
+            metadata.Description,
+            metadata.Latitude,
+            metadata.Longitude);
     }
 
     public async Task LoadFolderAsync(string folder, CancellationToken cancellationToken)
@@ -471,6 +509,7 @@ public sealed class MainViewModel : ObservableObject
         var includeSubfolders = IncludeSubfolders;
 
         CurrentFolder = rootFolder;
+        StartFolderWatcher(rootFolder, includeSubfolders);
         IsBusy = true;
 
         try
@@ -697,10 +736,13 @@ public sealed class MainViewModel : ObservableObject
         }
 
         allPhotos.Clear();
+        photoIndexByPath.Clear();
         allPhotos.AddRange(viewModels);
-        foreach (var photo in allPhotos)
+        for (var index = 0; index < allPhotos.Count; index++)
         {
+            var photo = allPhotos[index];
             photo.PropertyChanged += OnPhotoPropertyChanged;
+            photoIndexByPath[photo.Path] = index;
         }
 
         ApplyPhotoPresentation(preferredPhotoPath);
@@ -716,7 +758,9 @@ public sealed class MainViewModel : ObservableObject
             sortDescending,
             minimumRating,
             searchText);
-        Photos.ReplaceRange(presented);
+        // Granular updates keep the realized tiles - and the thumbnails they
+        // already decoded - alive; a Reset would blank the whole viewport.
+        Photos.SynchronizeTo(presented);
         if (transientSelection)
         {
             return;
@@ -776,6 +820,8 @@ public sealed class MainViewModel : ObservableObject
             .ToArray();
     }
 
+    public event Action? SelectionRevealRequested;
+
     private void ChangeSort(PhotoSortField field)
     {
         if (sortField == field)
@@ -792,6 +838,7 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(FileNameSortLabel));
         OnPropertyChanged(nameof(RatingSortLabel));
         ApplyPhotoPresentation();
+        SelectionRevealRequested?.Invoke();
     }
 
     private string BuildSortLabel(PhotoSortField field, string label) =>
@@ -803,7 +850,15 @@ public sealed class MainViewModel : ObservableObject
         object? sender,
         PropertyChangedEventArgs eventArgs)
     {
-        if (eventArgs.PropertyName == nameof(PhotoItemViewModel.Rating))
+        if (suppressPresentationRefresh
+            || eventArgs.PropertyName != nameof(PhotoItemViewModel.Rating))
+        {
+            return;
+        }
+
+        // A rating can only move a photo when the gallery orders or filters
+        // by it; otherwise re-presenting on every keypress is pure churn.
+        if (sortField == PhotoSortField.Rating || minimumRating > 0)
         {
             ApplyPhotoPresentation();
         }
@@ -915,6 +970,595 @@ public sealed class MainViewModel : ObservableObject
         {
             StatusText = $"Cannot change folder scope: {exception.Message}";
         }
+    }
+
+    public async Task DeleteSelectedPhotoAsync(
+        CancellationToken cancellationToken = default)
+    {
+        if (SelectedPhoto is not { IsTransient: false } photo)
+        {
+            return;
+        }
+
+        var path = photo.Path;
+        var fileName = photo.FileName;
+        try
+        {
+            await Task.Run(() => RecycleBin.MoveToRecycleBin(path), cancellationToken);
+            var sidecarPath = ExifToolMetadataWriter.GetSidecarPath(path);
+            if (ExifToolMetadataWriter.UsesSidecar(Path.GetExtension(path))
+                && File.Exists(sidecarPath))
+            {
+                await Task.Run(
+                    () => RecycleBin.MoveToRecycleBin(sidecarPath),
+                    cancellationToken);
+            }
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException)
+        {
+            StatusText = $"Cannot delete {fileName}: {exception.Message}";
+            return;
+        }
+
+        await catalog.DeleteByPathsAsync([path], cancellationToken);
+        if (RemovePhotoByPath(path))
+        {
+            ApplyPhotoPresentation(SelectedPhoto?.Path);
+        }
+
+        SetPhotoStatus(Photos.Count, $"Moved to Recycle Bin: {fileName}");
+    }
+
+    private bool RemovePhotoByPath(string path)
+    {
+        if (!photoIndexByPath.TryGetValue(path, out var index))
+        {
+            return false;
+        }
+
+        var photo = allPhotos[index];
+        photo.PropertyChanged -= OnPhotoPropertyChanged;
+        allPhotos.RemoveAt(index);
+        photoIndexByPath.Remove(photo.Path);
+        for (var shifted = index; shifted < allPhotos.Count; shifted++)
+        {
+            photoIndexByPath[allPhotos[shifted].Path] = shifted;
+        }
+
+        if (ReferenceEquals(SelectedPhoto, photo))
+        {
+            var presentedIndex = Photos.IndexOf(photo);
+            SelectedPhoto = presentedIndex switch
+            {
+                >= 0 when presentedIndex < Photos.Count - 1 =>
+                    Photos[presentedIndex + 1],
+                > 0 => Photos[presentedIndex - 1],
+                _ => null
+            };
+        }
+
+        return true;
+    }
+
+    private async Task<bool> AddOrUpdatePhotoAsync(
+        PhotoRecord record,
+        CancellationToken cancellationToken)
+    {
+        if (photoIndexByPath.TryGetValue(record.Path, out var existingIndex))
+        {
+            var existing = allPhotos[existingIndex];
+            if (existing.IsEditorSessionActive)
+            {
+                // Never replace the document that is being edited right now.
+                return false;
+            }
+
+            // Keeping the instance keeps the realized tile, its thumbnail and
+            // the gallery selection alive across a background refresh.
+            return existing.ApplyRecord(record);
+        }
+
+        var recipe = await catalog.GetEditRecipeAsync(
+            record.Path,
+            cancellationToken);
+        var viewModel = new PhotoItemViewModel(record, recipe, catalog);
+        allPhotos.Add(viewModel);
+        photoIndexByPath[viewModel.Path] = allPhotos.Count - 1;
+        viewModel.PropertyChanged += OnPhotoPropertyChanged;
+        return true;
+    }
+
+    private void StartFolderWatcher(string rootFolder, bool watchSubfolders)
+    {
+        StopFolderWatcher();
+        // Any flush still in flight belongs to the previous folder and must
+        // not apply its records to the gallery we are about to build.
+        folderGeneration++;
+        try
+        {
+            var watcher = new FileSystemWatcher(rootFolder)
+            {
+                IncludeSubdirectories = watchSubfolders,
+                InternalBufferSize = 64 * 1024,
+                // Size on top of LastWrite only doubles the event rate for a
+                // file being copied; both describe the same write.
+                NotifyFilter = NotifyFilters.FileName
+                               | NotifyFilters.DirectoryName
+                               | NotifyFilters.LastWrite
+            };
+            watcher.Created += OnWatcherFileEvent;
+            watcher.Changed += OnWatcherFileEvent;
+            watcher.Deleted += OnWatcherFileEvent;
+            watcher.Renamed += OnWatcherRenamed;
+            watcher.Error += OnWatcherError;
+            watcher.EnableRaisingEvents = true;
+            folderWatcher = watcher;
+        }
+        catch (Exception exception) when (
+            exception is IOException
+            or ArgumentException
+            or UnauthorizedAccessException)
+        {
+            // Live folder updates stay unavailable (e.g. an unplugged
+            // network share); manual refresh still works.
+            folderWatcher = null;
+        }
+    }
+
+    private void StopFolderWatcher()
+    {
+        folderWatcher?.Dispose();
+        folderWatcher = null;
+        watcherTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        lock (watcherGate)
+        {
+            pendingWatcherPaths.Clear();
+            watcherRetryCounts.Clear();
+            firstPendingUtc = DateTime.MaxValue;
+        }
+    }
+
+    private void OnWatcherFileEvent(object sender, FileSystemEventArgs eventArgs) =>
+        QueueWatcherPath(eventArgs.FullPath, eventArgs.ChangeType);
+
+    private void OnWatcherRenamed(object sender, RenamedEventArgs eventArgs)
+    {
+        QueueWatcherPath(eventArgs.OldFullPath, WatcherChangeTypes.Renamed);
+        QueueWatcherPath(eventArgs.FullPath, WatcherChangeTypes.Renamed);
+    }
+
+    private void OnWatcherError(object sender, ErrorEventArgs eventArgs) =>
+        uiContext?.Post(
+            _ =>
+            {
+                // The change buffer overflowed; fall back to a full rescan.
+                if (CurrentFolder is { } folder)
+                {
+                    _ = LoadFolderAsync(folder, CancellationToken.None);
+                }
+            },
+            null);
+
+    private void QueueWatcherPath(string path, WatcherChangeTypes changeType)
+    {
+        lock (watcherGate)
+        {
+            pendingWatcherPaths[path] =
+                pendingWatcherPaths.TryGetValue(path, out var seen)
+                    ? seen | changeType
+                    : changeType;
+        }
+
+        ScheduleWatcherFlush();
+    }
+
+    /// <summary>
+    /// Re-arms the debounce, but never past <see cref="WatcherMaxWait"/> after
+    /// the oldest pending change: a card import fires events continuously, so
+    /// a plain sliding window would hold every new photo back until the whole
+    /// copy finished.
+    /// </summary>
+    private void ScheduleWatcherFlush()
+    {
+        lock (watcherGate)
+        {
+            if (firstPendingUtc == DateTime.MaxValue)
+            {
+                firstPendingUtc = DateTime.UtcNow;
+            }
+
+            var remaining = WatcherMaxWait - (DateTime.UtcNow - firstPendingUtc);
+            var delay = remaining < WatcherDebounceDelay
+                ? remaining
+                : WatcherDebounceDelay;
+            watcherTimer.Change(
+                delay > TimeSpan.Zero ? delay : TimeSpan.Zero,
+                Timeout.InfiniteTimeSpan);
+        }
+    }
+
+    private void PostWatcherFlush() =>
+        uiContext?.Post(
+            async _ =>
+            {
+                try
+                {
+                    await FlushWatcherChangesAsync();
+                }
+                catch (Exception exception)
+                {
+                    StatusText =
+                        $"Live folder update failed: {exception.Message}";
+                }
+            },
+            null);
+
+    private async Task FlushWatcherChangesAsync()
+    {
+        if (watcherFlushRunning)
+        {
+            // Paths stay queued and the running flush re-arms once it is done.
+            // Re-arming here instead would spin: after the max-wait ceiling has
+            // elapsed the computed delay is zero, so the timer would post back
+            // to the dispatcher in a tight loop for the rest of the flush.
+            return;
+        }
+
+        KeyValuePair<string, WatcherChangeTypes>[] batch;
+        lock (watcherGate)
+        {
+            batch = [.. pendingWatcherPaths];
+            pendingWatcherPaths.Clear();
+            firstPendingUtc = DateTime.MaxValue;
+        }
+
+        if (batch.Length == 0 || CurrentFolder is not { } rootFolder)
+        {
+            return;
+        }
+
+        watcherFlushRunning = true;
+        var generation = folderGeneration;
+        try
+        {
+            var knownPaths = new HashSet<string>(
+                photoIndexByPath.Keys,
+                StringComparer.OrdinalIgnoreCase);
+            var includeSubfolders = IncludeSubfolders;
+
+            // Everything below the UI apply phase is file and database work;
+            // running it on the dispatcher froze the gallery for as long as
+            // the batch took to read metadata.
+            var plan = await Task.Run(() => BuildWatcherPlanAsync(
+                batch,
+                rootFolder,
+                includeSubfolders,
+                knownPaths));
+
+            if (generation != folderGeneration)
+            {
+                // The user moved to another folder while we were reading; that
+                // folder runs its own scan, so this batch is simply stale.
+                return;
+            }
+
+            if (plan.Removals.Count > 0)
+            {
+                await catalog.DeleteByPathsAsync(
+                    plan.Removals,
+                    CancellationToken.None);
+            }
+
+            if (plan.Upserts.Count > 0)
+            {
+                // One transaction for the whole batch instead of one per file.
+                await catalog.UpsertBatchAsync(
+                    plan.Upserts,
+                    CancellationToken.None);
+            }
+
+            var presentationChanged = false;
+            suppressPresentationRefresh = true;
+            try
+            {
+                foreach (var path in plan.Removals)
+                {
+                    presentationChanged |= RemovePhotoByPath(path);
+                }
+
+                foreach (var record in plan.Upserts.Concat(plan.Reusable))
+                {
+                    // Adding an unseen photo awaits its edit recipe, so the
+                    // folder can still change part-way through the batch.
+                    if (generation != folderGeneration)
+                    {
+                        return;
+                    }
+
+                    presentationChanged |= await AddOrUpdatePhotoAsync(
+                        record,
+                        CancellationToken.None);
+                }
+            }
+            finally
+            {
+                suppressPresentationRefresh = false;
+            }
+
+            if (presentationChanged)
+            {
+                ApplyPhotoPresentation(SelectedPhoto?.Path);
+                SetPhotoStatus(Photos.Count);
+            }
+
+            // Files found inside a folder that appeared wholesale are fresh
+            // work, not failed work, so they must not spend retry attempts.
+            foreach (var discovered in plan.Discovered)
+            {
+                QueueWatcherPath(discovered, WatcherChangeTypes.Created);
+            }
+
+            RequeueWatcherPaths(plan.Retry);
+        }
+        finally
+        {
+            watcherFlushRunning = false;
+            bool morePending;
+            lock (watcherGate)
+            {
+                morePending = pendingWatcherPaths.Count > 0;
+            }
+
+            if (morePending)
+            {
+                ScheduleWatcherFlush();
+            }
+        }
+    }
+
+    private async Task<WatcherPlan> BuildWatcherPlanAsync(
+        IReadOnlyList<KeyValuePair<string, WatcherChangeTypes>> batch,
+        string rootFolder,
+        bool includeSubfolders,
+        HashSet<string> knownPaths)
+    {
+        var plan = new WatcherPlan([], [], [], [], []);
+        foreach (var (path, changeType) in batch)
+        {
+            try
+            {
+                if (Directory.Exists(path))
+                {
+                    // A directory LastWrite only says "some child changed",
+                    // and that child raises its own event. Only a folder that
+                    // just appeared carries contents nobody reported.
+                    if (includeSubfolders
+                        && (changeType
+                            & (WatcherChangeTypes.Created
+                               | WatcherChangeTypes.Renamed)) != 0)
+                    {
+                        CollectDirectoryContents(path, plan.Discovered);
+                    }
+
+                    continue;
+                }
+
+                if (!PhotoIndexer.IsSupportedFile(path))
+                {
+                    // A path that is gone and is not a photo was most likely a
+                    // folder that got deleted or renamed away. Windows reports
+                    // the folder and none of its children, so the photos under
+                    // it have to be reconciled from what the gallery knows.
+                    if (!File.Exists(path))
+                    {
+                        var prefix = NormalizeRootPrefix(path);
+                        foreach (var known in knownPaths)
+                        {
+                            if (known.StartsWith(
+                                    prefix,
+                                    StringComparison.OrdinalIgnoreCase))
+                            {
+                                plan.Removals.Add(known);
+                            }
+                        }
+                    }
+
+                    continue;
+                }
+
+                if (!IsWithinScope(path, rootFolder, includeSubfolders))
+                {
+                    continue;
+                }
+
+                var file = new FileInfo(path);
+                if (!file.Exists)
+                {
+                    plan.Removals.Add(path);
+                    continue;
+                }
+
+                if (SelfWriteGuard.ShouldIgnore(path))
+                {
+                    // Our own exiftool write; the catalogue is already right.
+                    continue;
+                }
+
+                if (IsWriteInProgress(file))
+                {
+                    // Half-copied file: retry rather than index a torn read.
+                    plan.Retry.Add(path);
+                    continue;
+                }
+
+                var cached = await catalog.GetByPathAsync(path);
+                if (cached is not null
+                    && PhotoIndexer.CanReuseMetadata(file, cached))
+                {
+                    // The file matches the catalogue; only surface it when the
+                    // gallery does not show it yet.
+                    if (!knownPaths.Contains(path))
+                    {
+                        plan.Reusable.Add(cached with { RootPath = rootFolder });
+                    }
+
+                    continue;
+                }
+
+                plan.Upserts.Add(CreateRecordFromFile(file, rootFolder));
+            }
+            catch (Exception exception) when (
+                exception is IOException or UnauthorizedAccessException)
+            {
+                // Locked or vanishing mid-copy; a retry reconciles it.
+                plan.Retry.Add(path);
+            }
+        }
+
+        return plan;
+    }
+
+    private static void CollectDirectoryContents(
+        string directory,
+        List<string> destination)
+    {
+        try
+        {
+            foreach (var file in Directory.EnumerateFiles(
+                         directory,
+                         "*",
+                         SearchOption.AllDirectories))
+            {
+                if (PhotoIndexer.IsSupportedFile(file))
+                {
+                    destination.Add(file);
+                }
+            }
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException)
+        {
+            // The directory disappeared while enumerating; ignore.
+        }
+    }
+
+    private static bool IsWriteInProgress(FileInfo file)
+    {
+        try
+        {
+            using var stream = file.Open(
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read);
+            return false;
+        }
+        catch (IOException)
+        {
+            return true;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private void RequeueWatcherPaths(IReadOnlyList<string> paths)
+    {
+        var requeued = false;
+        var stillPending = new HashSet<string>(
+            paths,
+            StringComparer.OrdinalIgnoreCase);
+        lock (watcherGate)
+        {
+            // A path that finally went through must not carry its old strikes.
+            foreach (var settled in watcherRetryCounts.Keys
+                         .Where(key => !stillPending.Contains(key))
+                         .ToArray())
+            {
+                watcherRetryCounts.Remove(settled);
+            }
+
+            foreach (var path in paths)
+            {
+                var attempts = watcherRetryCounts.GetValueOrDefault(path);
+                if (attempts >= MaxWatcherRetries)
+                {
+                    // A permanently locked file must not spin the flush loop.
+                    continue;
+                }
+
+                watcherRetryCounts[path] = attempts + 1;
+                pendingWatcherPaths[path] =
+                    pendingWatcherPaths.TryGetValue(path, out var seen)
+                        ? seen | WatcherChangeTypes.Changed
+                        : WatcherChangeTypes.Changed;
+                requeued = true;
+            }
+        }
+
+        if (requeued)
+        {
+            ScheduleWatcherFlush();
+        }
+    }
+
+    private sealed record WatcherPlan(
+        List<string> Removals,
+        List<PhotoRecord> Upserts,
+        List<PhotoRecord> Reusable,
+        List<string> Retry,
+        List<string> Discovered);
+
+    private static bool IsWithinScope(
+        string path,
+        string rootFolder,
+        bool includeSubfolders)
+    {
+        if (!includeSubfolders)
+        {
+            return string.Equals(
+                Path.GetDirectoryName(path),
+                rootFolder,
+                StringComparison.OrdinalIgnoreCase);
+        }
+
+        // A batch queued for a folder we have since left must not leak in, so
+        // containment is checked rather than assumed.
+        return path.StartsWith(
+            NormalizeRootPrefix(rootFolder),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Produces the root with exactly one trailing separator, which also keeps
+    /// a drive root ("D:\") from turning into an unmatchable "D:\\".
+    /// </summary>
+    private static string NormalizeRootPrefix(string rootFolder) =>
+        Path.TrimEndingDirectorySeparator(Path.GetFullPath(rootFolder))
+        + Path.DirectorySeparatorChar;
+
+    private static PhotoRecord CreateRecordFromFile(
+        FileInfo file,
+        string rootFolder)
+    {
+        var metadata = PhotoMetadataReader.ReadAll(file.FullName);
+        return new PhotoRecord(
+            file.FullName,
+            rootFolder,
+            file.Name,
+            file.Extension,
+            file.Length,
+            file.LastWriteTimeUtc.Ticks,
+            metadata.Rating,
+            DateTime.UtcNow.Ticks,
+            metadata.TakenAt.Ticks,
+            metadata.TakenAt.Source,
+            MetadataVersion: PhotoMetadataReader.CurrentVersion,
+            metadata.Title,
+            metadata.Description,
+            metadata.Latitude,
+            metadata.Longitude);
     }
 
     private static IReadOnlyList<PhotoRecord> FilterRecordsForScope(

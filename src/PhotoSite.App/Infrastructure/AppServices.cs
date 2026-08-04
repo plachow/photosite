@@ -19,6 +19,8 @@ public sealed class AppServices
                 Timeout = TimeSpan.FromMinutes(2)
             });
         Updates = new AppUpdateService();
+        MetadataWriter = new ExifToolMetadataWriter();
+        MetadataOutbox = new MetadataOutboxProcessor(Catalog, MetadataWriter);
     }
 
     public AppPaths Paths { get; }
@@ -37,9 +39,14 @@ public sealed class AppServices
 
     public AppUpdateService Updates { get; }
 
+    internal ExifToolMetadataWriter MetadataWriter { get; }
+
+    internal MetadataOutboxProcessor MetadataOutbox { get; }
+
     public async Task InitializeAsync()
     {
         Paths.EnsureCreated();
         await Catalog.InitializeAsync();
+        MetadataOutbox.Start();
     }
 }

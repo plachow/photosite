@@ -81,7 +81,7 @@ public sealed class PhotoIndexer
                                 continue;
                             }
 
-                            var takenAt = PhotoMetadataReader.ReadTakenAt(file.FullName);
+                            var metadata = PhotoMetadataReader.ReadAll(file.FullName);
                             var record = new PhotoRecord(
                                 file.FullName,
                                 rootPath,
@@ -89,11 +89,15 @@ public sealed class PhotoIndexer
                                 extension,
                                 file.Length,
                                 file.LastWriteTimeUtc.Ticks,
-                                0,
+                                metadata.Rating,
                                 scanId,
-                                takenAt.Ticks,
-                                takenAt.Source,
-                                MetadataIndexed: true);
+                                metadata.TakenAt.Ticks,
+                                metadata.TakenAt.Source,
+                                MetadataVersion: PhotoMetadataReader.CurrentVersion,
+                                metadata.Title,
+                                metadata.Description,
+                                metadata.Latitude,
+                                metadata.Longitude);
                             await channel.Writer.WriteAsync(
                                 new PhotoScanResult(
                                     record,
@@ -125,7 +129,7 @@ public sealed class PhotoIndexer
     internal static bool CanReuseMetadata(
         FileInfo file,
         PhotoRecord cached) =>
-        cached.MetadataIndexed
+        cached.MetadataVersion >= PhotoMetadataReader.CurrentVersion
         && cached.Length == file.Length
         && cached.ModifiedUtcTicks == file.LastWriteTimeUtc.Ticks
         && string.Equals(

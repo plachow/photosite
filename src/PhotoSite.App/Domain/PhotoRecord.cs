@@ -11,4 +11,8 @@ public sealed record PhotoRecord(
     long ScanId,
     long? TakenAtTicks = null,
     PhotoDateSource TakenAtSource = PhotoDateSource.None,
-    bool MetadataIndexed = false);
+    int MetadataVersion = 0,
+    string? Title = null,
+    string? Description = null,
+    double? Latitude = null,
+    double? Longitude = null);

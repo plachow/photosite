@@ -84,6 +84,26 @@ public sealed class PhotoCatalogRepository
             "metadata_indexed",
             "INTEGER NOT NULL DEFAULT 0",
             cancellationToken);
+        await EnsureColumnAsync(
+            connection,
+            "title",
+            "TEXT NULL",
+            cancellationToken);
+        await EnsureColumnAsync(
+            connection,
+            "description",
+            "TEXT NULL",
+            cancellationToken);
+        await EnsureColumnAsync(
+            connection,
+            "latitude",
+            "REAL NULL",
+            cancellationToken);
+        await EnsureColumnAsync(
+            connection,
+            "longitude",
+            "REAL NULL",
+            cancellationToken);
 
         await using var indexCommand = connection.CreateCommand();
         indexCommand.CommandText =
@@ -112,11 +132,13 @@ public sealed class PhotoCatalogRepository
             INSERT INTO photos (
                 path, root_path, file_name, extension, length,
                 modified_utc_ticks, rating, scan_id,
-                taken_at_ticks, taken_at_source, metadata_indexed)
+                taken_at_ticks, taken_at_source, metadata_indexed,
+                title, description, latitude, longitude)
             VALUES (
                 $path, $root, $name, $extension, $length,
                 $modified, $rating, $scan,
-                $takenAt, $takenAtSource, $metadataIndexed)
+                $takenAt, $takenAtSource, $metadataIndexed,
+                $title, $description, $latitude, $longitude)
             ON CONFLICT(path) DO UPDATE SET
                 root_path = excluded.root_path,
                 file_name = excluded.file_name,
@@ -126,7 +148,42 @@ public sealed class PhotoCatalogRepository
                 scan_id = excluded.scan_id,
                 taken_at_ticks = excluded.taken_at_ticks,
                 taken_at_source = excluded.taken_at_source,
-                metadata_indexed = excluded.metadata_indexed;
+                metadata_indexed = excluded.metadata_indexed,
+                rating = CASE
+                    WHEN photos.modified_utc_ticks <> excluded.modified_utc_ticks
+                         OR photos.length <> excluded.length
+                         OR photos.metadata_indexed < excluded.metadata_indexed
+                    THEN excluded.rating
+                    ELSE photos.rating
+                END,
+                title = CASE
+                    WHEN photos.modified_utc_ticks <> excluded.modified_utc_ticks
+                         OR photos.length <> excluded.length
+                         OR photos.metadata_indexed < excluded.metadata_indexed
+                    THEN excluded.title
+                    ELSE photos.title
+                END,
+                description = CASE
+                    WHEN photos.modified_utc_ticks <> excluded.modified_utc_ticks
+                         OR photos.length <> excluded.length
+                         OR photos.metadata_indexed < excluded.metadata_indexed
+                    THEN excluded.description
+                    ELSE photos.description
+                END,
+                latitude = CASE
+                    WHEN photos.modified_utc_ticks <> excluded.modified_utc_ticks
+                         OR photos.length <> excluded.length
+                         OR photos.metadata_indexed < excluded.metadata_indexed
+                    THEN excluded.latitude
+                    ELSE photos.latitude
+                END,
+                longitude = CASE
+                    WHEN photos.modified_utc_ticks <> excluded.modified_utc_ticks
+                         OR photos.length <> excluded.length
+                         OR photos.metadata_indexed < excluded.metadata_indexed
+                    THEN excluded.longitude
+                    ELSE photos.longitude
+                END;
             """;
 
         var path = command.Parameters.Add("$path", SqliteType.Text);
@@ -144,6 +201,12 @@ public sealed class PhotoCatalogRepository
         var metadataIndexed = command.Parameters.Add(
             "$metadataIndexed",
             SqliteType.Integer);
+        var title = command.Parameters.Add("$title", SqliteType.Text);
+        var description = command.Parameters.Add(
+            "$description",
+            SqliteType.Text);
+        var latitude = command.Parameters.Add("$latitude", SqliteType.Real);
+        var longitude = command.Parameters.Add("$longitude", SqliteType.Real);
 
         foreach (var record in records)
         {
@@ -160,7 +223,15 @@ public sealed class PhotoCatalogRepository
                 ? ticks
                 : DBNull.Value;
             takenAtSource.Value = (int)record.TakenAtSource;
-            metadataIndexed.Value = record.MetadataIndexed ? 1 : 0;
+            metadataIndexed.Value = record.MetadataVersion;
+            title.Value = (object?)record.Title ?? DBNull.Value;
+            description.Value = (object?)record.Description ?? DBNull.Value;
+            latitude.Value = record.Latitude is { } lat
+                ? lat
+                : DBNull.Value;
+            longitude.Value = record.Longitude is { } lon
+                ? lon
+                : DBNull.Value;
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
 
@@ -243,7 +314,8 @@ public sealed class PhotoCatalogRepository
             """
             SELECT path, root_path, file_name, extension, length,
                    modified_utc_ticks, rating, scan_id,
-                   taken_at_ticks, taken_at_source, metadata_indexed
+                   taken_at_ticks, taken_at_source, metadata_indexed,
+                   title, description, latitude, longitude
             FROM photos
             WHERE root_path = $root
             ORDER BY file_name COLLATE NOCASE, path COLLATE NOCASE;
@@ -253,18 +325,7 @@ public sealed class PhotoCatalogRepository
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
-            result.Add(new PhotoRecord(
-                reader.GetString(0),
-                reader.GetString(1),
-                reader.GetString(2),
-                reader.GetString(3),
-                reader.GetInt64(4),
-                reader.GetInt64(5),
-                reader.GetInt32(6),
-                reader.GetInt64(7),
-                reader.IsDBNull(8) ? null : reader.GetInt64(8),
-                (PhotoDateSource)reader.GetInt32(9),
-                reader.GetInt32(10) != 0));
+            result.Add(ReadPhotoRecord(reader));
         }
 
         return result;
@@ -280,7 +341,8 @@ public sealed class PhotoCatalogRepository
             """
             SELECT path, root_path, file_name, extension, length,
                    modified_utc_ticks, rating, scan_id,
-                   taken_at_ticks, taken_at_source, metadata_indexed
+                   taken_at_ticks, taken_at_source, metadata_indexed,
+                   title, description, latitude, longitude
             FROM photos
             WHERE path = $path;
             """;
@@ -292,7 +354,11 @@ public sealed class PhotoCatalogRepository
             return null;
         }
 
-        return new PhotoRecord(
+        return ReadPhotoRecord(reader);
+    }
+
+    private static PhotoRecord ReadPhotoRecord(SqliteDataReader reader) =>
+        new(
             reader.GetString(0),
             reader.GetString(1),
             reader.GetString(2),
@@ -303,8 +369,13 @@ public sealed class PhotoCatalogRepository
             reader.GetInt64(7),
             reader.IsDBNull(8) ? null : reader.GetInt64(8),
             (PhotoDateSource)reader.GetInt32(9),
-            reader.GetInt32(10) != 0);
-    }
+            reader.GetInt32(10),
+            reader.IsDBNull(11) ? null : reader.GetString(11),
+            reader.IsDBNull(12) ? null : reader.GetString(12),
+            reader.IsDBNull(13) ? null : reader.GetDouble(13),
+            reader.IsDBNull(14) ? null : reader.GetDouble(14));
+
+    public event Action? MetadataOutboxChanged;
 
     public async Task UpdateRatingAsync(
         string path,
@@ -313,36 +384,240 @@ public sealed class PhotoCatalogRepository
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(rating, 0);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(rating, 5);
+        await UpdateMetadataFieldAsync(
+            path,
+            "UPDATE photos SET rating = $value WHERE path = $path;",
+            rating,
+            "rating",
+            JsonSerializer.Serialize(new { rating }),
+            cancellationToken);
+    }
 
+    public Task UpdateTitleAsync(
+        string path,
+        string? title,
+        CancellationToken cancellationToken = default) =>
+        UpdateMetadataFieldAsync(
+            path,
+            "UPDATE photos SET title = $value WHERE path = $path;",
+            (object?)title ?? DBNull.Value,
+            "title",
+            JsonSerializer.Serialize(new { title }),
+            cancellationToken);
+
+    public Task UpdateDescriptionAsync(
+        string path,
+        string? description,
+        CancellationToken cancellationToken = default) =>
+        UpdateMetadataFieldAsync(
+            path,
+            "UPDATE photos SET description = $value WHERE path = $path;",
+            (object?)description ?? DBNull.Value,
+            "description",
+            JsonSerializer.Serialize(new { description }),
+            cancellationToken);
+
+    public async Task UpdateLocationAsync(
+        string path,
+        double? latitude,
+        double? longitude,
+        CancellationToken cancellationToken = default)
+    {
         await using var connection = await OpenConnectionAsync(cancellationToken);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(
+            cancellationToken);
 
         await using (var update = connection.CreateCommand())
         {
             update.Transaction = (SqliteTransaction)transaction;
-            update.CommandText = "UPDATE photos SET rating = $rating WHERE path = $path;";
-            update.Parameters.AddWithValue("$rating", rating);
+            update.CommandText =
+                """
+                UPDATE photos
+                SET latitude = $latitude, longitude = $longitude
+                WHERE path = $path;
+                """;
+            update.Parameters.AddWithValue(
+                "$latitude",
+                latitude is { } lat ? lat : DBNull.Value);
+            update.Parameters.AddWithValue(
+                "$longitude",
+                longitude is { } lon ? lon : DBNull.Value);
             update.Parameters.AddWithValue("$path", path);
             await update.ExecuteNonQueryAsync(cancellationToken);
         }
 
-        await using (var outbox = connection.CreateCommand())
+        await EnqueueOutboxAsync(
+            connection,
+            (SqliteTransaction)transaction,
+            path,
+            "location",
+            JsonSerializer.Serialize(new { latitude, longitude }),
+            cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        MetadataOutboxChanged?.Invoke();
+    }
+
+    private async Task UpdateMetadataFieldAsync(
+        string path,
+        string updateSql,
+        object value,
+        string kind,
+        string payloadJson,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(
+            cancellationToken);
+
+        await using (var update = connection.CreateCommand())
         {
-            outbox.Transaction = (SqliteTransaction)transaction;
-            outbox.CommandText =
-                """
-                INSERT INTO metadata_outbox(path, kind, payload_json, created_utc)
-                VALUES($path, 'rating', $payload, $created);
-                """;
-            outbox.Parameters.AddWithValue("$path", path);
-            outbox.Parameters.AddWithValue(
-                "$payload",
-                JsonSerializer.Serialize(new { rating }));
-            outbox.Parameters.AddWithValue("$created", DateTime.UtcNow.ToString("O"));
-            await outbox.ExecuteNonQueryAsync(cancellationToken);
+            update.Transaction = (SqliteTransaction)transaction;
+            update.CommandText = updateSql;
+            update.Parameters.AddWithValue("$value", value);
+            update.Parameters.AddWithValue("$path", path);
+            await update.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await EnqueueOutboxAsync(
+            connection,
+            (SqliteTransaction)transaction,
+            path,
+            kind,
+            payloadJson,
+            cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        MetadataOutboxChanged?.Invoke();
+    }
+
+    private static async Task EnqueueOutboxAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string path,
+        string kind,
+        string payloadJson,
+        CancellationToken cancellationToken)
+    {
+        await using var outbox = connection.CreateCommand();
+        outbox.Transaction = transaction;
+        outbox.CommandText =
+            """
+            INSERT INTO metadata_outbox(path, kind, payload_json, created_utc)
+            VALUES($path, $kind, $payload, $created);
+            """;
+        outbox.Parameters.AddWithValue("$path", path);
+        outbox.Parameters.AddWithValue("$kind", kind);
+        outbox.Parameters.AddWithValue("$payload", payloadJson);
+        outbox.Parameters.AddWithValue("$created", DateTime.UtcNow.ToString("O"));
+        await outbox.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<MetadataOutboxEntry>> GetPendingMetadataAsync(
+        int maxAttempts,
+        CancellationToken cancellationToken = default)
+    {
+        var result = new List<MetadataOutboxEntry>();
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT id, path, kind, payload_json, attempts
+            FROM metadata_outbox
+            WHERE attempts < $maxAttempts
+            ORDER BY id;
+            """;
+        command.Parameters.AddWithValue("$maxAttempts", maxAttempts);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            result.Add(new MetadataOutboxEntry(
+                reader.GetInt64(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetInt32(4)));
+        }
+
+        return result;
+    }
+
+    public async Task DeleteMetadataOutboxEntriesAsync(
+        IReadOnlyCollection<long> ids,
+        CancellationToken cancellationToken = default)
+    {
+        if (ids.Count == 0)
+        {
+            return;
+        }
+
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(
+            cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)transaction;
+        command.CommandText = "DELETE FROM metadata_outbox WHERE id = $id;";
+        var id = command.Parameters.Add("$id", SqliteType.Integer);
+
+        foreach (var value in ids)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            id.Value = value;
+            await command.ExecuteNonQueryAsync(cancellationToken);
         }
 
         await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task IncrementMetadataOutboxAttemptsAsync(
+        IReadOnlyCollection<long> ids,
+        CancellationToken cancellationToken = default)
+    {
+        if (ids.Count == 0)
+        {
+            return;
+        }
+
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(
+            cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)transaction;
+        command.CommandText =
+            """
+            UPDATE metadata_outbox
+            SET attempts = attempts + 1
+            WHERE id = $id;
+            """;
+        var id = command.Parameters.Add("$id", SqliteType.Integer);
+
+        foreach (var value in ids)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            id.Value = value;
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task UpdateFileStampAsync(
+        string path,
+        long length,
+        long modifiedUtcTicks,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            UPDATE photos
+            SET length = $length, modified_utc_ticks = $modified
+            WHERE path = $path;
+            """;
+        command.Parameters.AddWithValue("$length", length);
+        command.Parameters.AddWithValue("$modified", modifiedUtcTicks);
+        command.Parameters.AddWithValue("$path", path);
+        await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
     public async Task<EditRecipe> GetEditRecipeAsync(

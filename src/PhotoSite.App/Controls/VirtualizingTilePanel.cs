@@ -1,3 +1,4 @@
+using System.Collections.Specialized;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -108,6 +109,48 @@ public sealed class VirtualizingTilePanel : VirtualizingPanel, IScrollInfo
         return finalSize;
     }
 
+    /// <summary>
+    /// Only Reset clears the children for us (through the base panel), so
+    /// granular notifications have to detach the affected containers by hand;
+    /// otherwise InternalChildren drifts out of step with the generator and
+    /// tiles start rendering duplicated or in the wrong slot.
+    /// </summary>
+    protected override void OnItemsChanged(
+        object sender,
+        ItemsChangedEventArgs args)
+    {
+        switch (args.Action)
+        {
+            case NotifyCollectionChangedAction.Remove:
+            case NotifyCollectionChangedAction.Replace:
+                RemoveContainers(args.Position, args.ItemUICount);
+                break;
+            case NotifyCollectionChangedAction.Move:
+                RemoveContainers(args.OldPosition, args.ItemUICount);
+                break;
+        }
+
+        InvalidateMeasure();
+    }
+
+    private void RemoveContainers(GeneratorPosition position, int containerCount)
+    {
+        if (containerCount <= 0)
+        {
+            return;
+        }
+
+        var childIndex = position.Offset > 0 ? position.Index + 1 : position.Index;
+        if (childIndex < 0 || childIndex >= InternalChildren.Count)
+        {
+            return;
+        }
+
+        RemoveInternalChildRange(
+            childIndex,
+            Math.Min(containerCount, InternalChildren.Count - childIndex));
+    }
+
     private void RealizeItems(int firstIndex, int lastIndex)
     {
         var generator = Generator;
@@ -130,20 +173,37 @@ public sealed class VirtualizingTilePanel : VirtualizingPanel, IScrollInfo
                 var child = (UIElement)generator.GenerateNext(out var newlyRealized);
                 if (newlyRealized)
                 {
-                    if (childIndex >= InternalChildren.Count)
+                    InsertContainer(childIndex, child);
+                    generator.PrepareItemContainer(child);
+                }
+                else if (childIndex >= InternalChildren.Count
+                         || !ReferenceEquals(InternalChildren[childIndex], child))
+                {
+                    // A Move keeps the container realized but detaches it from
+                    // InternalChildren, so it has to be slotted back by hand.
+                    var attachedAt = InternalChildren.IndexOf(child);
+                    if (attachedAt >= 0)
                     {
-                        AddInternalChild(child);
-                    }
-                    else
-                    {
-                        InsertInternalChild(childIndex, child);
+                        RemoveInternalChildRange(attachedAt, 1);
                     }
 
-                    generator.PrepareItemContainer(child);
+                    InsertContainer(childIndex, child);
                 }
 
                 child.Measure(new Size(ItemWidth, ItemHeight));
             }
+        }
+    }
+
+    private void InsertContainer(int childIndex, UIElement child)
+    {
+        if (childIndex >= InternalChildren.Count)
+        {
+            AddInternalChild(child);
+        }
+        else
+        {
+            InsertInternalChild(childIndex, child);
         }
     }
 
@@ -156,6 +216,15 @@ public sealed class VirtualizingTilePanel : VirtualizingPanel, IScrollInfo
             var itemIndex = generator.IndexFromGeneratorPosition(position);
             if (itemIndex >= firstIndex && itemIndex <= lastIndex)
             {
+                continue;
+            }
+
+            if (itemIndex < 0)
+            {
+                // The generator no longer knows this slot (it can lag behind
+                // InternalChildren for one pass after a granular change);
+                // dropping the child alone keeps the two back in step.
+                RemoveInternalChildRange(childIndex, 1);
                 continue;
             }
 

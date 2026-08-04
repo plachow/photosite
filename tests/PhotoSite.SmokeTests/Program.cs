@@ -1,3 +1,4 @@
+using System.Collections.Specialized;
 using System.IO;
 using System.Net;
 using System.Net.Http;
@@ -151,7 +152,8 @@ try
         == takenAt.Ticks,
         "The catalogue should persist the photo capture date.");
     Assert(
-        loaded.All(record => record.MetadataIndexed),
+        loaded.All(record =>
+            record.MetadataVersion >= PhotoMetadataReader.CurrentVersion),
         "A completed first scan should mark photo metadata as indexed.");
 
     var cachedByPath = loaded.ToDictionary(
@@ -245,6 +247,11 @@ try
         && ReferenceEquals(oldestFirst[1], nextViewModel)
         && ReferenceEquals(oldestFirst[2], unknownDateViewModel),
         "Ascending capture-date sorting should keep unknown dates last.");
+
+    AssertIncrementalPresentation(
+        selectedViewModel,
+        nextViewModel,
+        unknownDateViewModel);
 
     mainViewModel.Photos.Add(selectedViewModel);
     mainViewModel.Photos.Add(nextViewModel);
@@ -786,6 +793,173 @@ try
         afterCleanup.Count == 1,
         "An incremental rescan should remove stale catalogue rows.");
 
+    var jpegArguments = ExifToolMetadataWriter.BuildArguments(
+        @"C:\photos\a.jpg",
+        new MetadataWritePayload(
+            Rating: 4,
+            TitleChanged: true,
+            Title: "T",
+            DescriptionChanged: true,
+            Description: "D",
+            LocationChanged: true,
+            Latitude: 49.5,
+            Longitude: -16.25),
+        sidecar: false,
+        createSidecar: false);
+    Assert(
+        jpegArguments.Contains("-XMP-xmp:Rating=4")
+        && jpegArguments.Contains("-IFD0:RatingPercent=75")
+        && jpegArguments.Contains("-IFD0:XPTitle=T")
+        && jpegArguments.Contains("-GPS:GPSLatitudeRef=N")
+        && jpegArguments.Contains("-GPS:GPSLongitudeRef=W")
+        && jpegArguments[^1] == @"C:\photos\a.jpg",
+        "JPEG metadata arguments should cover XMP and Windows EXIF tags.");
+
+    var sidecarArguments = ExifToolMetadataWriter.BuildArguments(
+        @"C:\photos\a.xmp",
+        new MetadataWritePayload(Rating: 2),
+        sidecar: true,
+        createSidecar: true);
+    Assert(
+        sidecarArguments.Contains("-XMP-xmp:Rating=2")
+        && !sidecarArguments.Any(
+            argument => argument.StartsWith("-IFD0", StringComparison.Ordinal))
+        && sidecarArguments[^2] == "-o",
+        "Sidecar arguments should stay XMP-only and create the file with -o.");
+
+    Assert(
+        ExifToolMetadataWriter.UsesSidecar(".CR2")
+        && !ExifToolMetadataWriter.UsesSidecar(".jpg"),
+        "RAW files should use XMP sidecars while JPEGs are written in place.");
+
+    var mergedPayload = MetadataOutboxProcessor.MergePayload(
+    [
+        new MetadataOutboxEntry(1, "p", "rating", """{"rating":2}""", 0),
+        new MetadataOutboxEntry(2, "p", "rating", """{"rating":5}""", 0),
+        new MetadataOutboxEntry(3, "p", "title", """{"title":"Hello"}""", 0),
+        new MetadataOutboxEntry(
+            4,
+            "p",
+            "location",
+            """{"latitude":null,"longitude":null}""",
+            0)
+    ]);
+    Assert(
+        mergedPayload is
+        {
+            Rating: 5,
+            TitleChanged: true,
+            Title: "Hello",
+            LocationChanged: true,
+            Latitude: null,
+            Longitude: null,
+            DescriptionChanged: false
+        },
+        "Merging outbox entries should keep the latest value per kind.");
+
+    Assert(
+        PhotoItemViewModel.TryParseLocation("49.5, 16.25", out var parsedLocation)
+        && parsedLocation == (49.5, 16.25)
+        && PhotoItemViewModel.TryParseLocation("  ", out var clearedLocation)
+        && clearedLocation is null
+        && !PhotoItemViewModel.TryParseLocation("91, 0", out _)
+        && !PhotoItemViewModel.TryParseLocation("foo", out _),
+        "GPS text parsing should accept decimal pairs and reject invalid input.");
+
+    Assert(
+        PhotoMetadataReader.ParseXmpGpsCoordinate("49,11.703667N") is { } dmLat
+        && Math.Abs(dmLat - 49.19506111) < 0.0001
+        && PhotoMetadataReader.ParseXmpGpsCoordinate("16,36.410167W") is { } dmLon
+        && dmLon < 0
+        && PhotoMetadataReader.ParseXmpGpsCoordinate("-50.087") == -50.087,
+        "XMP GPS coordinates should parse both DM and signed decimal formats.");
+
+    var metadataTarget = afterCleanup[0];
+    await repository.UpdateTitleAsync(metadataTarget.Path, "Smoke title");
+    await repository.UpdateDescriptionAsync(
+        metadataTarget.Path,
+        "Smoke description");
+    await repository.UpdateLocationAsync(
+        metadataTarget.Path,
+        49.195061,
+        16.606836);
+    await repository.UpdateRatingAsync(metadataTarget.Path, 4);
+    var metadataReloaded = await repository.GetByPathAsync(metadataTarget.Path);
+    Assert(
+        metadataReloaded is
+        {
+            Title: "Smoke title",
+            Description: "Smoke description",
+            Latitude: 49.195061,
+            Longitude: 16.606836,
+            Rating: 4
+        },
+        "Metadata updates should round-trip through the catalogue.");
+
+    var pendingMetadata = await repository.GetPendingMetadataAsync(8);
+    var targetEntries = pendingMetadata
+        .Where(entry => string.Equals(
+            entry.Path,
+            metadataTarget.Path,
+            StringComparison.OrdinalIgnoreCase))
+        .ToArray();
+    Assert(
+        targetEntries
+            .Select(entry => entry.Kind)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(kind => kind, StringComparer.Ordinal)
+            .SequenceEqual(["description", "location", "rating", "title"]),
+        "Each metadata update should enqueue an outbox entry of its kind.");
+
+    await repository.IncrementMetadataOutboxAttemptsAsync(
+        targetEntries.Select(entry => entry.Id).ToArray());
+    Assert(
+        (await repository.GetPendingMetadataAsync(8))
+        .Where(entry => string.Equals(
+            entry.Path,
+            metadataTarget.Path,
+            StringComparison.OrdinalIgnoreCase))
+        .All(entry => entry.Attempts == 1),
+        "Attempts should increment after a failed write.");
+
+    await repository.DeleteMetadataOutboxEntriesAsync(
+        targetEntries.Select(entry => entry.Id).ToArray());
+    Assert(
+        (await repository.GetPendingMetadataAsync(8)).All(
+            entry => !string.Equals(
+                entry.Path,
+                metadataTarget.Path,
+                StringComparison.OrdinalIgnoreCase)),
+        "Processed outbox entries should be deleted.");
+
+    var exifToolWriter = new ExifToolMetadataWriter();
+    Assert(
+        exifToolWriter.IsAvailable,
+        "The bundled exiftool executable should be copied next to the binaries.");
+    var writeResult = await exifToolWriter.WriteAsync(
+        firstPhoto,
+        new MetadataWritePayload(
+            Rating: 5,
+            TitleChanged: true,
+            Title: "Zapsaný titulek",
+            DescriptionChanged: true,
+            Description: "Zapsaný popis",
+            LocationChanged: true,
+            Latitude: 49.195061,
+            Longitude: 16.606836),
+        CancellationToken.None);
+    Assert(
+        writeResult.Success,
+        $"The exiftool write should succeed: {writeResult.Error}");
+    var readBack = PhotoMetadataReader.ReadAll(firstPhoto);
+    Assert(
+        readBack is { Rating: 5, Title: "Zapsaný titulek", Description: "Zapsaný popis" }
+        && readBack.Latitude is { } readLat
+        && Math.Abs(readLat - 49.195061) < 0.0001
+        && readBack.Longitude is { } readLon
+        && Math.Abs(readLon - 16.606836) < 0.0001,
+        "Metadata written by exiftool should be read back during indexing.");
+
     await AssertWindowClosesCleanlyAsync(
         repository,
         indexer,
@@ -811,6 +985,59 @@ static void Assert(bool condition, string message)
     {
         throw new InvalidOperationException(message);
     }
+}
+
+static void AssertIncrementalPresentation(
+    PhotoItemViewModel first,
+    PhotoItemViewModel second,
+    PhotoItemViewModel third)
+{
+    var photos = new BulkObservableCollection<PhotoItemViewModel>();
+    var resets = 0;
+    var granular = 0;
+    photos.CollectionChanged += (_, args) =>
+    {
+        if (args.Action == NotifyCollectionChangedAction.Reset)
+        {
+            resets++;
+        }
+        else
+        {
+            granular++;
+        }
+    };
+
+    photos.SynchronizeTo([first, second]);
+    Assert(
+        resets == 0 && granular == 2 && photos.Count == 2,
+        "Filling an empty gallery should insert rather than reset.");
+
+    granular = 0;
+    photos.SynchronizeTo([first, second]);
+    Assert(
+        resets == 0 && granular == 0,
+        "Re-presenting an unchanged sequence must raise nothing at all.");
+
+    photos.SynchronizeTo([first, third, second]);
+    Assert(
+        resets == 0
+        && ReferenceEquals(photos[0], first)
+        && ReferenceEquals(photos[1], third)
+        && ReferenceEquals(photos[2], second),
+        "A newly indexed photo should slot in without resetting the gallery.");
+
+    photos.SynchronizeTo([second, third]);
+    Assert(
+        resets == 0
+        && photos.Count == 2
+        && ReferenceEquals(photos[0], second)
+        && ReferenceEquals(photos[1], third),
+        "A removal combined with a reorder should stay incremental.");
+
+    photos.SynchronizeTo([]);
+    Assert(
+        resets == 0 && photos.Count == 0,
+        "Clearing a small gallery should remove rather than reset.");
 }
 
 static void AssertRatingShortcut(Key key, int expectedRating)

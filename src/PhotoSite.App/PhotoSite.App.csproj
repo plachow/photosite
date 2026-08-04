@@ -23,6 +23,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Content Include="tools\exiftool\**">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup>
     <ApplicationDefinition Remove="App.xaml" />
     <Page Include="App.xaml" />
   </ItemGroup>

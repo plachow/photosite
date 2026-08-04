@@ -13,6 +13,10 @@ public sealed class PhotoItemViewModel : ObservableObject
     private readonly Stack<EditRecipe> undoStack = [];
     private readonly Stack<EditRecipe> redoStack = [];
     private int rating;
+    private string? title;
+    private string? description;
+    private double? latitude;
+    private double? longitude;
     private EditRecipe editRecipe;
     private EditRecipe editorBaseline = EditRecipe.Empty;
     private bool isEditorSessionActive;
@@ -28,6 +32,10 @@ public sealed class PhotoItemViewModel : ObservableObject
     {
         Record = record;
         rating = record.Rating;
+        title = record.Title;
+        description = record.Description;
+        latitude = record.Latitude;
+        longitude = record.Longitude;
         this.editRecipe = editRecipe;
         this.catalog = catalog;
         this.sourceBitmap = sourceBitmap;
@@ -50,7 +58,42 @@ public sealed class PhotoItemViewModel : ObservableObject
         RedoEditCommand = new RelayCommand(RedoEdit, () => redoStack.Count > 0);
     }
 
-    public PhotoRecord Record { get; }
+    public PhotoRecord Record { get; private set; }
+
+    /// <summary>
+    /// Refreshes this view model from a re-read record without disturbing the
+    /// editor state, so the gallery keeps the realized tile, its decoded
+    /// thumbnail and the current selection. Returns true when a value that
+    /// participates in sorting or filtering actually moved.
+    /// </summary>
+    internal bool ApplyRecord(PhotoRecord updated)
+    {
+        var affectsPresentation = Record.TakenAtTicks != updated.TakenAtTicks
+                                  || Record.Rating != updated.Rating
+                                  || !string.Equals(
+                                      Record.FileName,
+                                      updated.FileName,
+                                      StringComparison.Ordinal);
+        Record = updated;
+
+        // Assign the backing fields directly: routing through the public
+        // setters would queue another metadata outbox write and bounce the
+        // value we just read back out to exiftool.
+        rating = updated.Rating;
+        title = updated.Title;
+        description = updated.Description;
+        latitude = updated.Latitude;
+        longitude = updated.Longitude;
+
+        OnPropertyChanged(nameof(FileName));
+        OnPropertyChanged(nameof(TakenAtTicks));
+        OnPropertyChanged(nameof(Rating));
+        OnPropertyChanged(nameof(RatingText));
+        OnPropertyChanged(nameof(Title));
+        OnPropertyChanged(nameof(Description));
+        OnPropertyChanged(nameof(LocationText));
+        return affectsPresentation;
+    }
 
     public string Path => savedPath ?? Record.Path;
 
@@ -98,6 +141,108 @@ public sealed class PhotoItemViewModel : ObservableObject
             OnPropertyChanged(nameof(RatingText));
             _ = PersistRatingAsync(valid);
         }
+    }
+
+    public string? Title
+    {
+        get => title;
+        set
+        {
+            var normalized = string.IsNullOrWhiteSpace(value)
+                ? null
+                : value.Trim();
+            if (!SetProperty(ref title, normalized))
+            {
+                return;
+            }
+
+            _ = PersistMetadataAsync(
+                () => catalog.UpdateTitleAsync(Path, normalized));
+        }
+    }
+
+    public string? Description
+    {
+        get => description;
+        set
+        {
+            var normalized = string.IsNullOrWhiteSpace(value)
+                ? null
+                : value.Trim();
+            if (!SetProperty(ref description, normalized))
+            {
+                return;
+            }
+
+            _ = PersistMetadataAsync(
+                () => catalog.UpdateDescriptionAsync(Path, normalized));
+        }
+    }
+
+    public string LocationText
+    {
+        get => latitude is { } lat && longitude is { } lon
+            ? string.Create(
+                System.Globalization.CultureInfo.InvariantCulture,
+                $"{lat:0.######}, {lon:0.######}")
+            : string.Empty;
+        set
+        {
+            if (!TryParseLocation(value, out var parsed))
+            {
+                OnPropertyChanged();
+                return;
+            }
+
+            if (latitude == parsed?.Latitude && longitude == parsed?.Longitude)
+            {
+                return;
+            }
+
+            latitude = parsed?.Latitude;
+            longitude = parsed?.Longitude;
+            OnPropertyChanged();
+            _ = PersistMetadataAsync(
+                () => catalog.UpdateLocationAsync(
+                    Path,
+                    latitude,
+                    longitude));
+        }
+    }
+
+    internal static bool TryParseLocation(
+        string? text,
+        out (double Latitude, double Longitude)? location)
+    {
+        location = null;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return true;
+        }
+
+        var parts = text.Split(
+            [',', ';', ' '],
+            StringSplitOptions.RemoveEmptyEntries
+            | StringSplitOptions.TrimEntries);
+        if (parts.Length != 2
+            || !double.TryParse(
+                parts[0],
+                System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var latitude)
+            || !double.TryParse(
+                parts[1],
+                System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var longitude)
+            || latitude is < -90 or > 90
+            || longitude is < -180 or > 180)
+        {
+            return false;
+        }
+
+        location = (latitude, longitude);
+        return true;
     }
 
     public EditRecipe EditRecipe
@@ -307,7 +452,10 @@ public sealed class PhotoItemViewModel : ObservableObject
         RedoEditCommand.NotifyCanExecuteChanged();
     }
 
-    private async Task PersistRatingAsync(int value)
+    private Task PersistRatingAsync(int value) =>
+        PersistMetadataAsync(() => catalog.UpdateRatingAsync(Path, value));
+
+    private async Task PersistMetadataAsync(Func<Task> update)
     {
         if (IsTransient)
         {
@@ -317,7 +465,7 @@ public sealed class PhotoItemViewModel : ObservableObject
         await persistenceGate.WaitAsync();
         try
         {
-            await catalog.UpdateRatingAsync(Path, value);
+            await update();
         }
         catch
         {

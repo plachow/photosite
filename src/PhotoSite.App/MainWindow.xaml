@@ -456,6 +456,10 @@
         <TreeView.Resources>
           <Style TargetType="ScrollBar"
                  BasedOn="{StaticResource PaneScrollBarStyle}" />
+          <SolidColorBrush x:Key="{x:Static SystemColors.HighlightBrushKey}" Color="#284967" />
+          <SolidColorBrush x:Key="{x:Static SystemColors.HighlightTextBrushKey}" Color="White" />
+          <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightBrushKey}" Color="#284967" />
+          <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightTextBrushKey}" Color="White" />
           <HierarchicalDataTemplate DataType="{x:Type viewModels:DirectoryNodeViewModel}"
                                     ItemsSource="{Binding Children}">
             <Grid Margin="2,3">
@@ -472,7 +476,17 @@
               <TextBlock Grid.Column="1"
                          VerticalAlignment="Center"
                          Text="{Binding DisplayName}"
-                         ToolTip="{Binding FullPath}" />
+                         ToolTip="{Binding FullPath}">
+                <TextBlock.Style>
+                  <Style TargetType="TextBlock">
+                    <Style.Triggers>
+                      <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                        <Setter Property="FontWeight" Value="Bold" />
+                      </DataTrigger>
+                    </Style.Triggers>
+                  </Style>
+                </TextBlock.Style>
+              </TextBlock>
               <TextBlock Grid.Column="2"
                          Margin="6,0,0,0"
                          VerticalAlignment="Center"
@@ -747,6 +761,70 @@
                                    UnratedToolTip="Clear rating"
                                    Value="{Binding SelectedPhoto.Rating,
                                                    Mode=TwoWay}" />
+            <Separator Margin="8,2" />
+            <ToggleButton x:Name="MetadataPanelButton"
+                          AutomationProperties.Name="Edit photo metadata"
+                          Content="Info"
+                          Style="{StaticResource EditorSelectToggleButtonStyle}"
+                          ToolTip="Edit title, description and GPS location" />
+            <Popup AllowsTransparency="True"
+                   IsOpen="{Binding IsChecked, ElementName=MetadataPanelButton}"
+                   Placement="Bottom"
+                   PlacementTarget="{Binding ElementName=MetadataPanelButton}"
+                   StaysOpen="True">
+              <Border Width="340"
+                      Background="{StaticResource PanelBrush}"
+                      BorderBrush="#4A5160"
+                      BorderThickness="1"
+                      Padding="12">
+                <StackPanel>
+                  <TextBlock Foreground="#C8CDD8" Text="Title" />
+                  <TextBox Margin="0,3,0,0"
+                           Padding="6,3"
+                           Background="#111318"
+                           BorderBrush="#4A5160"
+                           Foreground="#F2F4F8"
+                           SelectionBrush="{StaticResource AccentBrush}"
+                           Text="{Binding SelectedPhoto.Title,
+                                          Mode=TwoWay,
+                                          UpdateSourceTrigger=LostFocus}" />
+                  <TextBlock Margin="0,9,0,0"
+                             Foreground="#C8CDD8"
+                             Text="Description" />
+                  <TextBox Height="64"
+                           Margin="0,3,0,0"
+                           Padding="6,3"
+                           AcceptsReturn="True"
+                           Background="#111318"
+                           BorderBrush="#4A5160"
+                           Foreground="#F2F4F8"
+                           SelectionBrush="{StaticResource AccentBrush}"
+                           TextWrapping="Wrap"
+                           VerticalScrollBarVisibility="Auto"
+                           Text="{Binding SelectedPhoto.Description,
+                                          Mode=TwoWay,
+                                          UpdateSourceTrigger=LostFocus}" />
+                  <TextBlock Margin="0,9,0,0"
+                             Foreground="#C8CDD8"
+                             Text="GPS (latitude, longitude)" />
+                  <TextBox Margin="0,3,0,0"
+                           Padding="6,3"
+                           Background="#111318"
+                           BorderBrush="#4A5160"
+                           Foreground="#F2F4F8"
+                           SelectionBrush="{StaticResource AccentBrush}"
+                           Text="{Binding SelectedPhoto.LocationText,
+                                          Mode=TwoWay,
+                                          UpdateSourceTrigger=LostFocus}"
+                           ToolTip="Decimal degrees, e.g. 49.195061, 16.606836" />
+                  <TextBlock Margin="0,9,0,0"
+                             FontSize="11"
+                             Foreground="#79808D"
+                             Text="Changes are saved to the catalogue and written into the photo file (XMP/EXIF) in the background. RAW formats use an .xmp sidecar."
+                             TextWrapping="Wrap" />
+                </StackPanel>
+              </Border>
+            </Popup>
           </StackPanel>
         </Border>
 
