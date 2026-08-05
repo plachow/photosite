@@ -329,6 +329,52 @@ public partial class MainWindow : Window
                 "Select All must select every visible Manager thumbnail.");
         }
 
+        var contextPhoto = PhotoList.Items
+            .OfType<PhotoItemViewModel>()
+            .First(photo => !ReferenceEquals(photo, viewModel.SelectedPhoto));
+        if (PhotoList.ItemContainerGenerator.ContainerFromItem(contextPhoto)
+                is not ListBoxItem contextItem)
+        {
+            throw new InvalidOperationException(
+                "The context-click regression test needs a realized thumbnail.");
+        }
+
+        OnPhotoListPreviewMouseDown(
+            PhotoList,
+            new MouseButtonEventArgs(
+                Mouse.PrimaryDevice,
+                Environment.TickCount,
+                MouseButton.Right)
+            {
+                RoutedEvent = Mouse.PreviewMouseDownEvent,
+                Source = contextItem
+            });
+        if (PhotoList.SelectedItems.Count != PhotoList.Items.Count)
+        {
+            throw new InvalidOperationException(
+                "Right-clicking a selected thumbnail must preserve the "
+                + "Manager multi-selection.");
+        }
+
+        PhotoList.UnselectAll();
+        OnPhotoListPreviewMouseDown(
+            PhotoList,
+            new MouseButtonEventArgs(
+                Mouse.PrimaryDevice,
+                Environment.TickCount,
+                MouseButton.Right)
+            {
+                RoutedEvent = Mouse.PreviewMouseDownEvent,
+                Source = contextItem
+            });
+        if (PhotoList.SelectedItems.Count != 1
+            || !PhotoList.SelectedItems.Contains(contextPhoto)
+            || !ReferenceEquals(viewModel.SelectedPhoto, contextPhoto))
+        {
+            throw new InvalidOperationException(
+                "Right-clicking an unselected thumbnail must select only it.");
+        }
+
         PhotoList.UnselectAll();
         viewModel.SelectedPhoto = originalSelection;
 
@@ -729,9 +775,9 @@ public partial class MainWindow : Window
             {
                 PhotoList.UnselectAll();
                 item.IsSelected = true;
+                viewModel.SelectedPhoto = photo;
             }
 
-            viewModel.SelectedPhoto = photo;
             item.Focus();
             return;
         }
