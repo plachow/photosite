@@ -9,3 +9,17 @@
 - Do not create time-based Git autosave, auto-commit, or auto-push automations.
 - If unrelated or overlapping changes make a safe commit impossible, do not claim completion; explain the blocker instead.
 - In the final response, include the commit hash and whether it was pushed.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and PRDs are tracked in GitHub Issues for `plachow/photosite`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The standard triage labels are used without renaming. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This is a single-context repository. See `docs/agents/domain.md`.
