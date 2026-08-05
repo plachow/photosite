@@ -980,34 +980,83 @@ public sealed class MainViewModel : ObservableObject
             return;
         }
 
-        var path = photo.Path;
-        var fileName = photo.FileName;
-        try
+        await DeletePhotosAsync([photo], cancellationToken);
+    }
+
+    public async Task DeletePhotosAsync(
+        IReadOnlyCollection<PhotoItemViewModel> photos,
+        CancellationToken cancellationToken = default)
+    {
+        var targets = photos
+            .Where(photo => !photo.IsTransient)
+            .DistinctBy(photo => photo.Path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (targets.Length == 0)
         {
-            await Task.Run(() => RecycleBin.MoveToRecycleBin(path), cancellationToken);
-            var sidecarPath = ExifToolMetadataWriter.GetSidecarPath(path);
-            if (ExifToolMetadataWriter.UsesSidecar(Path.GetExtension(path))
-                && File.Exists(sidecarPath))
+            return;
+        }
+
+        var deletedPaths = new List<string>(targets.Length);
+        var failures = new List<string>();
+        foreach (var photo in targets)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                await Task.Run(
+                    () => RecycleBin.MoveToRecycleBin(photo.Path),
+                    cancellationToken);
+                deletedPaths.Add(photo.Path);
+            }
+            catch (Exception exception) when (
+                exception is IOException or UnauthorizedAccessException)
+            {
+                failures.Add($"{photo.FileName}: {exception.Message}");
+                continue;
+            }
+
+            var sidecarPath = ExifToolMetadataWriter.GetSidecarPath(photo.Path);
+            if (!ExifToolMetadataWriter.UsesSidecar(
+                    Path.GetExtension(photo.Path))
+                || !File.Exists(sidecarPath))
+            {
+                continue;
+            }
+
+            try
             {
                 await Task.Run(
                     () => RecycleBin.MoveToRecycleBin(sidecarPath),
                     cancellationToken);
             }
-        }
-        catch (Exception exception) when (
-            exception is IOException or UnauthorizedAccessException)
-        {
-            StatusText = $"Cannot delete {fileName}: {exception.Message}";
-            return;
+            catch (Exception exception) when (
+                exception is IOException or UnauthorizedAccessException)
+            {
+                failures.Add(
+                    $"{Path.GetFileName(sidecarPath)}: {exception.Message}");
+            }
         }
 
-        await catalog.DeleteByPathsAsync([path], cancellationToken);
-        if (RemovePhotoByPath(path))
+        await catalog.DeleteByPathsAsync(deletedPaths, cancellationToken);
+        var presentationChanged = false;
+        foreach (var path in deletedPaths)
+        {
+            presentationChanged |= RemovePhotoByPath(path);
+        }
+
+        if (presentationChanged)
         {
             ApplyPhotoPresentation(SelectedPhoto?.Path);
         }
 
-        SetPhotoStatus(Photos.Count, $"Moved to Recycle Bin: {fileName}");
+        var detail = deletedPaths.Count == 1 && failures.Count == 0
+            ? $"Moved to Recycle Bin: {Path.GetFileName(deletedPaths[0])}"
+            : $"Moved {deletedPaths.Count:N0} of {targets.Length:N0} files "
+              + "to Recycle Bin"
+              + (failures.Count > 0
+                  ? $" · {failures.Count:N0} failed"
+                  : string.Empty);
+        SetPhotoStatus(Photos.Count, detail);
     }
 
     private bool RemovePhotoByPath(string path)

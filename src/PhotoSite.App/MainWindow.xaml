@@ -276,9 +276,10 @@
       <Separator Style="{StaticResource PhotoContextMenuSeparatorStyle}" />
       <MenuItem Padding="10,6"
                 Style="{StaticResource PhotoContextMenuItemStyle}"
-                Header="Copy image"
+                Header="Copy files"
                 InputGestureText="Ctrl+C"
-                Click="OnCopyImageClick">
+                Tag="CopyFiles"
+                Click="OnCopyFilesClick">
         <MenuItem.Icon>
           <Viewbox Width="17" Height="17">
             <Canvas Width="18" Height="18">
@@ -304,13 +305,53 @@
       </MenuItem>
       <MenuItem Padding="10,6"
                 Style="{StaticResource PhotoContextMenuItemStyle}"
+                Header="Paste files"
+                InputGestureText="Ctrl+V"
+                Tag="PasteFiles"
+                Click="OnPasteFilesClick">
+        <MenuItem.Icon>
+          <TextBlock FontFamily="Segoe UI Symbol"
+                     FontSize="16"
+                     Foreground="#A8D88F"
+                     Text="▣" />
+        </MenuItem.Icon>
+      </MenuItem>
+      <MenuItem Padding="10,6"
+                Style="{StaticResource PhotoContextMenuItemStyle}"
+                Header="Copy rendered image pixels"
+                Click="OnCopyImageClick">
+        <MenuItem.Icon>
+          <TextBlock FontFamily="Segoe UI Symbol"
+                     FontSize="16"
+                     Foreground="#8BC8FF"
+                     Text="▧" />
+        </MenuItem.Icon>
+      </MenuItem>
+      <Separator Style="{StaticResource PhotoContextMenuSeparatorStyle}" />
+      <MenuItem Padding="10,6"
+                Style="{StaticResource PhotoContextMenuItemStyle}"
                 Header="Copy to…"
-                Click="OnCopyFileToClick">
+                InputGestureText="Alt+C"
+                Tag="CopyTo"
+                Click="OnCopyFilesToClick">
         <MenuItem.Icon>
           <TextBlock FontFamily="Segoe UI Symbol"
                      FontSize="16"
                      Foreground="#E8B84A"
                      Text="↗" />
+        </MenuItem.Icon>
+      </MenuItem>
+      <MenuItem Padding="10,6"
+                Style="{StaticResource PhotoContextMenuItemStyle}"
+                Header="Move to…"
+                InputGestureText="Alt+X"
+                Tag="MoveTo"
+                Click="OnMoveFilesToClick">
+        <MenuItem.Icon>
+          <TextBlock FontFamily="Segoe UI Symbol"
+                     FontSize="16"
+                     Foreground="#FFD36A"
+                     Text="⇢" />
         </MenuItem.Icon>
       </MenuItem>
       <MenuItem Padding="10,6"
@@ -325,6 +366,20 @@
                      FontSize="16"
                      Foreground="#8BC8FF"
                      Text="⇉" />
+        </MenuItem.Icon>
+      </MenuItem>
+      <Separator Style="{StaticResource PhotoContextMenuSeparatorStyle}" />
+      <MenuItem Padding="10,6"
+                Style="{StaticResource PhotoContextMenuItemStyle}"
+                Header="Move to Recycle Bin"
+                InputGestureText="Del"
+                Tag="DeleteFiles"
+                Click="OnDeleteFilesClick">
+        <MenuItem.Icon>
+          <TextBlock FontFamily="Segoe UI Symbol"
+                     FontSize="17"
+                     Foreground="#FF9A9A"
+                     Text="⌫" />
         </MenuItem.Icon>
       </MenuItem>
     </ContextMenu>
@@ -568,6 +623,7 @@
                  Background="{StaticResource PanelBrush}"
                  BorderThickness="0"
                  ItemsSource="{Binding Photos}"
+                 SelectionMode="Extended"
                  SelectedItem="{Binding SelectedPhoto}"
                  MouseDoubleClick="OnPhotoListMouseDoubleClick"
                  PreviewMouseDown="OnPhotoListPreviewMouseDown"

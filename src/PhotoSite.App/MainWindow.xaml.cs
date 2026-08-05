@@ -1,3 +1,4 @@
+using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
@@ -30,6 +31,7 @@ public partial class MainWindow : Window
     private const int DwmTextColor = 36;
     private const string WindowLayoutSetting = "window_layout_v1";
     private const string LastCopyDestinationSetting = "last_copy_destination";
+    private const string LastMoveDestinationSetting = "last_move_destination";
     private const string ImgurClientIdSetting = "imgur_client_id";
     private const double DefaultNavigatorWidth = 260;
     private const double DefaultCatalogWidth = 420;
@@ -57,6 +59,7 @@ public partial class MainWindow : Window
     private bool isImgurUploadActive;
     private bool refreshCatalogAfterEditorExit;
     private string? lastCopyDestination;
+    private string? lastMoveDestination;
 
     public MainWindow(
         MainViewModel viewModel,
@@ -150,6 +153,14 @@ public partial class MainWindow : Window
             {
                 lastCopyDestination = Path.GetFullPath(savedCopyDestination);
             }
+
+            var savedMoveDestination = await catalog.GetSettingAsync(
+                LastMoveDestinationSetting);
+            if (!string.IsNullOrWhiteSpace(savedMoveDestination)
+                && Directory.Exists(savedMoveDestination))
+            {
+                lastMoveDestination = Path.GetFullPath(savedMoveDestination);
+            }
         }
         catch
         {
@@ -239,10 +250,10 @@ public partial class MainWindow : Window
 
         var items = contextMenu.Items.OfType<MenuItem>().ToArray();
         var separators = contextMenu.Items.OfType<Separator>().ToArray();
-        if (items.Length != 7
+        if (items.Length != 11
             || items.Any(item => item.Icon is null
                                  || !ReferenceEquals(item.Style, itemStyle))
-            || separators.Length != 2
+            || separators.Length != 4
             || separators.Any(separator =>
                 !ReferenceEquals(separator.Style, separatorStyle)))
         {
@@ -303,6 +314,23 @@ public partial class MainWindow : Window
             throw new InvalidOperationException(
                 "File actions must remain attached only to thumbnail items.");
         }
+
+        if (PhotoList.SelectionMode != SelectionMode.Extended)
+        {
+            throw new InvalidOperationException(
+                "The Manager gallery must use Explorer-style extended selection.");
+        }
+
+        var originalSelection = viewModel.SelectedPhoto;
+        PhotoList.SelectAll();
+        if (PhotoList.SelectedItems.Count != PhotoList.Items.Count)
+        {
+            throw new InvalidOperationException(
+                "Select All must select every visible Manager thumbnail.");
+        }
+
+        PhotoList.UnselectAll();
+        viewModel.SelectedPhoto = originalSelection;
 
         var editorItems = editorContextMenu.Items
             .OfType<MenuItem>()
@@ -684,8 +712,7 @@ public partial class MainWindow : Window
         object sender,
         MouseButtonEventArgs eventArgs)
     {
-        if (eventArgs.ChangedButton != MouseButton.Middle
-            || eventArgs.OriginalSource is not DependencyObject source
+        if (eventArgs.OriginalSource is not DependencyObject source
             || ItemsControl.ContainerFromElement(PhotoList, source)
                 is not ListBoxItem item
             || item.DataContext is not PhotoItemViewModel photo)
@@ -693,6 +720,29 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (eventArgs.ChangedButton == MouseButton.Right)
+        {
+            // Explorer keeps a multi-selection when its context menu is opened
+            // over one of the selected items, but selects an unselected item by
+            // itself before showing that menu.
+            if (!item.IsSelected)
+            {
+                PhotoList.UnselectAll();
+                item.IsSelected = true;
+            }
+
+            viewModel.SelectedPhoto = photo;
+            item.Focus();
+            return;
+        }
+
+        if (eventArgs.ChangedButton != MouseButton.Middle)
+        {
+            return;
+        }
+
+        PhotoList.UnselectAll();
+        item.IsSelected = true;
         viewModel.SelectedPhoto = photo;
         if (viewModel.ToggleFullscreenCommand.CanExecute(null))
         {
@@ -744,8 +794,8 @@ public partial class MainWindow : Window
         }
 
         var hasLastDestination = HasLastCopyDestination();
-        var lastDestinationItem = contextMenu.Items
-            .OfType<MenuItem>()
+        var items = contextMenu.Items.OfType<MenuItem>().ToArray();
+        var lastDestinationItem = items
             .Single(item => Equals(item.Tag, "LastCopyDestination"));
         lastDestinationItem.Visibility = hasLastDestination
             ? Visibility.Visible
@@ -753,41 +803,72 @@ public partial class MainWindow : Window
         if (!hasLastDestination)
         {
             lastDestinationItem.ToolTip = null;
-            return;
+        }
+        else
+        {
+            var displayName = GetDestinationDisplayName(lastCopyDestination!);
+            lastDestinationItem.Header = $"Copy to “{displayName}”";
+            lastDestinationItem.ToolTip = lastCopyDestination;
         }
 
-        var displayName = GetDestinationDisplayName(lastCopyDestination!);
-        lastDestinationItem.Header = $"Copy to “{displayName}”";
-        lastDestinationItem.ToolTip = lastCopyDestination;
+        var selectedCount = GetSelectedManagerPhotos().Count;
+        SetMenuHeader(
+            items,
+            "CopyFiles",
+            selectedCount == 1 ? "Copy file" : $"Copy {selectedCount:N0} files");
+        SetMenuHeader(
+            items,
+            "CopyTo",
+            selectedCount == 1 ? "Copy to…" : $"Copy {selectedCount:N0} files to…");
+        SetMenuHeader(
+            items,
+            "MoveTo",
+            selectedCount == 1 ? "Move to…" : $"Move {selectedCount:N0} files to…");
+        SetMenuHeader(
+            items,
+            "DeleteFiles",
+            selectedCount == 1
+                ? "Move to Recycle Bin"
+                : $"Move {selectedCount:N0} files to Recycle Bin");
+        items.Single(item => Equals(item.Tag, "PasteFiles")).IsEnabled =
+            HasClipboardFiles();
     }
 
     private void OnCopyFileNameClick(
         object sender,
         RoutedEventArgs eventArgs)
     {
-        if (sender is MenuItem
-            {
-                DataContext: PhotoItemViewModel photo
-            })
+        var photos = GetContextPhotos(sender);
+        if (photos.Count > 0)
         {
             SetClipboardText(
-                photo.FileName,
-                $"Copied filename: {photo.FileName}");
+                string.Join(Environment.NewLine, photos.Select(photo => photo.FileName)),
+                photos.Count == 1
+                    ? $"Copied filename: {photos[0].FileName}"
+                    : $"Copied {photos.Count:N0} filenames");
         }
     }
 
     private void OnCopyFullPathClick(object sender, RoutedEventArgs eventArgs)
     {
-        if (sender is MenuItem
-            {
-                DataContext: PhotoItemViewModel photo
-            })
+        var photos = GetContextPhotos(sender);
+        if (photos.Count > 0)
         {
             SetClipboardText(
-                photo.Path,
-                $"Copied full path: {photo.FileName}");
+                string.Join(Environment.NewLine, photos.Select(photo => photo.Path)),
+                photos.Count == 1
+                    ? $"Copied full path: {photos[0].FileName}"
+                    : $"Copied {photos.Count:N0} full paths");
         }
     }
+
+    private void OnCopyFilesClick(object sender, RoutedEventArgs eventArgs) =>
+        CopyFilesToClipboard(GetContextPhotos(sender));
+
+    private async void OnPasteFilesClick(
+        object sender,
+        RoutedEventArgs eventArgs) =>
+        await PasteFilesFromClipboardAsync();
 
     private async void OnCopyImageClick(
         object sender,
@@ -802,30 +883,71 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void OnCopyFileToClick(
+    private async void OnCopyFilesToClick(
         object sender,
         RoutedEventArgs eventArgs)
     {
-        if (sender is MenuItem
-            {
-                DataContext: PhotoItemViewModel photo
-            })
-        {
-            await ChooseAndCopyFileAsync(photo);
-        }
+        await ChooseAndTransferFilesAsync(
+            GetContextPhotos(sender),
+            PhotoFileTransferMode.Copy);
+    }
+
+    private async void OnMoveFilesToClick(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        await ChooseAndTransferFilesAsync(
+            GetContextPhotos(sender),
+            PhotoFileTransferMode.Move);
     }
 
     private async void OnCopyFileToLastDestinationClick(
         object sender,
         RoutedEventArgs eventArgs)
     {
-        if (sender is MenuItem
+        await CopyFilesToLastDestinationAsync(GetContextPhotos(sender));
+    }
+
+    private async void OnDeleteFilesClick(
+        object sender,
+        RoutedEventArgs eventArgs) =>
+        await DeleteSelectedFilesAsync(GetContextPhotos(sender));
+
+    private static void SetMenuHeader(
+        IEnumerable<MenuItem> items,
+        string tag,
+        string header) =>
+        items.Single(item => Equals(item.Tag, tag)).Header = header;
+
+    private IReadOnlyList<PhotoItemViewModel> GetContextPhotos(object sender)
+    {
+        if (sender is not MenuItem
             {
-                DataContext: PhotoItemViewModel photo
+                DataContext: PhotoItemViewModel contextPhoto
             })
         {
-            await CopyFileToLastDestinationAsync(photo);
+            return [];
         }
+
+        var selected = GetSelectedManagerPhotos();
+        return selected.Contains(contextPhoto) ? selected : [contextPhoto];
+    }
+
+    private IReadOnlyList<PhotoItemViewModel> GetSelectedManagerPhotos()
+    {
+        var selected = PhotoList.SelectedItems
+            .OfType<PhotoItemViewModel>()
+            .Where(photo => !photo.IsTransient)
+            .DistinctBy(photo => photo.Path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (selected.Length > 0)
+        {
+            return selected;
+        }
+
+        return viewModel.SelectedPhoto is { IsTransient: false } photo
+            ? [photo]
+            : [];
     }
 
     private void SetClipboardText(string text, string successStatus)
@@ -912,131 +1034,381 @@ public partial class MainWindow : Window
         }
     }
 
-    private async Task ChooseAndCopyFileAsync(PhotoItemViewModel photo)
+    private void CopyFilesToClipboard(
+        IReadOnlyCollection<PhotoItemViewModel> photos)
     {
-        var sourceDirectory = Path.GetDirectoryName(photo.Path);
-        var dialog = new OpenFolderDialog
+        var paths = photos
+            .Select(photo => photo.Path)
+            .Where(File.Exists)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (paths.Length == 0)
         {
-            Title = $"Copy {photo.FileName} to folder",
-            Multiselect = false,
-            InitialDirectory = HasLastCopyDestination()
-                ? lastCopyDestination
-                : sourceDirectory
-        };
-        if (dialog.ShowDialog(this) != true)
-        {
+            viewModel.ReportStatus("No existing files are selected");
             return;
         }
 
-        var destinationDirectory = Path.GetFullPath(dialog.FolderName);
-        if (!await CopyPhotoFileAsync(photo.Path, destinationDirectory))
+        try
         {
-            return;
+            var data = CreateFileCopyDataObject(paths);
+            Clipboard.SetDataObject(data, copy: true);
+            viewModel.ReportStatus(
+                paths.Length == 1
+                    ? $"Copied file: {Path.GetFileName(paths[0])}"
+                    : $"Copied {paths.Length:N0} files to the clipboard");
         }
-
-        await RememberLastCopyDestinationAsync(destinationDirectory);
+        catch (ExternalException exception)
+        {
+            viewModel.ReportStatus(
+                $"Cannot access the clipboard: {exception.Message}");
+        }
     }
 
-    private async Task CopyFileToLastDestinationAsync(
-        PhotoItemViewModel photo)
+    internal static DataObject CreateFileCopyDataObject(
+        IReadOnlyCollection<string> paths)
+    {
+        var files = new StringCollection();
+        files.AddRange(paths.Select(Path.GetFullPath).ToArray());
+        var data = new DataObject();
+        data.SetFileDropList(files);
+        data.SetData(
+            "Preferred DropEffect",
+            new MemoryStream(BitConverter.GetBytes(1)));
+        return data;
+    }
+
+    private async Task PasteFilesFromClipboardAsync()
+    {
+        if (viewModel.CurrentFolder is not { } destinationDirectory)
+        {
+            viewModel.ReportStatus("Choose a destination folder first");
+            return;
+        }
+
+        IReadOnlyList<string> paths;
+        PhotoFileTransferMode mode;
+        try
+        {
+            if (!Clipboard.ContainsFileDropList())
+            {
+                viewModel.ReportStatus("The clipboard does not contain files");
+                return;
+            }
+
+            paths = Clipboard.GetFileDropList()
+                .Cast<string>()
+                .Where(File.Exists)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            mode = GetClipboardDropEffect() == 2
+                ? PhotoFileTransferMode.Move
+                : PhotoFileTransferMode.Copy;
+        }
+        catch (ExternalException exception)
+        {
+            viewModel.ReportStatus(
+                $"Cannot access the clipboard: {exception.Message}");
+            return;
+        }
+
+        if (paths.Count == 0)
+        {
+            viewModel.ReportStatus(
+                "The clipboard does not contain any existing files");
+            return;
+        }
+
+        await TransferFilesAsync(
+            paths,
+            destinationDirectory,
+            mode,
+            forceCatalogRefresh: true);
+    }
+
+    private static int GetClipboardDropEffect()
+    {
+        var value = Clipboard.GetData("Preferred DropEffect");
+        return value switch
+        {
+            MemoryStream stream when stream.Length >= sizeof(int) =>
+                ReadDropEffect(stream),
+            byte[] bytes when bytes.Length >= sizeof(int) =>
+                BitConverter.ToInt32(bytes, 0),
+            _ => 1
+        };
+    }
+
+    private static int ReadDropEffect(MemoryStream stream)
+    {
+        var position = stream.Position;
+        try
+        {
+            stream.Position = 0;
+            var bytes = new byte[sizeof(int)];
+            return stream.Read(bytes, 0, bytes.Length) == bytes.Length
+                ? BitConverter.ToInt32(bytes, 0)
+                : 1;
+        }
+        finally
+        {
+            stream.Position = position;
+        }
+    }
+
+    private static bool HasClipboardFiles()
+    {
+        try
+        {
+            return Clipboard.ContainsFileDropList();
+        }
+        catch (ExternalException)
+        {
+            return false;
+        }
+    }
+
+    private async Task ChooseAndTransferFilesAsync(
+        IReadOnlyCollection<PhotoItemViewModel> photos,
+        PhotoFileTransferMode mode)
+    {
+        var paths = photos
+            .Select(photo => photo.Path)
+            .Where(File.Exists)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (paths.Length == 0)
+        {
+            viewModel.ReportStatus("No existing files are selected");
+            return;
+        }
+
+        var rememberedDestination = mode == PhotoFileTransferMode.Copy
+            ? lastCopyDestination
+            : lastMoveDestination;
+        var initialDestination = Directory.Exists(rememberedDestination)
+            ? rememberedDestination
+            : Path.GetDirectoryName(paths[0]);
+        var dialog = new FileDestinationDialog(
+            mode,
+            paths.Length,
+            initialDestination)
+        {
+            Owner = this
+        };
+        if (dialog.ShowDialog() != true
+            || dialog.DestinationDirectory is not { } destinationDirectory)
+        {
+            return;
+        }
+
+        await RememberDestinationAsync(mode, destinationDirectory);
+        await TransferFilesAsync(
+            paths,
+            destinationDirectory,
+            mode,
+            forceCatalogRefresh: mode == PhotoFileTransferMode.Move);
+    }
+
+    private async Task CopyFilesToLastDestinationAsync(
+        IReadOnlyCollection<PhotoItemViewModel> photos)
     {
         if (!HasLastCopyDestination())
         {
             return;
         }
 
-        await CopyPhotoFileAsync(photo.Path, lastCopyDestination!);
+        await TransferFilesAsync(
+            photos.Select(photo => photo.Path).ToArray(),
+            lastCopyDestination!,
+            PhotoFileTransferMode.Copy,
+            forceCatalogRefresh: false);
     }
 
-    private async Task<bool> CopyPhotoFileAsync(
-        string sourcePath,
-        string destinationDirectory)
+    private async Task TransferFilesAsync(
+        IReadOnlyCollection<string> sourcePaths,
+        string destinationDirectory,
+        PhotoFileTransferMode mode,
+        bool forceCatalogRefresh)
     {
-        if (!File.Exists(sourcePath))
-        {
-            viewModel.ReportStatus($"File not found: {sourcePath}");
-            return false;
-        }
-
         if (!Directory.Exists(destinationDirectory))
         {
             viewModel.ReportStatus(
                 $"Destination folder not found: {destinationDirectory}");
-            return false;
+            return;
         }
 
-        var destinationPath = BuildFileCopyDestination(
-            sourcePath,
-            destinationDirectory);
-        if (string.Equals(
-                Path.GetFullPath(sourcePath),
-                destinationPath,
-                StringComparison.OrdinalIgnoreCase))
-        {
-            viewModel.ReportStatus(
-                $"{Path.GetFileName(sourcePath)} is already in that folder");
-            return false;
-        }
+        var verb = mode == PhotoFileTransferMode.Copy ? "Copying" : "Moving";
+        var completed = 0;
+        var skipped = 0;
+        var mayHaveChangedFiles = false;
+        var failures = new List<string>();
+        var paths = sourcePaths
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        viewModel.ReportStatus($"{verb} {paths.Length:N0} files…");
 
-        var overwrite = false;
-        if (File.Exists(destinationPath))
+        foreach (var sourcePath in paths)
         {
-            var choice = MessageBox.Show(
-                this,
-                $"{destinationPath} already exists.\n\nReplace it?",
-                "Replace existing file?",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Warning,
-                MessageBoxResult.No);
-            if (choice != MessageBoxResult.Yes)
+            if (!File.Exists(sourcePath))
             {
-                return false;
+                failures.Add($"{Path.GetFileName(sourcePath)}: file not found");
+                continue;
             }
 
-            overwrite = true;
+            var plan = PhotoFileOperations.Plan(
+                sourcePath,
+                destinationDirectory,
+                mode);
+            if (plan.IsNoOp)
+            {
+                skipped++;
+                continue;
+            }
+
+            var overwrite = false;
+            if (plan.ExistingDestinationPaths.Count > 0)
+            {
+                var conflictingPath = plan.ExistingDestinationPaths[0];
+                var choice = MessageBox.Show(
+                    this,
+                    $"{conflictingPath} already exists.\n\nReplace it?\n\n"
+                    + "Yes: replace · No: skip · Cancel: stop",
+                    "Replace existing file?",
+                    MessageBoxButton.YesNoCancel,
+                    MessageBoxImage.Warning,
+                    MessageBoxResult.No);
+                if (choice == MessageBoxResult.Cancel)
+                {
+                    break;
+                }
+
+                if (choice == MessageBoxResult.No)
+                {
+                    skipped++;
+                    continue;
+                }
+
+                overwrite = true;
+            }
+
+            try
+            {
+                mayHaveChangedFiles = true;
+                await PhotoFileOperations.ExecuteAsync(plan, mode, overwrite);
+                completed++;
+            }
+            catch (Exception exception) when (
+                exception is IOException
+                    or UnauthorizedAccessException
+                    or NotSupportedException
+                    or ArgumentException)
+            {
+                failures.Add(
+                    $"{Path.GetFileName(sourcePath)}: {exception.Message}");
+            }
         }
 
-        var fileName = Path.GetFileName(sourcePath);
-        viewModel.ReportStatus($"Copying {fileName}…");
-        try
+        if (mayHaveChangedFiles
+            && (forceCatalogRefresh
+                || IsDestinationInCurrentCatalog(destinationDirectory)))
         {
-            await Task.Run(
-                () => File.Copy(
-                    sourcePath,
-                    destinationPath,
-                    overwrite));
-            viewModel.ReportStatus(
-                $"Copied {fileName} to {destinationDirectory}");
-            return true;
+            await RefreshCurrentCatalogAsync();
         }
-        catch (Exception exception)
+
+        var operation = mode == PhotoFileTransferMode.Copy ? "Copied" : "Moved";
+        var status = $"{operation} {completed:N0} of {paths.Length:N0} files";
+        if (skipped > 0)
         {
+            status += $" · {skipped:N0} skipped";
+        }
+
+        if (failures.Count > 0)
+        {
+            status += $" · {failures.Count:N0} failed";
             MessageBox.Show(
                 this,
-                $"The file could not be copied.\n\n{exception.Message}",
-                "Copy failed",
+                string.Join(Environment.NewLine, failures.Take(8))
+                + (failures.Count > 8
+                    ? $"\n…and {failures.Count - 8:N0} more"
+                    : string.Empty),
+                $"{operation} with errors",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
-            viewModel.ReportStatus(
-                $"Cannot copy {fileName}: {exception.Message}");
-            return false;
+        }
+
+        viewModel.ReportStatus(status);
+    }
+
+    private async Task DeleteSelectedFilesAsync(
+        IReadOnlyCollection<PhotoItemViewModel> photos)
+    {
+        if (photos.Count == 0)
+        {
+            return;
+        }
+
+        await viewModel.DeletePhotosAsync(photos);
+    }
+
+    private async Task RefreshCurrentCatalogAsync()
+    {
+        if (viewModel.CurrentFolder is { } currentFolder)
+        {
+            await viewModel.LoadFolderAsync(
+                currentFolder,
+                CancellationToken.None);
         }
     }
 
-    private async Task RememberLastCopyDestinationAsync(
+    private bool IsDestinationInCurrentCatalog(string destinationDirectory)
+    {
+        if (viewModel.CurrentFolder is not { } currentFolder)
+        {
+            return false;
+        }
+
+        var relative = Path.GetRelativePath(
+            Path.GetFullPath(currentFolder),
+            Path.GetFullPath(destinationDirectory));
+        if (relative == ".")
+        {
+            return true;
+        }
+
+        return viewModel.IncludeSubfolders
+            && relative != ".."
+            && !relative.StartsWith(
+                ".." + Path.DirectorySeparatorChar,
+                StringComparison.Ordinal)
+            && !Path.IsPathRooted(relative);
+    }
+
+    private async Task RememberDestinationAsync(
+        PhotoFileTransferMode mode,
         string destinationDirectory)
     {
-        lastCopyDestination = Path.GetFullPath(destinationDirectory);
+        var fullPath = Path.GetFullPath(destinationDirectory);
+        if (mode == PhotoFileTransferMode.Copy)
+        {
+            lastCopyDestination = fullPath;
+        }
+        else
+        {
+            lastMoveDestination = fullPath;
+        }
+
         try
         {
             await catalog.SetSettingAsync(
-                LastCopyDestinationSetting,
-                lastCopyDestination);
+                mode == PhotoFileTransferMode.Copy
+                    ? LastCopyDestinationSetting
+                    : LastMoveDestinationSetting,
+                fullPath);
         }
         catch (Exception exception)
         {
             viewModel.ReportStatus(
-                "File copied, but the destination could not be remembered: "
+                "The destination could not be remembered: "
                 + exception.Message);
         }
     }
@@ -1767,8 +2139,21 @@ public partial class MainWindow : Window
             return;
         }
 
+        var shortcutKey = eventArgs.Key == Key.System
+            ? eventArgs.SystemKey
+            : eventArgs.Key;
+        if (!viewModel.IsEditorMode
+            && !viewModel.IsFullscreenMode
+            && PhotoList.IsKeyboardFocusWithin
+            && IsPasteImageShortcut(shortcutKey, Keyboard.Modifiers))
+        {
+            eventArgs.Handled = true;
+            await PasteFilesFromClipboardAsync();
+            return;
+        }
+
         if (IsPasteImageShortcut(
-                eventArgs.Key,
+                shortcutKey,
                 Keyboard.Modifiers))
         {
             eventArgs.Handled = true;
@@ -1798,25 +2183,50 @@ public partial class MainWindow : Window
 
         if (!viewModel.IsEditorMode
             && !viewModel.IsFullscreenMode
-            && PhotoList.IsKeyboardFocusWithin
-            && viewModel.SelectedPhoto is { } managerPhoto)
+            && PhotoList.IsKeyboardFocusWithin)
         {
+            if (IsSelectAllShortcut(shortcutKey, Keyboard.Modifiers))
+            {
+                PhotoList.SelectAll();
+                eventArgs.Handled = true;
+                return;
+            }
+
             if (IsQuickFileCopyShortcut(
-                    eventArgs.Key,
+                    shortcutKey,
                     Keyboard.Modifiers)
                 && HasLastCopyDestination())
             {
                 eventArgs.Handled = true;
-                await CopyFileToLastDestinationAsync(managerPhoto);
+                await CopyFilesToLastDestinationAsync(
+                    GetSelectedManagerPhotos());
                 return;
             }
 
-            if (IsCopyImageShortcut(
-                    eventArgs.Key,
+            if (IsCopyFilesShortcut(
+                    shortcutKey,
                     Keyboard.Modifiers))
             {
                 eventArgs.Handled = true;
-                await CopyImageAsync(managerPhoto);
+                CopyFilesToClipboard(GetSelectedManagerPhotos());
+                return;
+            }
+
+            if (IsCopyToShortcut(shortcutKey, Keyboard.Modifiers))
+            {
+                eventArgs.Handled = true;
+                await ChooseAndTransferFilesAsync(
+                    GetSelectedManagerPhotos(),
+                    PhotoFileTransferMode.Copy);
+                return;
+            }
+
+            if (IsMoveToShortcut(shortcutKey, Keyboard.Modifiers))
+            {
+                eventArgs.Handled = true;
+                await ChooseAndTransferFilesAsync(
+                    GetSelectedManagerPhotos(),
+                    PhotoFileTransferMode.Move);
                 return;
             }
         }
@@ -1902,7 +2312,15 @@ public partial class MainWindow : Window
             && viewModel.SelectedPhoto is { IsTransient: false })
         {
             eventArgs.Handled = true;
-            await viewModel.DeleteSelectedPhotoAsync();
+            if (!viewModel.IsEditorMode && !viewModel.IsFullscreenMode)
+            {
+                await DeleteSelectedFilesAsync(GetSelectedManagerPhotos());
+            }
+            else
+            {
+                await viewModel.DeleteSelectedPhotoAsync();
+            }
+
             return;
         }
 
@@ -2057,10 +2475,25 @@ public partial class MainWindow : Window
         ModifierKeys modifiers) =>
         key == Key.C && modifiers == ModifierKeys.None;
 
-    internal static bool IsCopyImageShortcut(
+    internal static bool IsCopyFilesShortcut(
         Key key,
         ModifierKeys modifiers) =>
         key == Key.C && modifiers == ModifierKeys.Control;
+
+    internal static bool IsSelectAllShortcut(
+        Key key,
+        ModifierKeys modifiers) =>
+        key == Key.A && modifiers == ModifierKeys.Control;
+
+    internal static bool IsCopyToShortcut(
+        Key key,
+        ModifierKeys modifiers) =>
+        key == Key.C && modifiers == ModifierKeys.Alt;
+
+    internal static bool IsMoveToShortcut(
+        Key key,
+        ModifierKeys modifiers) =>
+        key == Key.X && modifiers == ModifierKeys.Alt;
 
     internal static bool IsQuickFileCopyShortcut(
         Key key,

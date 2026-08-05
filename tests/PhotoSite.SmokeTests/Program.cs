@@ -348,8 +348,8 @@ try
         && !MainWindow.IsSelectShortcut(Key.C, ModifierKeys.Control),
         "C should activate Select without intercepting Ctrl+C.");
     Assert(
-        MainWindow.IsCopyImageShortcut(Key.C, ModifierKeys.Control)
-        && !MainWindow.IsCopyImageShortcut(
+        MainWindow.IsCopyFilesShortcut(Key.C, ModifierKeys.Control)
+        && !MainWindow.IsCopyFilesShortcut(
             Key.C,
             ModifierKeys.Control | ModifierKeys.Shift)
         && MainWindow.IsQuickFileCopyShortcut(
@@ -357,9 +357,13 @@ try
             ModifierKeys.Control | ModifierKeys.Shift)
         && !MainWindow.IsQuickFileCopyShortcut(
             Key.C,
-            ModifierKeys.Control),
-        "Manager copy shortcuts must distinguish image clipboard copy "
-        + "from quick file copy.");
+            ModifierKeys.Control)
+        && MainWindow.IsSelectAllShortcut(Key.A, ModifierKeys.Control)
+        && MainWindow.IsCopyToShortcut(Key.C, ModifierKeys.Alt)
+        && MainWindow.IsMoveToShortcut(Key.X, ModifierKeys.Alt)
+        && !MainWindow.IsCopyToShortcut(Key.C, ModifierKeys.Control),
+        "Manager shortcuts must distinguish file clipboard copy, select all, "
+        + "quick copy, Copy to, and Move to.");
     Assert(
         MainWindow.IsPasteImageShortcut(Key.V, ModifierKeys.Control)
         && !MainWindow.IsPasteImageShortcut(
@@ -386,6 +390,74 @@ try
     Assert(
         fileCopyDestination == Path.Combine(photoRoot, "first.png"),
         "File copy should preserve the original filename in the chosen folder.");
+    var fileCopyData = MainWindow.CreateFileCopyDataObject(
+        [firstPhoto, secondPhoto]);
+    Assert(
+        fileCopyData.GetFileDropList()
+            .Cast<string>()
+            .SequenceEqual([firstPhoto, secondPhoto])
+        && fileCopyData.GetData("Preferred DropEffect")
+            is MemoryStream copyEffect
+        && copyEffect.ToArray().Take(sizeof(int)).SequenceEqual(
+            new byte[] { 1, 0, 0, 0 }),
+        "Ctrl+C should publish physical file-drop paths with copy semantics.");
+    var sameFolderCopyPlan = PhotoFileOperations.Plan(
+        firstPhoto,
+        photoRoot,
+        PhotoFileTransferMode.Copy);
+    Assert(
+        sameFolderCopyPlan.DestinationPath
+            == Path.Combine(photoRoot, "first - Copy.png"),
+        "Copying into the source folder should use an Explorer-style copy name.");
+    await PhotoFileOperations.ExecuteAsync(
+        sameFolderCopyPlan,
+        PhotoFileTransferMode.Copy,
+        overwrite: false);
+    Assert(
+        File.Exists(sameFolderCopyPlan.DestinationPath),
+        "The physical copy operation should create the planned file.");
+    File.Delete(sameFolderCopyPlan.DestinationPath);
+
+    var transferSource = Directory.CreateDirectory(
+        Path.Combine(testRoot, "transfer-source")).FullName;
+    var transferCopy = Directory.CreateDirectory(
+        Path.Combine(testRoot, "transfer-copy")).FullName;
+    var transferMove = Directory.CreateDirectory(
+        Path.Combine(testRoot, "transfer-move")).FullName;
+    var rawSource = Path.Combine(transferSource, "raw.cr2");
+    var rawSidecar = Path.Combine(transferSource, "raw.xmp");
+    await File.WriteAllBytesAsync(rawSource, [1, 2, 3]);
+    await File.WriteAllTextAsync(rawSidecar, "sidecar");
+    var rawCopyPlan = PhotoFileOperations.Plan(
+        rawSource,
+        transferCopy,
+        PhotoFileTransferMode.Copy);
+    await PhotoFileOperations.ExecuteAsync(
+        rawCopyPlan,
+        PhotoFileTransferMode.Copy,
+        overwrite: false);
+    Assert(
+        File.Exists(Path.Combine(transferCopy, "raw.cr2"))
+        && File.Exists(Path.Combine(transferCopy, "raw.xmp")),
+        "Copying a RAW file should preserve its physical XMP sidecar.");
+    var rawMovePlan = PhotoFileOperations.Plan(
+        rawSource,
+        transferMove,
+        PhotoFileTransferMode.Move);
+    await PhotoFileOperations.ExecuteAsync(
+        rawMovePlan,
+        PhotoFileTransferMode.Move,
+        overwrite: false);
+    Assert(
+        !File.Exists(rawSource)
+        && !File.Exists(rawSidecar)
+        && File.Exists(Path.Combine(transferMove, "raw.cr2"))
+        && File.Exists(Path.Combine(transferMove, "raw.xmp")),
+        "Moving a RAW file should move its physical XMP sidecar too.");
+    Assert(
+        FileDestinationDialog.FormatFileCount(1) == "1 file"
+        && FileDestinationDialog.FormatFileCount(3) == "3 files",
+        "The destination dialog should describe single and bulk operations.");
     Assert(
         !PhotoSite.Controls.PhotoViewer.ShouldCrossfade(
             firstPhoto,

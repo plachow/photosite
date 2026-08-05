@@ -13,6 +13,14 @@ browsing. The current repository contains the first vertical slice:
 - anonymous Imgur upload of the current edited image with URL copy;
 - persisted ratings and non-destructive edit recipes.
 
+## Manager shortcuts
+
+- `Ctrl`/`Shift` click and `Ctrl+A` — select thumbnails as in File Explorer;
+- `Ctrl+C` / `Ctrl+V` — copy and paste the selected physical files;
+- `Del` — move all selected files to the Recycle Bin;
+- `Alt+C` / `Alt+X` — copy or move the selected files to a remembered folder;
+- `Ctrl+Shift+C` — copy to the last destination without reopening the dialog.
+
 ## Build
 
 Requirements:
