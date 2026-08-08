@@ -13,13 +13,19 @@ internal sealed record MetadataWritePayload(
     string? Description = null,
     bool LocationChanged = false,
     double? Latitude = null,
-    double? Longitude = null)
+    double? Longitude = null,
+    bool LabelChanged = false,
+    string? Label = null,
+    bool KeywordsChanged = false,
+    string? Keywords = null)
 {
     public bool IsEmpty =>
         Rating is null
         && !TitleChanged
         && !DescriptionChanged
-        && !LocationChanged;
+        && !LocationChanged
+        && !LabelChanged
+        && !KeywordsChanged;
 }
 
 internal readonly record struct ExifToolResult(
@@ -203,6 +209,31 @@ internal sealed class ExifToolMetadataWriter
             }
         }
 
+        if (payload.LabelChanged)
+        {
+            arguments.Add($"-XMP-xmp:Label={payload.Label}");
+        }
+
+        if (payload.KeywordsChanged)
+        {
+            // Clearing first stops exiftool from appending to the bag that is
+            // already in the file, which would make keywords accumulate.
+            arguments.Add("-XMP-dc:Subject=");
+            if (!sidecar)
+            {
+                arguments.Add("-IPTC:Keywords=");
+            }
+
+            foreach (var keyword in SplitKeywords(payload.Keywords))
+            {
+                arguments.Add($"-XMP-dc:Subject+={keyword}");
+                if (!sidecar)
+                {
+                    arguments.Add($"-IPTC:Keywords+={keyword}");
+                }
+            }
+        }
+
         if (payload.LocationChanged)
         {
             if (payload is { Latitude: { } latitude, Longitude: { } longitude })
@@ -245,6 +276,17 @@ internal sealed class ExifToolMetadataWriter
         arguments.Add(targetPath);
         return arguments;
     }
+
+    internal static IReadOnlyList<string> SplitKeywords(string? keywords) =>
+        string.IsNullOrWhiteSpace(keywords)
+            ? []
+            : keywords
+                .Split(
+                    [';', ','],
+                    StringSplitOptions.RemoveEmptyEntries
+                    | StringSplitOptions.TrimEntries)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
 
     internal static int RatingToPercent(int rating) => rating switch
     {

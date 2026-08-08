@@ -17,6 +17,9 @@ public sealed class PhotoItemViewModel : ObservableObject
     private string? description;
     private double? latitude;
     private double? longitude;
+    private ColorLabel colorLabel;
+    private PhotoFlag flag;
+    private string? keywords;
     private EditRecipe editRecipe;
     private EditRecipe editorBaseline = EditRecipe.Empty;
     private bool isEditorSessionActive;
@@ -36,6 +39,9 @@ public sealed class PhotoItemViewModel : ObservableObject
         description = record.Description;
         latitude = record.Latitude;
         longitude = record.Longitude;
+        colorLabel = record.ColorLabel;
+        flag = record.Flag;
+        keywords = record.Keywords;
         this.editRecipe = editRecipe;
         this.catalog = catalog;
         this.sourceBitmap = sourceBitmap;
@@ -84,6 +90,9 @@ public sealed class PhotoItemViewModel : ObservableObject
         description = updated.Description;
         latitude = updated.Latitude;
         longitude = updated.Longitude;
+        colorLabel = updated.ColorLabel;
+        flag = updated.Flag;
+        keywords = updated.Keywords;
 
         OnPropertyChanged(nameof(FileName));
         OnPropertyChanged(nameof(TakenAtTicks));
@@ -92,7 +101,25 @@ public sealed class PhotoItemViewModel : ObservableObject
         OnPropertyChanged(nameof(Title));
         OnPropertyChanged(nameof(Description));
         OnPropertyChanged(nameof(LocationText));
+        OnPropertyChanged(nameof(ColorLabel));
+        OnPropertyChanged(nameof(ColorLabelBrush));
+        OnPropertyChanged(nameof(Flag));
+        OnPropertyChanged(nameof(IsRejected));
+        OnPropertyChanged(nameof(FlagGlyph));
+        OnPropertyChanged(nameof(Keywords));
+        NotifyDetailsChanged();
         return affectsPresentation;
+    }
+
+    private void NotifyDetailsChanged()
+    {
+        OnPropertyChanged(nameof(CameraText));
+        OnPropertyChanged(nameof(LensText));
+        OnPropertyChanged(nameof(ExposureText));
+        OnPropertyChanged(nameof(DimensionsText));
+        OnPropertyChanged(nameof(FileSizeText));
+        OnPropertyChanged(nameof(TakenAtText));
+        OnPropertyChanged(nameof(HasLocation));
     }
 
     public string Path => savedPath ?? Record.Path;
@@ -142,6 +169,141 @@ public sealed class PhotoItemViewModel : ObservableObject
             _ = PersistRatingAsync(valid);
         }
     }
+
+    public ColorLabel ColorLabel
+    {
+        get => colorLabel;
+        set
+        {
+            if (!SetProperty(ref colorLabel, value))
+            {
+                return;
+            }
+
+            OnPropertyChanged(nameof(ColorLabelBrush));
+            _ = PersistMetadataAsync(
+                () => catalog.UpdateColorLabelAsync(Path, value));
+        }
+    }
+
+    public string ColorLabelBrush => colorLabel.ToHexColor();
+
+    public PhotoFlag Flag
+    {
+        get => flag;
+        set
+        {
+            if (!SetProperty(ref flag, value))
+            {
+                return;
+            }
+
+            OnPropertyChanged(nameof(IsRejected));
+            OnPropertyChanged(nameof(FlagGlyph));
+            _ = PersistMetadataAsync(
+                () => catalog.UpdateFlagAsync(Path, value));
+        }
+    }
+
+    public bool IsRejected => flag == PhotoFlag.Rejected;
+
+    public string? FlagGlyph => flag switch
+    {
+        PhotoFlag.Picked => "⚑",
+        PhotoFlag.Rejected => "⛌",
+        _ => null
+    };
+
+    public string? Keywords
+    {
+        get => keywords;
+        set
+        {
+            var normalized = string.IsNullOrWhiteSpace(value)
+                ? null
+                : PhotoRecord.JoinKeywords(
+                    value.Split(
+                        [';', ','],
+                        StringSplitOptions.RemoveEmptyEntries
+                        | StringSplitOptions.TrimEntries));
+            if (!SetProperty(ref keywords, normalized))
+            {
+                return;
+            }
+
+            _ = PersistMetadataAsync(
+                () => catalog.UpdateKeywordsAsync(Path, normalized));
+        }
+    }
+
+    public string? CameraText => Record.Camera;
+
+    public string? LensText => Record.Lens;
+
+    /// <summary>
+    /// The exposure triangle on one line, the way it reads on a camera back.
+    /// </summary>
+    public string? ExposureText
+    {
+        get
+        {
+            var parts = new List<string>(4);
+            if (Record.FocalLength is { } focal and > 0)
+            {
+                parts.Add($"{focal:0.#} mm");
+            }
+
+            if (Record.Aperture is { } aperture and > 0)
+            {
+                parts.Add($"f/{aperture:0.#}");
+            }
+
+            if (Record.ExposureSeconds is { } exposure and > 0)
+            {
+                parts.Add(
+                    exposure >= 1
+                        ? $"{exposure:0.#} s"
+                        : $"1/{Math.Round(1 / exposure):0} s");
+            }
+
+            if (Record.Iso is { } iso and > 0)
+            {
+                parts.Add($"ISO {iso}");
+            }
+
+            return parts.Count == 0 ? null : string.Join(" · ", parts);
+        }
+    }
+
+    public string? DimensionsText =>
+        Record.PixelWidth is { } width && Record.PixelHeight is { } height
+            ? $"{width:N0} × {height:N0}"
+            : null;
+
+    public string FileSizeText => FormatFileSize(Record.Length);
+
+    public string? TakenAtText =>
+        Record.TakenAtTicks is { } ticks
+            ? new DateTime(ticks).ToString("d MMMM yyyy, HH:mm:ss")
+            : null;
+
+    public bool HasLocation => latitude is not null && longitude is not null;
+
+    /// <summary>An OpenStreetMap pin for the "Open in map" action.</summary>
+    public string? MapUrl =>
+        latitude is { } lat && longitude is { } lon
+            ? string.Create(
+                System.Globalization.CultureInfo.InvariantCulture,
+                $"https://www.openstreetmap.org/?mlat={lat:0.######}&mlon={lon:0.######}#map=15/{lat:0.######}/{lon:0.######}")
+            : null;
+
+    internal static string FormatFileSize(long bytes) => bytes switch
+    {
+        < 1024 => $"{bytes} B",
+        < 1024 * 1024 => $"{bytes / 1024d:0.#} kB",
+        < 1024L * 1024 * 1024 => $"{bytes / (1024d * 1024):0.#} MB",
+        _ => $"{bytes / (1024d * 1024 * 1024):0.##} GB"
+    };
 
     public string? Title
     {

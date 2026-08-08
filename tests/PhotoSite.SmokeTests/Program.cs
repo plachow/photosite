@@ -1005,6 +1005,82 @@ try
                 StringComparison.OrdinalIgnoreCase)),
         "Processed outbox entries should be deleted.");
 
+    await repository.UpdateColorLabelAsync(metadataTarget.Path, ColorLabel.Green);
+    await repository.UpdateKeywordsAsync(
+        metadataTarget.Path,
+        "Iceland; Waterfall");
+    await repository.UpdateFlagAsync(metadataTarget.Path, PhotoFlag.Rejected);
+    var organized = await repository.GetByPathAsync(metadataTarget.Path);
+    Assert(
+        organized is
+        {
+            ColorLabel: ColorLabel.Green,
+            Flag: PhotoFlag.Rejected,
+            Keywords: "Iceland; Waterfall"
+        }
+        && organized.KeywordList.SequenceEqual(["Iceland", "Waterfall"]),
+        "Colour label, flag and keywords should round-trip through the catalogue.");
+
+    var organizationOutbox = (await repository.GetPendingMetadataAsync(8))
+        .Where(entry => string.Equals(
+            entry.Path,
+            metadataTarget.Path,
+            StringComparison.OrdinalIgnoreCase))
+        .ToArray();
+    Assert(
+        organizationOutbox.Any(entry => entry.Kind == "label")
+        && organizationOutbox.Any(entry => entry.Kind == "keywords")
+        && organizationOutbox.All(entry => entry.Kind != "flag"),
+        "Labels and keywords belong in the photo file; the culling flag does not.");
+    await repository.DeleteMetadataOutboxEntriesAsync(
+        organizationOutbox.Select(entry => entry.Id).ToArray());
+    await repository.UpdateFlagAsync(metadataTarget.Path, PhotoFlag.None);
+
+    var organizationPayload = MetadataOutboxProcessor.MergePayload(
+    [
+        new MetadataOutboxEntry(9, "p", "label", """{"label":"Green"}""", 0),
+        new MetadataOutboxEntry(
+            10,
+            "p",
+            "keywords",
+            """{"keywords":"Iceland; Waterfall"}""",
+            0)
+    ]);
+    Assert(
+        organizationPayload is
+        {
+            LabelChanged: true,
+            Label: "Green",
+            KeywordsChanged: true,
+            Keywords: "Iceland; Waterfall"
+        },
+        "Label and keyword outbox entries should merge into the write payload.");
+
+    var organizationArguments = ExifToolMetadataWriter.BuildArguments(
+        @"C:\photos\a.jpg",
+        organizationPayload,
+        sidecar: false,
+        createSidecar: false);
+    Assert(
+        organizationArguments.Contains("-XMP-xmp:Label=Green")
+        && organizationArguments.Contains("-XMP-dc:Subject=")
+        && organizationArguments.Contains("-XMP-dc:Subject+=Iceland")
+        && organizationArguments.Contains("-XMP-dc:Subject+=Waterfall")
+        && organizationArguments.ToList().IndexOf("-XMP-dc:Subject=")
+            < organizationArguments.ToList().IndexOf("-XMP-dc:Subject+=Iceland"),
+        "Keyword writes must clear the existing bag before appending, "
+        + "otherwise keywords accumulate on every save.");
+
+    Assert(
+        PhotoMetadataReader.BuildCameraName("NIKON CORPORATION", "NIKON Z 6")
+            == "NIKON Z 6"
+        && PhotoMetadataReader.BuildCameraName("Canon", "EOS R6")
+            == "Canon EOS R6"
+        && PhotoMetadataReader.BuildCameraName(null, "X-T5") == "X-T5",
+        "Camera names should not stutter the manufacturer twice.");
+
+    AssertGalleryFiltering(repository);
+
     var exifToolWriter = new ExifToolMetadataWriter();
     Assert(
         exifToolWriter.IsAvailable,
@@ -1113,6 +1189,185 @@ static void AssertIncrementalPresentation(
     Assert(
         resets == 0 && photos.Count == 0,
         "Clearing a small gallery should remove rather than reset.");
+}
+
+static void AssertGalleryFiltering(PhotoCatalogRepository repository)
+{
+    PhotoItemViewModel Create(
+        string fileName,
+        Action<PhotoRecord> _,
+        PhotoRecord record) =>
+        new(record with { FileName = fileName }, EditRecipe.Empty, repository);
+
+    var landscapeJpeg = Create(
+        "beach.jpg",
+        _ => { },
+        new PhotoRecord(
+            @"C:\p\beach.jpg",
+            @"C:\p",
+            "beach.jpg",
+            ".jpg",
+            2048,
+            0,
+            4,
+            1,
+            new DateTime(2025, 6, 1).Ticks,
+            PhotoDateSource.ExifDateTimeOriginal,
+            4,
+            "Beach",
+            null,
+            null,
+            null,
+            ColorLabel.Green,
+            PhotoFlag.None,
+            "Iceland; Coast",
+            6000,
+            4000,
+            "Canon EOS R6",
+            "RF 24-70mm",
+            35,
+            2.8,
+            0.004,
+            200));
+    var portraitRaw = Create(
+        "glacier.cr2",
+        _ => { },
+        landscapeJpeg.Record with
+        {
+            Path = @"C:\p\glacier.cr2",
+            FileName = "glacier.cr2",
+            Extension = ".cr2",
+            Rating = 2,
+            ColorLabel = ColorLabel.Red,
+            Flag = PhotoFlag.Rejected,
+            Keywords = "Iceland; Ice",
+            Title = null,
+            PixelWidth = 4000,
+            PixelHeight = 6000,
+            Camera = "NIKON Z 6",
+            Lens = "Z 24-70mm",
+            TakenAtTicks = new DateTime(2024, 2, 3).Ticks
+        });
+
+    var photos = new[] { landscapeJpeg, portraitRaw };
+
+    Assert(
+        landscapeJpeg.Record.Orientation == PhotoOrientation.Landscape
+        && portraitRaw.Record.Orientation == PhotoOrientation.Portrait,
+        "Orientation should be derived from the stored pixel dimensions.");
+
+    Assert(
+        MainViewModel.BuildPhotoPresentation(
+                photos,
+                PhotoSortField.FileName,
+                descending: false,
+                PhotoFilterCriteria.None with { HideRejected = true })
+            .Single() == landscapeJpeg,
+        "Hiding rejects should remove them from the gallery.");
+
+    Assert(
+        MainViewModel.BuildPhotoPresentation(
+                photos,
+                PhotoSortField.FileName,
+                descending: false,
+                PhotoFilterCriteria.None with
+                {
+                    Formats = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ".cr2"
+                    }
+                })
+            .Single() == portraitRaw,
+        "Format filtering should match on the file extension.");
+
+    Assert(
+        MainViewModel.BuildPhotoPresentation(
+                photos,
+                PhotoSortField.FileName,
+                descending: false,
+                PhotoFilterCriteria.None with
+                {
+                    Orientation = PhotoOrientation.Portrait
+                })
+            .Single() == portraitRaw,
+        "Orientation filtering should use the derived orientation.");
+
+    Assert(
+        MainViewModel.BuildPhotoPresentation(
+                photos,
+                PhotoSortField.FileName,
+                descending: false,
+                PhotoFilterCriteria.None with
+                {
+                    Cameras = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        "NIKON Z 6"
+                    }
+                })
+            .Single() == portraitRaw,
+        "Camera filtering should match the indexed camera name.");
+
+    Assert(
+        MainViewModel.BuildPhotoPresentation(
+                photos,
+                PhotoSortField.FileName,
+                descending: false,
+                PhotoFilterCriteria.None with
+                {
+                    ColorLabels = new HashSet<ColorLabel> { ColorLabel.Green }
+                })
+            .Single() == landscapeJpeg,
+        "Colour-label filtering should match the stored label.");
+
+    Assert(
+        MainViewModel.BuildPhotoPresentation(
+                photos,
+                PhotoSortField.FileName,
+                descending: false,
+                PhotoFilterCriteria.None with
+                {
+                    TakenFrom = new DateTime(2025, 1, 1)
+                })
+            .Single() == landscapeJpeg,
+        "Date filtering should compare against the capture date.");
+
+    Assert(
+        MainViewModel.BuildPhotoPresentation(
+            photos,
+            PhotoSortField.FileName,
+            descending: false,
+            PhotoFilterCriteria.None with { SearchText = "iceland" }).Count == 2,
+        "Search should also look inside keywords, not only file names.");
+
+    Assert(
+        MainViewModel.BuildPhotoPresentation(
+                photos,
+                PhotoSortField.FileName,
+                descending: false,
+                PhotoFilterCriteria.None with { SearchText = "ice" })
+            .Count == 2
+        && MainViewModel.BuildPhotoPresentation(
+                photos,
+                PhotoSortField.FileName,
+                descending: false,
+                PhotoFilterCriteria.None with { SearchText = "beach" })
+            .Single() == landscapeJpeg,
+        "Search should match captions and file names too.");
+
+    var bySize = MainViewModel.BuildPhotoPresentation(
+        photos,
+        PhotoSortField.Dimensions,
+        descending: true,
+        PhotoFilterCriteria.None);
+    Assert(
+        bySize.Count == 2,
+        "Sorting by dimensions should keep every photo in the gallery.");
+
+    Assert(
+        !PhotoFilterCriteria.None.IsActive
+        && PhotoFilterCriteria.None.Describe() == "Filter"
+        && (PhotoFilterCriteria.None with { MinimumRating = 3 }).IsActive,
+        "An untouched filter must report itself as inactive.");
 }
 
 static void AssertImagingPipeline()

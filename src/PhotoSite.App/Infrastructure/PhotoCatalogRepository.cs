@@ -6,6 +6,16 @@ namespace PhotoSite.Infrastructure;
 
 public sealed class PhotoCatalogRepository
 {
+    private const string PhotoColumns =
+        """
+        path, root_path, file_name, extension, length,
+        modified_utc_ticks, rating, scan_id,
+        taken_at_ticks, taken_at_source, metadata_indexed,
+        title, description, latitude, longitude,
+        color_label, flag, keywords, pixel_width, pixel_height,
+        camera, lens, focal_length, aperture, exposure_seconds, iso
+        """;
+
     private readonly string connectionString;
 
     public PhotoCatalogRepository(string databasePath)
@@ -105,14 +115,49 @@ public sealed class PhotoCatalogRepository
             "REAL NULL",
             cancellationToken);
 
+        // Organisation and shooting data, added after the first release; the
+        // photos table is migrated in place so existing catalogues keep their
+        // ratings, recipes and thumbnails.
+        foreach (var (column, declaration) in NewerColumns)
+        {
+            await EnsureColumnAsync(
+                connection,
+                column,
+                declaration,
+                cancellationToken);
+        }
+
         await using var indexCommand = connection.CreateCommand();
         indexCommand.CommandText =
             """
             CREATE INDEX IF NOT EXISTS ix_photos_root_taken
                 ON photos(root_path, taken_at_ticks);
+
+            CREATE TABLE IF NOT EXISTS presets (
+                kind         TEXT NOT NULL COLLATE NOCASE,
+                name         TEXT NOT NULL COLLATE NOCASE,
+                payload_json TEXT NOT NULL,
+                updated_utc  TEXT NOT NULL,
+                PRIMARY KEY (kind, name)
+            );
             """;
         await indexCommand.ExecuteNonQueryAsync(cancellationToken);
     }
+
+    private static readonly (string Column, string Declaration)[] NewerColumns =
+    [
+        ("color_label", "INTEGER NOT NULL DEFAULT 0"),
+        ("flag", "INTEGER NOT NULL DEFAULT 0"),
+        ("keywords", "TEXT NULL"),
+        ("pixel_width", "INTEGER NULL"),
+        ("pixel_height", "INTEGER NULL"),
+        ("camera", "TEXT NULL"),
+        ("lens", "TEXT NULL"),
+        ("focal_length", "REAL NULL"),
+        ("aperture", "REAL NULL"),
+        ("exposure_seconds", "REAL NULL"),
+        ("iso", "INTEGER NULL")
+    ];
 
     public async Task UpsertBatchAsync(
         IReadOnlyCollection<PhotoRecord> records,
@@ -127,18 +172,26 @@ public sealed class PhotoCatalogRepository
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.Transaction = (SqliteTransaction)transaction;
-        command.CommandText =
+        // A re-scan must not clobber organisation the user did inside
+        // PhotoSite, so descriptive columns are only taken from the file when
+        // the file itself changed or a newer reader learned to see more.
+        const string acceptFromFile =
             """
+            photos.modified_utc_ticks <> excluded.modified_utc_ticks
+            OR photos.length <> excluded.length
+            OR photos.metadata_indexed < excluded.metadata_indexed
+            """;
+        command.CommandText =
+            $"""
             INSERT INTO photos (
-                path, root_path, file_name, extension, length,
-                modified_utc_ticks, rating, scan_id,
-                taken_at_ticks, taken_at_source, metadata_indexed,
-                title, description, latitude, longitude)
+                {PhotoColumns})
             VALUES (
                 $path, $root, $name, $extension, $length,
                 $modified, $rating, $scan,
                 $takenAt, $takenAtSource, $metadataIndexed,
-                $title, $description, $latitude, $longitude)
+                $title, $description, $latitude, $longitude,
+                $colorLabel, $flag, $keywords, $pixelWidth, $pixelHeight,
+                $camera, $lens, $focalLength, $aperture, $exposureSeconds, $iso)
             ON CONFLICT(path) DO UPDATE SET
                 root_path = excluded.root_path,
                 file_name = excluded.file_name,
@@ -149,41 +202,35 @@ public sealed class PhotoCatalogRepository
                 taken_at_ticks = excluded.taken_at_ticks,
                 taken_at_source = excluded.taken_at_source,
                 metadata_indexed = excluded.metadata_indexed,
+                pixel_width = excluded.pixel_width,
+                pixel_height = excluded.pixel_height,
+                camera = excluded.camera,
+                lens = excluded.lens,
+                focal_length = excluded.focal_length,
+                aperture = excluded.aperture,
+                exposure_seconds = excluded.exposure_seconds,
+                iso = excluded.iso,
                 rating = CASE
-                    WHEN photos.modified_utc_ticks <> excluded.modified_utc_ticks
-                         OR photos.length <> excluded.length
-                         OR photos.metadata_indexed < excluded.metadata_indexed
-                    THEN excluded.rating
-                    ELSE photos.rating
-                END,
+                    WHEN {acceptFromFile}
+                    THEN excluded.rating ELSE photos.rating END,
                 title = CASE
-                    WHEN photos.modified_utc_ticks <> excluded.modified_utc_ticks
-                         OR photos.length <> excluded.length
-                         OR photos.metadata_indexed < excluded.metadata_indexed
-                    THEN excluded.title
-                    ELSE photos.title
-                END,
+                    WHEN {acceptFromFile}
+                    THEN excluded.title ELSE photos.title END,
                 description = CASE
-                    WHEN photos.modified_utc_ticks <> excluded.modified_utc_ticks
-                         OR photos.length <> excluded.length
-                         OR photos.metadata_indexed < excluded.metadata_indexed
-                    THEN excluded.description
-                    ELSE photos.description
-                END,
+                    WHEN {acceptFromFile}
+                    THEN excluded.description ELSE photos.description END,
                 latitude = CASE
-                    WHEN photos.modified_utc_ticks <> excluded.modified_utc_ticks
-                         OR photos.length <> excluded.length
-                         OR photos.metadata_indexed < excluded.metadata_indexed
-                    THEN excluded.latitude
-                    ELSE photos.latitude
-                END,
+                    WHEN {acceptFromFile}
+                    THEN excluded.latitude ELSE photos.latitude END,
                 longitude = CASE
-                    WHEN photos.modified_utc_ticks <> excluded.modified_utc_ticks
-                         OR photos.length <> excluded.length
-                         OR photos.metadata_indexed < excluded.metadata_indexed
-                    THEN excluded.longitude
-                    ELSE photos.longitude
-                END;
+                    WHEN {acceptFromFile}
+                    THEN excluded.longitude ELSE photos.longitude END,
+                color_label = CASE
+                    WHEN {acceptFromFile}
+                    THEN excluded.color_label ELSE photos.color_label END,
+                keywords = CASE
+                    WHEN {acceptFromFile}
+                    THEN excluded.keywords ELSE photos.keywords END;
             """;
 
         var path = command.Parameters.Add("$path", SqliteType.Text);
@@ -207,6 +254,19 @@ public sealed class PhotoCatalogRepository
             SqliteType.Text);
         var latitude = command.Parameters.Add("$latitude", SqliteType.Real);
         var longitude = command.Parameters.Add("$longitude", SqliteType.Real);
+        var colorLabel = command.Parameters.Add("$colorLabel", SqliteType.Integer);
+        var flag = command.Parameters.Add("$flag", SqliteType.Integer);
+        var keywords = command.Parameters.Add("$keywords", SqliteType.Text);
+        var pixelWidth = command.Parameters.Add("$pixelWidth", SqliteType.Integer);
+        var pixelHeight = command.Parameters.Add("$pixelHeight", SqliteType.Integer);
+        var camera = command.Parameters.Add("$camera", SqliteType.Text);
+        var lens = command.Parameters.Add("$lens", SqliteType.Text);
+        var focalLength = command.Parameters.Add("$focalLength", SqliteType.Real);
+        var aperture = command.Parameters.Add("$aperture", SqliteType.Real);
+        var exposureSeconds = command.Parameters.Add(
+            "$exposureSeconds",
+            SqliteType.Real);
+        var iso = command.Parameters.Add("$iso", SqliteType.Integer);
 
         foreach (var record in records)
         {
@@ -232,6 +292,19 @@ public sealed class PhotoCatalogRepository
             longitude.Value = record.Longitude is { } lon
                 ? lon
                 : DBNull.Value;
+            colorLabel.Value = (int)record.ColorLabel;
+            flag.Value = (int)record.Flag;
+            keywords.Value = (object?)record.Keywords ?? DBNull.Value;
+            pixelWidth.Value = record.PixelWidth is { } pw ? pw : DBNull.Value;
+            pixelHeight.Value = record.PixelHeight is { } ph ? ph : DBNull.Value;
+            camera.Value = (object?)record.Camera ?? DBNull.Value;
+            lens.Value = (object?)record.Lens ?? DBNull.Value;
+            focalLength.Value = record.FocalLength is { } fl ? fl : DBNull.Value;
+            aperture.Value = record.Aperture is { } av ? av : DBNull.Value;
+            exposureSeconds.Value = record.ExposureSeconds is { } es
+                ? es
+                : DBNull.Value;
+            iso.Value = record.Iso is { } isoValue ? isoValue : DBNull.Value;
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
 
@@ -311,11 +384,8 @@ public sealed class PhotoCatalogRepository
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText =
-            """
-            SELECT path, root_path, file_name, extension, length,
-                   modified_utc_ticks, rating, scan_id,
-                   taken_at_ticks, taken_at_source, metadata_indexed,
-                   title, description, latitude, longitude
+            $"""
+            SELECT {PhotoColumns}
             FROM photos
             WHERE root_path = $root
             ORDER BY file_name COLLATE NOCASE, path COLLATE NOCASE;
@@ -338,11 +408,8 @@ public sealed class PhotoCatalogRepository
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText =
-            """
-            SELECT path, root_path, file_name, extension, length,
-                   modified_utc_ticks, rating, scan_id,
-                   taken_at_ticks, taken_at_source, metadata_indexed,
-                   title, description, latitude, longitude
+            $"""
+            SELECT {PhotoColumns}
             FROM photos
             WHERE path = $path;
             """;
@@ -373,7 +440,18 @@ public sealed class PhotoCatalogRepository
             reader.IsDBNull(11) ? null : reader.GetString(11),
             reader.IsDBNull(12) ? null : reader.GetString(12),
             reader.IsDBNull(13) ? null : reader.GetDouble(13),
-            reader.IsDBNull(14) ? null : reader.GetDouble(14));
+            reader.IsDBNull(14) ? null : reader.GetDouble(14),
+            (ColorLabel)reader.GetInt32(15),
+            (PhotoFlag)reader.GetInt32(16),
+            reader.IsDBNull(17) ? null : reader.GetString(17),
+            reader.IsDBNull(18) ? null : reader.GetInt32(18),
+            reader.IsDBNull(19) ? null : reader.GetInt32(19),
+            reader.IsDBNull(20) ? null : reader.GetString(20),
+            reader.IsDBNull(21) ? null : reader.GetString(21),
+            reader.IsDBNull(22) ? null : reader.GetDouble(22),
+            reader.IsDBNull(23) ? null : reader.GetDouble(23),
+            reader.IsDBNull(24) ? null : reader.GetDouble(24),
+            reader.IsDBNull(25) ? null : reader.GetInt32(25));
 
     public event Action? MetadataOutboxChanged;
 
@@ -404,6 +482,48 @@ public sealed class PhotoCatalogRepository
             "title",
             JsonSerializer.Serialize(new { title }),
             cancellationToken);
+
+    public Task UpdateColorLabelAsync(
+        string path,
+        ColorLabel label,
+        CancellationToken cancellationToken = default) =>
+        UpdateMetadataFieldAsync(
+            path,
+            "UPDATE photos SET color_label = $value WHERE path = $path;",
+            (int)label,
+            "label",
+            JsonSerializer.Serialize(new { label = label.ToXmpName() }),
+            cancellationToken);
+
+    public Task UpdateKeywordsAsync(
+        string path,
+        string? keywords,
+        CancellationToken cancellationToken = default) =>
+        UpdateMetadataFieldAsync(
+            path,
+            "UPDATE photos SET keywords = $value WHERE path = $path;",
+            (object?)keywords ?? DBNull.Value,
+            "keywords",
+            JsonSerializer.Serialize(new { keywords }),
+            cancellationToken);
+
+    /// <summary>
+    /// Pick and reject live only in the catalogue: they are a working state
+    /// for a culling session, not something to write back into the file.
+    /// </summary>
+    public async Task UpdateFlagAsync(
+        string path,
+        PhotoFlag flag,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            "UPDATE photos SET flag = $value WHERE path = $path;";
+        command.Parameters.AddWithValue("$value", (int)flag);
+        command.Parameters.AddWithValue("$path", path);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
 
     public Task UpdateDescriptionAsync(
         string path,
@@ -732,6 +852,68 @@ public sealed class PhotoCatalogRepository
         command.Parameters.AddWithValue("$key", key);
         command.Parameters.AddWithValue("$value", value);
         command.Parameters.AddWithValue("$updated", DateTime.UtcNow.ToString("O"));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<(string Name, string Payload)>> GetPresetsAsync(
+        string kind,
+        CancellationToken cancellationToken = default)
+    {
+        var result = new List<(string, string)>();
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT name, payload_json
+            FROM presets
+            WHERE kind = $kind
+            ORDER BY name COLLATE NOCASE;
+            """;
+        command.Parameters.AddWithValue("$kind", kind);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            result.Add((reader.GetString(0), reader.GetString(1)));
+        }
+
+        return result;
+    }
+
+    public async Task SavePresetAsync(
+        string kind,
+        string name,
+        string payloadJson,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            INSERT INTO presets(kind, name, payload_json, updated_utc)
+            VALUES($kind, $name, $payload, $updated)
+            ON CONFLICT(kind, name) DO UPDATE SET
+                payload_json = excluded.payload_json,
+                updated_utc = excluded.updated_utc;
+            """;
+        command.Parameters.AddWithValue("$kind", kind);
+        command.Parameters.AddWithValue("$name", name);
+        command.Parameters.AddWithValue("$payload", payloadJson);
+        command.Parameters.AddWithValue("$updated", DateTime.UtcNow.ToString("O"));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task DeletePresetAsync(
+        string kind,
+        string name,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            "DELETE FROM presets WHERE kind = $kind AND name = $name;";
+        command.Parameters.AddWithValue("$kind", kind);
+        command.Parameters.AddWithValue("$name", name);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 

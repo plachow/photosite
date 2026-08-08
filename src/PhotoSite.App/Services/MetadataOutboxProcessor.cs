@@ -210,6 +210,16 @@ internal sealed class MetadataOutboxProcessor : IDisposable
                         Latitude = ReadDouble(root, "latitude"),
                         Longitude = ReadDouble(root, "longitude")
                     },
+                    "label" => payload with
+                    {
+                        LabelChanged = true,
+                        Label = ReadString(root, "label")
+                    },
+                    "keywords" => payload with
+                    {
+                        KeywordsChanged = true,
+                        Keywords = ReadString(root, "keywords")
+                    },
                     _ => payload
                 };
             }

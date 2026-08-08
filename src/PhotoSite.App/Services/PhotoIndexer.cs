@@ -66,7 +66,6 @@ public sealed class PhotoIndexer
                         try
                         {
                             var file = new FileInfo(path);
-                            var extension = file.Extension;
                             if (cachedRecords is not null
                                 && cachedRecords.TryGetValue(
                                     file.FullName,
@@ -81,23 +80,7 @@ public sealed class PhotoIndexer
                                 continue;
                             }
 
-                            var metadata = PhotoMetadataReader.ReadAll(file.FullName);
-                            var record = new PhotoRecord(
-                                file.FullName,
-                                rootPath,
-                                file.Name,
-                                extension,
-                                file.Length,
-                                file.LastWriteTimeUtc.Ticks,
-                                metadata.Rating,
-                                scanId,
-                                metadata.TakenAt.Ticks,
-                                metadata.TakenAt.Source,
-                                MetadataVersion: PhotoMetadataReader.CurrentVersion,
-                                metadata.Title,
-                                metadata.Description,
-                                metadata.Latitude,
-                                metadata.Longitude);
+                            var record = CreateRecord(file, rootPath, scanId);
                             await channel.Writer.WriteAsync(
                                 new PhotoScanResult(
                                     record,
@@ -124,6 +107,46 @@ public sealed class PhotoIndexer
             CancellationToken.None);
 
         return channel.Reader.ReadAllAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// The single place a file on disk turns into a catalogue row, shared by
+    /// the folder scan, the live folder watcher and a directly opened photo so
+    /// none of them can drift into recording fewer fields than the others.
+    /// </summary>
+    internal static PhotoRecord CreateRecord(
+        FileInfo file,
+        string rootPath,
+        long scanId)
+    {
+        var metadata = PhotoMetadataReader.ReadAll(file.FullName);
+        return new PhotoRecord(
+            file.FullName,
+            rootPath,
+            file.Name,
+            file.Extension,
+            file.Length,
+            file.LastWriteTimeUtc.Ticks,
+            metadata.Rating,
+            scanId,
+            metadata.TakenAt.Ticks,
+            metadata.TakenAt.Source,
+            MetadataVersion: PhotoMetadataReader.CurrentVersion,
+            metadata.Title,
+            metadata.Description,
+            metadata.Latitude,
+            metadata.Longitude,
+            metadata.ColorLabel,
+            PhotoFlag.None,
+            metadata.Keywords,
+            metadata.PixelWidth,
+            metadata.PixelHeight,
+            metadata.Camera,
+            metadata.Lens,
+            metadata.FocalLength,
+            metadata.Aperture,
+            metadata.ExposureSeconds,
+            metadata.Iso);
     }
 
     internal static bool CanReuseMetadata(

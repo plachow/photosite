@@ -421,23 +421,10 @@ public sealed class MainViewModel : ObservableObject
             };
         }
 
-        var metadata = PhotoMetadataReader.ReadAll(file.FullName);
-        return new PhotoRecord(
-            file.FullName,
-            rootFolder,
-            file.Name,
-            file.Extension,
-            file.Length,
-            file.LastWriteTimeUtc.Ticks,
-            metadata.Rating > 0 ? metadata.Rating : cached?.Rating ?? 0,
-            scanId,
-            metadata.TakenAt.Ticks,
-            metadata.TakenAt.Source,
-            MetadataVersion: PhotoMetadataReader.CurrentVersion,
-            metadata.Title,
-            metadata.Description,
-            metadata.Latitude,
-            metadata.Longitude);
+        var record = PhotoIndexer.CreateRecord(file, rootFolder, scanId);
+        return record.Rating > 0 || cached is null
+            ? record
+            : record with { Rating = cached.Rating, Flag = cached.Flag };
     }
 
     public async Task LoadFolderAsync(string folder, CancellationToken cancellationToken)
@@ -778,18 +765,29 @@ public sealed class MainViewModel : ObservableObject
         PhotoSortField sortField,
         bool descending,
         int minimumRating,
-        string? searchText)
+        string? searchText) =>
+        BuildPhotoPresentation(
+            source,
+            sortField,
+            descending,
+            PhotoFilterCriteria.None with
+            {
+                MinimumRating = minimumRating,
+                SearchText = searchText
+            });
+
+    internal static IReadOnlyList<PhotoItemViewModel> BuildPhotoPresentation(
+        IEnumerable<PhotoItemViewModel> source,
+        PhotoSortField sortField,
+        bool descending,
+        PhotoFilterCriteria criteria)
     {
-        var normalizedSearch = searchText?.Trim();
-        var filtered = source.Where(
-            photo => photo.Rating >= minimumRating
-                     && (string.IsNullOrEmpty(normalizedSearch)
-                         || photo.FileName.Contains(
-                             normalizedSearch,
-                             StringComparison.OrdinalIgnoreCase)));
+        var filtered = source.Where(photo => Matches(photo, criteria));
 
         IOrderedEnumerable<PhotoItemViewModel> ordered = sortField switch
         {
+            // Photos without a capture date sort last in both directions:
+            // an unknown date is not "the oldest", it is simply unknown.
             PhotoSortField.TakenAt when descending => filtered
                 .OrderBy(photo => photo.TakenAtTicks is null)
                 .ThenByDescending(photo => photo.TakenAtTicks),
@@ -808,6 +806,18 @@ public sealed class MainViewModel : ObservableObject
                 .OrderByDescending(photo => photo.Rating),
             PhotoSortField.Rating => filtered
                 .OrderBy(photo => photo.Rating),
+            PhotoSortField.DateModified when descending => filtered
+                .OrderByDescending(photo => photo.Record.ModifiedUtcTicks),
+            PhotoSortField.DateModified => filtered
+                .OrderBy(photo => photo.Record.ModifiedUtcTicks),
+            PhotoSortField.FileSize when descending => filtered
+                .OrderByDescending(photo => photo.Record.Length),
+            PhotoSortField.FileSize => filtered
+                .OrderBy(photo => photo.Record.Length),
+            PhotoSortField.Dimensions when descending => filtered
+                .OrderByDescending(photo => GetPixelCount(photo)),
+            PhotoSortField.Dimensions => filtered
+                .OrderBy(photo => GetPixelCount(photo)),
             _ => throw new ArgumentOutOfRangeException(
                 nameof(sortField),
                 sortField,
@@ -818,6 +828,94 @@ public sealed class MainViewModel : ObservableObject
             .ThenBy(photo => photo.FileName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(photo => photo.Path, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+    }
+
+    private static long GetPixelCount(PhotoItemViewModel photo) =>
+        photo.Record.PixelWidth is { } width && photo.Record.PixelHeight is { } height
+            ? (long)width * height
+            : 0;
+
+    internal static bool Matches(
+        PhotoItemViewModel photo,
+        PhotoFilterCriteria criteria)
+    {
+        var record = photo.Record;
+        if (photo.Rating < criteria.MinimumRating)
+        {
+            return false;
+        }
+
+        if (criteria.HideRejected && photo.Flag == PhotoFlag.Rejected)
+        {
+            return false;
+        }
+
+        if (criteria.ColorLabels.Count > 0
+            && !criteria.ColorLabels.Contains(photo.ColorLabel))
+        {
+            return false;
+        }
+
+        if (criteria.Flags.Count > 0 && !criteria.Flags.Contains(photo.Flag))
+        {
+            return false;
+        }
+
+        if (criteria.Formats.Count > 0
+            && !criteria.Formats.Contains(record.Extension))
+        {
+            return false;
+        }
+
+        if (criteria.Cameras.Count > 0
+            && (record.Camera is null || !criteria.Cameras.Contains(record.Camera)))
+        {
+            return false;
+        }
+
+        if (criteria.Lenses.Count > 0
+            && (record.Lens is null || !criteria.Lenses.Contains(record.Lens)))
+        {
+            return false;
+        }
+
+        if (criteria.Orientation != PhotoOrientation.Unknown
+            && record.Orientation != criteria.Orientation)
+        {
+            return false;
+        }
+
+        if (criteria.TakenFrom is not null || criteria.TakenTo is not null)
+        {
+            if (record.TakenAtTicks is not { } ticks)
+            {
+                return false;
+            }
+
+            var takenAt = new DateTime(ticks);
+            if (criteria.TakenFrom is { } from && takenAt < from)
+            {
+                return false;
+            }
+
+            if (criteria.TakenTo is { } to && takenAt > to)
+            {
+                return false;
+            }
+        }
+
+        var search = criteria.SearchText?.Trim();
+        if (string.IsNullOrEmpty(search))
+        {
+            return true;
+        }
+
+        // One box covers file name, caption and keywords, which is what the
+        // user actually means when typing "iceland" into a search field.
+        return photo.FileName.Contains(search, StringComparison.OrdinalIgnoreCase)
+               || record.Title?.Contains(search, StringComparison.OrdinalIgnoreCase) == true
+               || record.Description?.Contains(search, StringComparison.OrdinalIgnoreCase) == true
+               || record.Keywords?.Contains(search, StringComparison.OrdinalIgnoreCase) == true;
     }
 
     public event Action? SelectionRevealRequested;
@@ -1589,26 +1687,8 @@ public sealed class MainViewModel : ObservableObject
 
     private static PhotoRecord CreateRecordFromFile(
         FileInfo file,
-        string rootFolder)
-    {
-        var metadata = PhotoMetadataReader.ReadAll(file.FullName);
-        return new PhotoRecord(
-            file.FullName,
-            rootFolder,
-            file.Name,
-            file.Extension,
-            file.Length,
-            file.LastWriteTimeUtc.Ticks,
-            metadata.Rating,
-            DateTime.UtcNow.Ticks,
-            metadata.TakenAt.Ticks,
-            metadata.TakenAt.Source,
-            MetadataVersion: PhotoMetadataReader.CurrentVersion,
-            metadata.Title,
-            metadata.Description,
-            metadata.Latitude,
-            metadata.Longitude);
-    }
+        string rootFolder) =>
+        PhotoIndexer.CreateRecord(file, rootFolder, DateTime.UtcNow.Ticks);
 
     private static IReadOnlyList<PhotoRecord> FilterRecordsForScope(
         IReadOnlyList<PhotoRecord> records,
