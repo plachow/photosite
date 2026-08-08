@@ -424,6 +424,8 @@ public partial class MainWindow
                 "Different sliders must be separate undo steps.");
         }
 
+        ValidateLayerEditingForSmokeTest(photo);
+
         photo.DiscardEditorSession();
         viewModel.ShowManagerCommand.Execute(null);
         content.UpdateLayout();
@@ -437,6 +439,7 @@ public partial class MainWindow
     private void OnEditorModeChanged()
     {
         AttachEditorTarget(viewModel.SelectedPhoto);
+        RefreshLayerList();
         if (viewModel.IsEditorMode)
         {
             UpdateHistogram();
@@ -445,8 +448,10 @@ public partial class MainWindow
         {
             PreviewViewer.IsColorPickerMode = false;
             PreviewViewer.ComparisonMode = PreviewComparisonMode.Edited;
+            SetAnnotationTool(AnnotationTool.None);
             EyedropperButton.IsChecked = false;
             BeforeAfterButton.IsChecked = false;
+            SplitCompareButton.IsChecked = false;
         }
     }
 }

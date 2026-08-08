@@ -81,6 +81,7 @@ public partial class MainWindow : Window
         BuildLabelFilters();
         BuildLabelPicker();
         InitializeEditorPanel();
+        InitializeAnnotationTools();
         layoutSaveTimer = new DispatcherTimer
         {
             Interval = TimeSpan.FromMilliseconds(350)
@@ -2349,6 +2350,21 @@ public partial class MainWindow : Window
         }
 
         if (viewModel.IsEditorMode
+            && eventArgs.Key == Key.Delete
+            && Keyboard.Modifiers == ModifierKeys.None
+            && PreviewViewer.TryDeleteSelectedLayer())
+        {
+            eventArgs.Handled = true;
+            return;
+        }
+
+        if (TryHandleAnnotationShortcut(eventArgs.Key))
+        {
+            eventArgs.Handled = true;
+            return;
+        }
+
+        if (viewModel.IsEditorMode
             && eventArgs.Key == Key.B
             && Keyboard.Modifiers == ModifierKeys.None)
         {
@@ -2552,6 +2568,24 @@ public partial class MainWindow : Window
         if (Keyboard.Modifiers == ModifierKeys.None
             && TryHandleViewerShortcut(eventArgs.Key))
         {
+            eventArgs.Handled = true;
+            return;
+        }
+
+        if (Keyboard.Modifiers == ModifierKeys.None
+            && eventArgs.Key == Key.R
+            && viewModel.SelectedPhoto is { } photoToRotate)
+        {
+            photoToRotate.RotateRightCommand.Execute(null);
+            eventArgs.Handled = true;
+            return;
+        }
+
+        if (Keyboard.Modifiers == ModifierKeys.None
+            && eventArgs.Key == Key.F
+            && viewModel.ToggleFullscreenCommand.CanExecute(null))
+        {
+            viewModel.ToggleFullscreenCommand.Execute(null);
             eventArgs.Handled = true;
             return;
         }

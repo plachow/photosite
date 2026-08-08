@@ -21,7 +21,7 @@ public enum PreviewComparisonMode
     Split
 }
 
-public sealed class PhotoViewer : FrameworkElement
+public sealed partial class PhotoViewer : FrameworkElement
 {
     private const double TransitionDurationMilliseconds = 60;
     private const double ZoomStep = 1.18;
@@ -451,11 +451,13 @@ public sealed class PhotoViewer : FrameworkElement
                 bitmap,
                 bitmapRecipe,
                 easedProgress);
+            DrawLayers(drawingContext);
             DrawSelection(drawingContext);
             return;
         }
 
         DrawComparison(drawingContext);
+        DrawLayers(drawingContext);
         DrawSelection(drawingContext);
     }
 
@@ -727,6 +729,12 @@ public sealed class PhotoViewer : FrameworkElement
             return;
         }
 
+        if (TryBeginLayerInteraction(e.GetPosition(this)))
+        {
+            e.Handled = true;
+            return;
+        }
+
         if (IsSelectionMode
             && (Keyboard.Modifiers & ModifierKeys.Control) == 0
             && !Keyboard.IsKeyDown(Key.Space))
@@ -780,6 +788,12 @@ public sealed class PhotoViewer : FrameworkElement
     {
         base.OnMouseMove(e);
         var current = e.GetPosition(this);
+        if (TryUpdateLayerInteraction(current))
+        {
+            e.Handled = true;
+            return;
+        }
+
         if (selectionOperation != SelectionOperation.None)
         {
             UpdateSelectionDrag(current);
@@ -801,6 +815,7 @@ public sealed class PhotoViewer : FrameworkElement
     protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e)
     {
         base.OnMouseLeftButtonUp(e);
+        FinishLayerInteraction();
         if (selectionOperation != SelectionOperation.None)
         {
             FinishSelectionDrag();

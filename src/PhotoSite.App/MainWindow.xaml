@@ -1879,6 +1879,118 @@
                 </StackPanel>
               </ScrollViewer>
             </TabItem>
+
+            <TabItem Header="Layers">
+              <Grid Margin="8,8,8,10">
+                <Grid.RowDefinitions>
+                  <RowDefinition Height="Auto" />
+                  <RowDefinition Height="Auto" />
+                  <RowDefinition Height="*" />
+                  <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <StackPanel>
+                  <TextBlock Style="{StaticResource SectionHeaderStyle}"
+                             Text="TOOLS" />
+                  <WrapPanel x:Name="AnnotationToolPanel" Margin="0,0,0,10" />
+                </StackPanel>
+
+                <StackPanel Grid.Row="1" Margin="0,0,0,10">
+                  <TextBlock Style="{StaticResource SectionHeaderStyle}"
+                             Text="APPEARANCE" />
+                  <StackPanel x:Name="AnnotationColorPanel"
+                              Margin="0,0,0,6"
+                              Orientation="Horizontal" />
+                  <controls:AdjustmentSlider x:Name="StrokeWidthSlider"
+                                             Label="Stroke"
+                                             Minimum="1"
+                                             Maximum="30"
+                                             DefaultValue="4"
+                                             ValueFormat="0" />
+                  <controls:AdjustmentSlider x:Name="LayerOpacitySlider"
+                                             Label="Opacity"
+                                             Minimum="5"
+                                             Maximum="100"
+                                             DefaultValue="100"
+                                             ValueFormat="0" />
+                  <controls:AdjustmentSlider x:Name="FontSizeSlider"
+                                             Label="Font size"
+                                             Minimum="1"
+                                             Maximum="25"
+                                             DefaultValue="5"
+                                             ValueFormat="0" />
+                  <StackPanel Margin="0,4,0,0" Orientation="Horizontal">
+                    <CheckBox x:Name="FillShapeBox"
+                              Content="Fill"
+                              Click="OnLayerAppearanceChanged" />
+                    <CheckBox x:Name="TextBackgroundBox"
+                              Margin="12,0,0,0"
+                              Content="Text plate"
+                              Click="OnLayerAppearanceChanged" />
+                  </StackPanel>
+                  <TextBox x:Name="LayerTextBox"
+                           Margin="0,6,0,0"
+                           AutomationProperties.Name="Text of the selected layer"
+                           TextChanged="OnLayerTextChanged"
+                           ToolTip="Text of the selected text layer" />
+                </StackPanel>
+
+                <Grid Grid.Row="2">
+                  <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                  </Grid.RowDefinitions>
+                  <TextBlock Style="{StaticResource SectionHeaderStyle}"
+                             Text="LAYERS" />
+                  <ListBox x:Name="LayerList"
+                           Grid.Row="1"
+                           ItemContainerStyle="{StaticResource PanelListBoxItemStyle}"
+                           SelectionChanged="OnLayerListSelectionChanged">
+                    <ListBox.ItemTemplate>
+                      <DataTemplate>
+                        <Grid>
+                          <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                          </Grid.ColumnDefinitions>
+                          <CheckBox VerticalAlignment="Center"
+                                    AutomationProperties.Name="Layer visible"
+                                    IsChecked="{Binding IsVisible, Mode=OneWay}"
+                                    Tag="{Binding Id}"
+                                    Click="OnLayerVisibilityClick" />
+                          <TextBlock Grid.Column="1"
+                                     Margin="6,0,0,0"
+                                     VerticalAlignment="Center"
+                                     FontSize="12"
+                                     Text="{Binding Name}"
+                                     TextTrimming="CharacterEllipsis" />
+                        </Grid>
+                      </DataTemplate>
+                    </ListBox.ItemTemplate>
+                  </ListBox>
+                </Grid>
+
+                <WrapPanel Grid.Row="3" Margin="0,8,0,0">
+                  <Button Margin="0,0,4,0"
+                          Padding="9,4"
+                          Content="Up"
+                          Click="OnLayerMoveUpClick"
+                          ToolTip="Bring the layer forward" />
+                  <Button Margin="0,0,4,0"
+                          Padding="9,4"
+                          Content="Down"
+                          Click="OnLayerMoveDownClick"
+                          ToolTip="Send the layer back" />
+                  <Button Margin="0,0,4,0"
+                          Padding="9,4"
+                          Content="Duplicate"
+                          Click="OnLayerDuplicateClick" />
+                  <Button Padding="9,4"
+                          Content="Delete"
+                          Click="OnLayerDeleteClick" />
+                </WrapPanel>
+              </Grid>
+            </TabItem>
           </TabControl>
         </Grid>
       </Border>
