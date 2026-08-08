@@ -11,7 +11,7 @@ public sealed class ImageSaveService
     private static readonly HashSet<string> WritableExtensions =
         new(StringComparer.OrdinalIgnoreCase)
         {
-            ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp"
+            ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp"
         };
 
     private readonly PreviewService previews;
@@ -21,6 +21,10 @@ public sealed class ImageSaveService
         this.previews = previews;
     }
 
+    /// <summary>
+    /// A RAW file is never written back over: PhotoSite renders it, and the
+    /// render is not a RAW.
+    /// </summary>
     public bool CanOverwrite(string path) =>
         WritableExtensions.Contains(Path.GetExtension(path));
 
@@ -99,6 +103,11 @@ public sealed class ImageSaveService
         }
     }
 
+    /// <summary>
+    /// Delegates to the shared encoder so Save As, Export and a batch run all
+    /// write files exactly the same way, including the atomic replace and the
+    /// reset orientation tag.
+    /// </summary>
     private static void WriteAtomically(
         BitmapSource image,
         string? sourcePath,
@@ -107,152 +116,18 @@ public sealed class ImageSaveService
         int jpegQuality,
         CancellationToken cancellationToken)
     {
-        var extension = Path.GetExtension(destinationPath);
-        var directory = Path.GetDirectoryName(destinationPath)
-            ?? throw new InvalidOperationException(
-                "The destination folder is unavailable.");
-        Directory.CreateDirectory(directory);
-        var temporaryPath = Path.Combine(
-            directory,
-            $".{Path.GetFileName(destinationPath)}.{Guid.NewGuid():N}.tmp");
-        try
+        if (!overwrite && File.Exists(destinationPath))
         {
-            try
-            {
-                WriteEncodedFile(
-                    temporaryPath,
-                    CreateEncoder(extension, jpegQuality),
-                    CreateFrameWithMetadata(
-                        image,
-                        sourcePath,
-                        destinationPath));
-            }
-            catch (NotSupportedException)
-            {
-                if (File.Exists(temporaryPath))
-                {
-                    File.Delete(temporaryPath);
-                }
-
-                WriteEncodedFile(
-                    temporaryPath,
-                    CreateEncoder(extension, jpegQuality),
-                    BitmapFrame.Create(image));
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-            if (overwrite && File.Exists(destinationPath))
-            {
-                File.Replace(temporaryPath, destinationPath, null);
-            }
-            else
-            {
-                File.Move(temporaryPath, destinationPath);
-            }
-        }
-        finally
-        {
-            if (File.Exists(temporaryPath))
-            {
-                File.Delete(temporaryPath);
-            }
-        }
-    }
-
-    private static void WriteEncodedFile(
-        string path,
-        BitmapEncoder encoder,
-        BitmapFrame frame)
-    {
-        encoder.Frames.Add(frame);
-        using var stream = new FileStream(
-            path,
-            FileMode.CreateNew,
-            FileAccess.Write,
-            FileShare.None,
-            128 * 1024,
-            FileOptions.WriteThrough);
-        encoder.Save(stream);
-        stream.Flush(flushToDisk: true);
-    }
-
-    private static BitmapEncoder CreateEncoder(
-        string extension,
-        int jpegQuality) =>
-        extension.ToLowerInvariant() switch
-        {
-            ".jpg" or ".jpeg" => new JpegBitmapEncoder
-            {
-                QualityLevel = Math.Clamp(jpegQuality, 1, 100)
-            },
-            ".png" => new PngBitmapEncoder(),
-            ".tif" or ".tiff" => new TiffBitmapEncoder
-            {
-                Compression = TiffCompressOption.Zip
-            },
-            ".bmp" => new BmpBitmapEncoder(),
-            _ => throw new NotSupportedException(
-                $"Saving {extension} files is not supported yet.")
-        };
-
-    private static BitmapFrame CreateFrameWithMetadata(
-        BitmapSource image,
-        string? sourcePath,
-        string destinationPath)
-    {
-        if (string.IsNullOrWhiteSpace(sourcePath)
-            || !File.Exists(sourcePath)
-            || !string.Equals(
-                Path.GetExtension(sourcePath),
-                Path.GetExtension(destinationPath),
-                StringComparison.OrdinalIgnoreCase))
-        {
-            return BitmapFrame.Create(image);
+            throw new IOException(
+                $"The destination file already exists: {destinationPath}");
         }
 
-        try
-        {
-            using var stream = new FileStream(
-                sourcePath,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.ReadWrite | FileShare.Delete);
-            var decoder = BitmapDecoder.Create(
-                stream,
-                BitmapCreateOptions.PreservePixelFormat,
-                BitmapCacheOption.OnLoad);
-            var sourceFrame = decoder.Frames[0];
-            var metadata = sourceFrame.Metadata is BitmapMetadata sourceMetadata
-                ? sourceMetadata.Clone() as BitmapMetadata
-                : null;
-            if (metadata is not null && !metadata.IsReadOnly)
-            {
-                TrySetOrientation(metadata, "/app1/ifd/{ushort=274}");
-                TrySetOrientation(metadata, "/ifd/{ushort=274}");
-            }
-
-            return BitmapFrame.Create(
-                image,
-                null,
-                metadata,
-                sourceFrame.ColorContexts);
-        }
-        catch
-        {
-            return BitmapFrame.Create(image);
-        }
-    }
-
-    private static void TrySetOrientation(
-        BitmapMetadata metadata,
-        string query)
-    {
-        try
-        {
-            metadata.SetQuery(query, (ushort)1);
-        }
-        catch
-        {
-        }
+        ImageEncoder.Write(
+            image,
+            destinationPath,
+            ImageEncoder.FromExtension(Path.GetExtension(destinationPath)),
+            jpegQuality,
+            sourcePath,
+            cancellationToken);
     }
 }

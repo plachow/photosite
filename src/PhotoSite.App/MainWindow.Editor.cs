@@ -384,6 +384,33 @@ public partial class MainWindow
                 "The editor panel must follow the edited photo.");
         }
 
+        // A templated control whose default style is not found renders as an
+        // empty box, which no binding assertion would ever notice.
+        var slider = FindChild<AdjustmentSlider>(EditorPanel)
+            ?? throw new InvalidOperationException(
+                "The adjustment panel did not create its sliders.");
+        slider.ApplyTemplate();
+        if (slider.Template is null
+            || System.Windows.Media.VisualTreeHelper.GetChildrenCount(slider) == 0)
+        {
+            throw new InvalidOperationException(
+                "AdjustmentSlider did not pick up its default template from "
+                + "Generic.xaml.");
+        }
+
+        var textBox = FindChild<TextBox>(EditorPanel);
+        if (textBox is not null
+            && (textBox.Background is not System.Windows.Media.SolidColorBrush
+                {
+                    Color: var fieldColor
+                }
+                || fieldColor != System.Windows.Media.Color.FromRgb(0x11, 0x13, 0x18)))
+        {
+            throw new InvalidOperationException(
+                "The shared control theme was not merged into the application "
+                + "resources.");
+        }
+
         photo.BeginEditorSession();
         var adjustments = photo.Adjustments;
         adjustments.Exposure = 0.5;
@@ -440,6 +467,7 @@ public partial class MainWindow
     {
         AttachEditorTarget(viewModel.SelectedPhoto);
         RefreshLayerList();
+        SyncCropRatioButtons();
         if (viewModel.IsEditorMode)
         {
             UpdateHistogram();

@@ -601,7 +601,9 @@
         </Grid.RowDefinitions>
         <Border Background="#0C0E12" ClipToBounds="True">
           <controls:ThumbnailPresenter SourcePath="{Binding Path}"
-                                       Stretch="UniformToFill" />
+                                       Stretch="UniformToFill"
+                                       TileWidth="{Binding DataContext.ThumbnailSize,
+                                                           RelativeSource={RelativeSource AncestorType=ListBox}}" />
         </Border>
         <Border Margin="5"
                 Padding="5,1"
@@ -2159,7 +2161,7 @@
         <TextBlock Grid.Column="8"
                    VerticalAlignment="Center"
                    Foreground="#9299A7"
-                   Text="Wheel / arrows: navigate · Ctrl+wheel: zoom · 1–5: rating"
+                   Text="1–5 rate · 6–9 label · P pick · X reject · Ctrl+B batch · Ctrl+K compare · Enter edits"
                    TextTrimming="CharacterEllipsis" />
       </Grid>
     </Border>

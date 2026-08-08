@@ -6,12 +6,9 @@ namespace PhotoSite.Controls;
 
 public sealed class ThumbnailPresenter : Image
 {
-    private const int ThumbnailWidth = 360;
-    private const int ThumbnailHeight = 240;
-
-    // Roughly 345 KB per decoded frame; a few viewports' worth is what lets a
-    // regenerated tile paint without an async round-trip through the pool.
-    private const int MaxCachedBitmaps = 192;
+    // A few viewports' worth of decoded frames is what lets a regenerated
+    // tile paint without an async round-trip through the pool.
+    private const int MaxCachedBitmaps = 144;
 
     public static readonly DependencyProperty SourcePathProperty =
         DependencyProperty.Register(
@@ -19,6 +16,13 @@ public sealed class ThumbnailPresenter : Image
             typeof(string),
             typeof(ThumbnailPresenter),
             new PropertyMetadata(null, OnSourcePathChanged));
+
+    public static readonly DependencyProperty TileWidthProperty =
+        DependencyProperty.Register(
+            nameof(TileWidth),
+            typeof(double),
+            typeof(ThumbnailPresenter),
+            new PropertyMetadata(204d, OnTileWidthChanged));
 
     // The cache key is the resolved thumbnail path, whose hash already covers
     // source path, length, write time and thumbnail size - an edited or
@@ -42,11 +46,57 @@ public sealed class ThumbnailPresenter : Image
         set => SetValue(SourcePathProperty, value);
     }
 
+    /// <summary>
+    /// The width of the tile this thumbnail is painted into, which decides how
+    /// much of the photograph is worth decoding.
+    /// </summary>
+    public double TileWidth
+    {
+        get => (double)GetValue(TileWidthProperty);
+        set => SetValue(TileWidthProperty, value);
+    }
+
+    /// <summary>
+    /// Snaps a tile width to one of a few cache sizes.
+    /// </summary>
+    /// <remarks>
+    /// Caching per exact pixel width would regenerate every thumbnail on the
+    /// disk each time the size slider moved. Buckets mean the gallery keeps a
+    /// crisp thumbnail at any size while only ever writing four variants, and
+    /// small tiles still decode small.
+    /// </remarks>
+    internal static (int Width, int Height) ResolveThumbnailSize(double tileWidth) =>
+        tileWidth switch
+        {
+            <= 160 => (240, 160),
+            <= 240 => (360, 240),
+            <= 340 => (480, 320),
+            _ => (640, 428)
+        };
+
     private static void OnSourcePathChanged(
         DependencyObject dependencyObject,
         DependencyPropertyChangedEventArgs eventArgs)
     {
         if (dependencyObject is ThumbnailPresenter presenter && presenter.IsLoaded)
+        {
+            presenter.BeginLoad();
+        }
+    }
+
+    private static void OnTileWidthChanged(
+        DependencyObject dependencyObject,
+        DependencyPropertyChangedEventArgs eventArgs)
+    {
+        if (dependencyObject is not ThumbnailPresenter presenter
+            || !presenter.IsLoaded)
+        {
+            return;
+        }
+
+        // Only a change that crosses a bucket boundary is worth a reload.
+        if (ResolveThumbnailSize((double)eventArgs.OldValue)
+            != ResolveThumbnailSize((double)eventArgs.NewValue))
         {
             presenter.BeginLoad();
         }
@@ -76,12 +126,14 @@ public sealed class ThumbnailPresenter : Image
             return;
         }
 
+        var (thumbnailWidth, thumbnailHeight) = ResolveThumbnailSize(TileWidth);
+
         try
         {
             if (App.Services.Thumbnails.TryGetCached(
                     path,
-                    ThumbnailWidth,
-                    ThumbnailHeight,
+                    thumbnailWidth,
+                    thumbnailHeight,
                     out var cachedPath)
                 && TryGetCachedBitmap(cachedPath, out var cachedBitmap))
             {
@@ -93,8 +145,8 @@ public sealed class ThumbnailPresenter : Image
 
             var thumbnailPath = await App.Services.Thumbnails.GetOrCreateAsync(
                 path,
-                ThumbnailWidth,
-                ThumbnailHeight,
+                thumbnailWidth,
+                thumbnailHeight,
                 token);
             token.ThrowIfCancellationRequested();
 

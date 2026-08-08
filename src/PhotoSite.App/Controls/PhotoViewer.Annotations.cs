@@ -258,18 +258,26 @@ public sealed partial class PhotoViewer
         if (ActiveTool == AnnotationTool.Select)
         {
             var hit = HitTestLayer(position, bounds);
+            var changed = hit?.Id != SelectedLayerId;
             SelectedLayerId = hit?.Id;
-            LayerSelectionChanged?.Invoke(this, hit?.Id);
+            if (changed)
+            {
+                LayerSelectionChanged?.Invoke(this, hit?.Id);
+            }
+
             layerAtDragStart = hit;
             layerDragMode = hit is null
                 ? LayerDragMode.None
                 : ResolveDragMode(hit, position, bounds);
-            if (hit is not null)
+            InvalidateVisual();
+            if (hit is null)
             {
-                CaptureMouse();
+                // Nothing under the cursor: let the press fall through so the
+                // canvas can still be panned with the Select tool armed.
+                return false;
             }
 
-            InvalidateVisual();
+            CaptureMouse();
             return true;
         }
 
