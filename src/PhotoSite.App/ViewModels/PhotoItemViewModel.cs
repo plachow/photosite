@@ -418,6 +418,15 @@ public sealed class PhotoItemViewModel : ObservableObject
         private set => SetEditRecipe(value);
     }
 
+    /// <summary>
+    /// The editor's slider panel for this photo, created on first use so the
+    /// gallery does not build one per thumbnail.
+    /// </summary>
+    public AdjustmentsViewModel Adjustments =>
+        adjustments ??= new AdjustmentsViewModel(this);
+
+    private AdjustmentsViewModel? adjustments;
+
     public IRelayCommand RotateLeftCommand { get; }
 
     public IRelayCommand RotateRightCommand { get; }
@@ -550,7 +559,7 @@ public sealed class PhotoItemViewModel : ObservableObject
         });
     }
 
-    private void ApplyEdit(EditRecipe recipe)
+    internal void ApplyEdit(EditRecipe recipe, string? coalesceKey = null)
     {
         if (recipe == EditRecipe)
         {
@@ -559,19 +568,74 @@ public sealed class PhotoItemViewModel : ObservableObject
 
         if (isEditorSessionActive)
         {
-            undoStack.Push(EditRecipe);
-            redoStack.Clear();
+            // Dragging one slider is a single edit, not one per pixel of
+            // travel, so consecutive changes to the same control fold into
+            // the undo entry that opened them.
+            var coalesces = coalesceKey is not null
+                && coalesceKey == lastCoalesceKey
+                && DateTime.UtcNow - lastCoalesceAt < CoalesceWindow;
+            if (!coalesces)
+            {
+                undoStack.Push(EditRecipe);
+                redoStack.Clear();
+            }
+
+            lastCoalesceKey = coalesceKey;
+            lastCoalesceAt = DateTime.UtcNow;
         }
 
         SetEditRecipe(recipe, persist: !isEditorSessionActive);
     }
+
+    private static readonly TimeSpan CoalesceWindow = TimeSpan.FromSeconds(1.5);
+    private string? lastCoalesceKey;
+    private DateTime lastCoalesceAt;
+
+    /// <summary>
+    /// Replaces the photographic adjustments, keeping every other part of the
+    /// recipe. <paramref name="coalesceKey"/> names the control being dragged.
+    /// </summary>
+    public void SetAdjustments(
+        PhotoAdjustments adjustments,
+        string? coalesceKey = null) =>
+        ApplyEdit(EditRecipe with { Adjustments = adjustments }, coalesceKey);
+
+    public void SetFilters(IReadOnlyList<FilterStep> filters) =>
+        ApplyEdit(EditRecipe with { Filters = filters });
+
+    public void SetLayers(IReadOnlyList<AnnotationLayer> layers) =>
+        ApplyEdit(EditRecipe with { Layers = layers });
+
+    public void SetGeometry(
+        double straightenAngle,
+        double perspectiveVertical,
+        double perspectiveHorizontal,
+        string? coalesceKey = null) =>
+        ApplyEdit(
+            EditRecipe with
+            {
+                StraightenAngle = straightenAngle,
+                PerspectiveVertical = perspectiveVertical,
+                PerspectiveHorizontal = perspectiveHorizontal
+            },
+            coalesceKey);
+
+    public void FlipVertical() =>
+        ApplyEdit(EditRecipe with { FlipVertical = !EditRecipe.FlipVertical });
+
+    /// <summary>Clears the crop without disturbing anything else.</summary>
+    public void ResetCrop() => ApplyEdit(EditRecipe with { Crop = null });
 
     private void UndoEdit()
     {
         if (undoStack.TryPop(out var previous))
         {
             redoStack.Push(EditRecipe);
+            // The next slider move must open a new undo entry rather than
+            // folding into the one that was just undone.
+            lastCoalesceKey = null;
             SetEditRecipe(previous, persist: false);
+            adjustments?.NotifyAll();
         }
     }
 
@@ -580,7 +644,9 @@ public sealed class PhotoItemViewModel : ObservableObject
         if (redoStack.TryPop(out var next))
         {
             undoStack.Push(EditRecipe);
+            lastCoalesceKey = null;
             SetEditRecipe(next, persist: false);
+            adjustments?.NotifyAll();
         }
     }
 

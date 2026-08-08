@@ -61,6 +61,64 @@ internal static class ImageRenderer
     }
 
     /// <summary>
+    /// Produces the surface the editor canvas paints: straightening,
+    /// adjustments and filters applied, but the crop, rotation, flips and
+    /// annotation layers deliberately left out.
+    /// </summary>
+    /// <remarks>
+    /// The viewer already expresses crop and orientation as a cheap transform
+    /// it can change every frame, so baking them in here would force a full
+    /// re-render on every rotate. Keeping the surface at the full frame also
+    /// lets the crop rectangle be dragged outside the current crop.
+    /// </remarks>
+    public static BitmapSource RenderPreviewSurface(
+        BitmapSource source,
+        EditRecipe recipe,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(recipe);
+
+        if (recipe.StraightenAngle == 0
+            && recipe.PerspectiveVertical == 0
+            && recipe.PerspectiveHorizontal == 0
+            && recipe.Adjustments.IsNeutral
+            && recipe.Filters.Count == 0)
+        {
+            return source;
+        }
+
+        var buffer = PixelBuffer.FromBitmap(source);
+        if (recipe.StraightenAngle != 0
+            || recipe.PerspectiveVertical != 0
+            || recipe.PerspectiveHorizontal != 0)
+        {
+            buffer = GeometryProcessor.Warp(
+                buffer,
+                recipe.StraightenAngle,
+                recipe.PerspectiveVertical,
+                recipe.PerspectiveHorizontal,
+                cancellationToken);
+        }
+
+        if (!recipe.Adjustments.IsNeutral)
+        {
+            AdjustmentPipeline.Apply(
+                buffer,
+                recipe.Adjustments,
+                cancellationToken);
+        }
+
+        foreach (var filter in recipe.Filters)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ImageFilters.Apply(buffer, filter, cancellationToken);
+        }
+
+        return buffer.ToBitmap();
+    }
+
+    /// <summary>
     /// Renders everything except the annotation layers, which the editor draws
     /// itself so they stay live and selectable on the canvas.
     /// </summary>

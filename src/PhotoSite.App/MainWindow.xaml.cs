@@ -80,6 +80,7 @@ public partial class MainWindow : Window
         InitializeComponent();
         BuildLabelFilters();
         BuildLabelPicker();
+        InitializeEditorPanel();
         layoutSaveTimer = new DispatcherTimer
         {
             Interval = TimeSpan.FromMilliseconds(350)
@@ -2339,6 +2340,24 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (viewModel.IsEditorMode
+            && IsExportShortcut(eventArgs.Key, Keyboard.Modifiers))
+        {
+            eventArgs.Handled = true;
+            await ExportCurrentPhotoAsync();
+            return;
+        }
+
+        if (viewModel.IsEditorMode
+            && eventArgs.Key == Key.B
+            && Keyboard.Modifiers == ModifierKeys.None)
+        {
+            BeforeAfterButton.IsChecked = BeforeAfterButton.IsChecked != true;
+            OnBeforeAfterChanged(BeforeAfterButton, new RoutedEventArgs());
+            eventArgs.Handled = true;
+            return;
+        }
+
         if (!viewModel.IsEditorMode
             && !viewModel.IsFullscreenMode
             && PhotoList.IsKeyboardFocusWithin)
@@ -2704,6 +2723,11 @@ public partial class MainWindow : Window
         ModifierKeys modifiers) =>
         key == Key.U && modifiers == ModifierKeys.Control;
 
+    internal static bool IsExportShortcut(
+        Key key,
+        ModifierKeys modifiers) =>
+        key == Key.E && modifiers == ModifierKeys.Control;
+
     /// <summary>
     /// Alt+Left/Right/Up move through the folder history the way a file
     /// browser does; they are deliberately kept away from the plain arrow
@@ -2762,6 +2786,7 @@ public partial class MainWindow : Window
         if (eventArgs.PropertyName == nameof(MainViewModel.SelectedPhoto))
         {
             copySelectionCancellation?.Cancel();
+            AttachEditorTarget(viewModel.SelectedPhoto);
             return;
         }
 
@@ -2790,6 +2815,7 @@ public partial class MainWindow : Window
         }
 
         ApplyModeLayout();
+        OnEditorModeChanged();
         Dispatcher.BeginInvoke(
             () =>
             {
@@ -2928,6 +2954,17 @@ public partial class MainWindow : Window
             NavigatorSplitterColumn.Width = new GridLength(0);
             CatalogColumn.Width = new GridLength(0);
             CatalogSplitterColumn.Width = new GridLength(0);
+
+            // The adjustment panel belongs to Editor only; fullscreen is for
+            // looking at the photograph, not working on it.
+            var showsEditorPanel = viewModel.IsEditorMode
+                                   && !viewModel.IsFullscreenMode;
+            EditorPanelColumn.Width = showsEditorPanel
+                ? new GridLength(editorPanelWidth)
+                : new GridLength(0);
+            EditorSplitterColumn.Width = showsEditorPanel
+                ? new GridLength(SplitterWidth)
+                : new GridLength(0);
             PreviewViewer.FitToViewport();
             return;
         }
@@ -2938,6 +2975,8 @@ public partial class MainWindow : Window
         NavigatorSplitterColumn.Width = new GridLength(SplitterWidth);
         CatalogColumn.Width = new GridLength(catalogPaneWidth);
         CatalogSplitterColumn.Width = new GridLength(SplitterWidth);
+        EditorPanelColumn.Width = new GridLength(0);
+        EditorSplitterColumn.Width = new GridLength(0);
     }
 
     private void CapturePaneWidths(bool force = false)

@@ -2048,6 +2048,7 @@ static async Task AssertWindowClosesCleanlyAsync(
                     cataloguePhoto.FileName);
                 window.ValidateCatalogScrollResetForSmokeTest();
                 window.ValidateManagerChromeForSmokeTest();
+                window.ValidateEditorPanelForSmokeTest();
                 window.ValidatePreviewWheelNavigationForSmokeTest();
                 window.Loaded += (_, _) =>
                     window.Dispatcher.BeginInvoke(

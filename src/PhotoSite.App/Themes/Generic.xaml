@@ -1,0 +1,45 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:controls="clr-namespace:PhotoSite.Controls">
+
+  <!-- The default look of the editor's adjustment row. Lives in Generic.xaml
+       because AdjustmentSlider is a templated control. -->
+  <Style TargetType="{x:Type controls:AdjustmentSlider}">
+    <Setter Property="Margin" Value="0,1" />
+    <Setter Property="Focusable" Value="False" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="{x:Type controls:AdjustmentSlider}">
+          <Grid Background="Transparent"
+                ToolTip="Double-click the row to reset this adjustment">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="86" />
+              <ColumnDefinition Width="*" />
+              <ColumnDefinition Width="42" />
+            </Grid.ColumnDefinitions>
+            <TextBlock VerticalAlignment="Center"
+                       FontSize="12"
+                       Foreground="#C8CDD8"
+                       Text="{TemplateBinding Label}"
+                       TextTrimming="CharacterEllipsis" />
+            <Slider Grid.Column="1"
+                    VerticalAlignment="Center"
+                    AutomationProperties.Name="{TemplateBinding Label}"
+                    Maximum="{TemplateBinding Maximum}"
+                    Minimum="{TemplateBinding Minimum}"
+                    Value="{Binding Value,
+                                    Mode=TwoWay,
+                                    RelativeSource={RelativeSource TemplatedParent}}" />
+            <TextBlock Grid.Column="2"
+                       HorizontalAlignment="Right"
+                       VerticalAlignment="Center"
+                       FontSize="11"
+                       Foreground="#F2F4F8"
+                       Text="{TemplateBinding DisplayValue}" />
+          </Grid>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+</ResourceDictionary>

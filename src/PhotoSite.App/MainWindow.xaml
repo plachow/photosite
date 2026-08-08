@@ -832,7 +832,9 @@
                           Width="420"
                           MinWidth="280" />
         <ColumnDefinition x:Name="CatalogSplitterColumn" Width="5" />
-        <ColumnDefinition Width="*" />
+        <ColumnDefinition Width="*" MinWidth="320" />
+        <ColumnDefinition x:Name="EditorSplitterColumn" Width="0" />
+        <ColumnDefinition x:Name="EditorPanelColumn" Width="0" />
       </Grid.ColumnDefinitions>
 
       <Grid Grid.Column="0" Background="{StaticResource PanelBrush}">
@@ -1323,17 +1325,45 @@
                     Style="{StaticResource EditorToolButtonStyle}"
                     ToolTip="Flip horizontally"
                     Command="{Binding SelectedPhoto.FlipHorizontalCommand}" />
+            <Button AutomationProperties.Name="Flip vertically"
+                    Content="⇅"
+                    Style="{StaticResource EditorToolButtonStyle}"
+                    ToolTip="Flip vertically"
+                    Click="OnFlipVerticalClick" />
             <Button AutomationProperties.Name="Reset all edits"
                     Content="Reset edits"
                     Style="{StaticResource EditorResetButtonStyle}"
-                    ToolTip="Reset rotation, flip, and crop"
+                    ToolTip="Reset every edit on this photo"
                     Command="{Binding SelectedPhoto.ResetEditsCommand}" />
             <Separator Margin="8,2" />
+            <ToggleButton x:Name="BeforeAfterButton"
+                          AutomationProperties.Name="Compare with the original"
+                          Content="Before"
+                          Style="{StaticResource EditorSelectToggleButtonStyle}"
+                          ToolTip="Show the original (B)"
+                          Click="OnBeforeAfterChanged" />
+            <ToggleButton x:Name="SplitCompareButton"
+                          AutomationProperties.Name="Split comparison"
+                          Content="Split"
+                          Style="{StaticResource EditorSelectToggleButtonStyle}"
+                          ToolTip="Split the canvas: original left, edited right"
+                          Click="OnBeforeAfterChanged" />
+            <Separator Margin="8,2" />
+            <Button AutomationProperties.Name="Apply a filter"
+                    Content="Filters…"
+                    Style="{StaticResource EditorActionButtonStyle}"
+                    ToolTip="Sharpen, blur, pixelize, grayscale and more"
+                    Click="OnFiltersClick" />
             <Button AutomationProperties.Name="Save current image as JPEG"
                     Content="Save as…"
                     Style="{StaticResource EditorActionButtonStyle}"
                     ToolTip="Save current image as (Ctrl+Shift+S)"
                     Click="OnSaveAsClick" />
+            <Button AutomationProperties.Name="Export the current image"
+                    Content="Export…"
+                    Style="{StaticResource EditorActionButtonStyle}"
+                    ToolTip="Export with resize, format and quality (Ctrl+E)"
+                    Click="OnExportClick" />
             <Button AutomationProperties.Name="Upload current image to Imgur"
                     Content="Upload"
                     Style="{StaticResource EditorActionButtonStyle}"
@@ -1622,6 +1652,236 @@
           </Grid>
         </Border>
       </Grid>
+
+      <GridSplitter Grid.Column="5"
+                    HorizontalAlignment="Stretch"
+                    Background="#303541"
+                    DragCompleted="OnEditorSplitterDragCompleted" />
+
+      <!-- Editor panel -->
+      <Border x:Name="EditorPanel"
+              Grid.Column="6"
+              Background="{StaticResource PanelBrush}"
+              BorderBrush="#303541"
+              BorderThickness="1,0,0,0"
+              DataContext="{Binding SelectedPhoto}">
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+          </Grid.RowDefinitions>
+
+          <StackPanel Margin="10,10,10,6">
+            <Grid>
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+              </Grid.ColumnDefinitions>
+              <TextBlock Style="{StaticResource SectionHeaderStyle}"
+                         Text="HISTOGRAM" />
+              <ComboBox x:Name="HistogramChannelBox"
+                        Grid.Column="1"
+                        Width="98"
+                        Height="22"
+                        Margin="0,0,0,4"
+                        Padding="6,0"
+                        AutomationProperties.Name="Histogram channel"
+                        SelectionChanged="OnHistogramChannelChanged" />
+            </Grid>
+            <controls:HistogramView x:Name="Histogram" Height="96" />
+            <TextBlock x:Name="ClippingText"
+                       Margin="0,4,0,0"
+                       FontSize="11"
+                       Foreground="#9299A7"
+                       TextWrapping="Wrap" />
+          </StackPanel>
+
+          <TabControl Grid.Row="1" Margin="4,4,4,0">
+            <TabItem Header="Light">
+              <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <StackPanel Margin="8,8,10,12">
+                  <StackPanel Margin="0,0,0,8" Orientation="Horizontal">
+                    <Button MinWidth="78"
+                            Margin="0,0,4,0"
+                            Padding="8,4"
+                            AutomationProperties.Name="Auto fix"
+                            Command="{Binding Adjustments.AutoFixCommand}"
+                            Content="Auto Fix"
+                            ToolTip="Analyse this photo and apply a conservative correction" />
+                    <Button MinWidth="60"
+                            Margin="0,0,4,0"
+                            Padding="8,4"
+                            AutomationProperties.Name="Auto white balance"
+                            Command="{Binding Adjustments.AutoWhiteBalanceCommand}"
+                            Content="Auto WB"
+                            ToolTip="Neutralize the colour cast" />
+                    <ToggleButton x:Name="EyedropperButton"
+                                  MinWidth="34"
+                                  Height="27"
+                                  Padding="6,0"
+                                  AutomationProperties.Name="White balance eyedropper"
+                                  Content="⌖"
+                                  FontFamily="Segoe UI Symbol"
+                                  Style="{StaticResource EditorSelectToggleButtonStyle}"
+                                  ToolTip="Click a neutral grey area in the photo" />
+                  </StackPanel>
+
+                  <controls:AdjustmentSlider Label="Exposure"
+                                             Minimum="-4"
+                                             Maximum="4"
+                                             ValueFormat="0.00"
+                                             Value="{Binding Adjustments.Exposure, Mode=TwoWay}" />
+                  <controls:AdjustmentSlider Label="Contrast"
+                                             Value="{Binding Adjustments.Contrast, Mode=TwoWay}" />
+                  <controls:AdjustmentSlider Label="Highlights"
+                                             Value="{Binding Adjustments.Highlights, Mode=TwoWay}" />
+                  <controls:AdjustmentSlider Label="Shadows"
+                                             Value="{Binding Adjustments.Shadows, Mode=TwoWay}" />
+                  <controls:AdjustmentSlider Label="Whites"
+                                             Value="{Binding Adjustments.Whites, Mode=TwoWay}" />
+                  <controls:AdjustmentSlider Label="Blacks"
+                                             Value="{Binding Adjustments.Blacks, Mode=TwoWay}" />
+                  <controls:AdjustmentSlider Label="Brightness"
+                                             Value="{Binding Adjustments.Brightness, Mode=TwoWay}" />
+                  <controls:AdjustmentSlider Label="Clarity"
+                                             Value="{Binding Adjustments.Clarity, Mode=TwoWay}" />
+
+                  <TextBlock Margin="0,12,0,4"
+                             Style="{StaticResource SectionHeaderStyle}"
+                             Text="COLOUR" />
+                  <controls:AdjustmentSlider Label="Temperature"
+                                             Value="{Binding Adjustments.Temperature, Mode=TwoWay}" />
+                  <controls:AdjustmentSlider Label="Tint"
+                                             Value="{Binding Adjustments.Tint, Mode=TwoWay}" />
+                  <controls:AdjustmentSlider Label="Vibrance"
+                                             Value="{Binding Adjustments.Vibrance, Mode=TwoWay}" />
+                  <controls:AdjustmentSlider Label="Saturation"
+                                             Value="{Binding Adjustments.Saturation, Mode=TwoWay}" />
+
+                  <TextBlock Margin="0,12,0,4"
+                             Style="{StaticResource SectionHeaderStyle}"
+                             Text="LEVELS" />
+                  <controls:AdjustmentSlider Label="Black point"
+                                             Minimum="0"
+                                             Maximum="254"
+                                             Value="{Binding Adjustments.BlackPoint, Mode=TwoWay}" />
+                  <controls:AdjustmentSlider Label="Midpoint"
+                                             Minimum="0.2"
+                                             Maximum="3"
+                                             DefaultValue="1"
+                                             ValueFormat="0.00"
+                                             Value="{Binding Adjustments.MidPoint, Mode=TwoWay}" />
+                  <controls:AdjustmentSlider Label="White point"
+                                             Minimum="1"
+                                             Maximum="255"
+                                             DefaultValue="255"
+                                             Value="{Binding Adjustments.WhitePoint, Mode=TwoWay}" />
+                  <controls:AdjustmentSlider Label="Gamma"
+                                             Minimum="0.2"
+                                             Maximum="3"
+                                             DefaultValue="1"
+                                             ValueFormat="0.00"
+                                             Value="{Binding Adjustments.Gamma, Mode=TwoWay}" />
+
+                  <Button Margin="0,12,0,0"
+                          HorizontalAlignment="Right"
+                          Command="{Binding Adjustments.ResetToneCommand}"
+                          Content="Reset light and colour" />
+                </StackPanel>
+              </ScrollViewer>
+            </TabItem>
+
+            <TabItem Header="Detail">
+              <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <StackPanel Margin="8,8,10,12">
+                  <TextBlock Style="{StaticResource SectionHeaderStyle}"
+                             Text="SHARPENING" />
+                  <controls:AdjustmentSlider Label="Amount"
+                                             Minimum="0"
+                                             Maximum="200"
+                                             Value="{Binding Adjustments.SharpenAmount, Mode=TwoWay}" />
+                  <controls:AdjustmentSlider Label="Radius"
+                                             Minimum="0.3"
+                                             Maximum="6"
+                                             DefaultValue="1"
+                                             ValueFormat="0.0"
+                                             Value="{Binding Adjustments.SharpenRadius, Mode=TwoWay}" />
+                  <controls:AdjustmentSlider Label="Threshold"
+                                             Minimum="0"
+                                             Maximum="60"
+                                             Value="{Binding Adjustments.SharpenThreshold, Mode=TwoWay}" />
+
+                  <TextBlock Margin="0,12,0,4"
+                             Style="{StaticResource SectionHeaderStyle}"
+                             Text="NOISE REDUCTION" />
+                  <controls:AdjustmentSlider Label="Luminance"
+                                             Minimum="0"
+                                             Maximum="100"
+                                             Value="{Binding Adjustments.LuminanceNoiseReduction, Mode=TwoWay}" />
+                  <controls:AdjustmentSlider Label="Colour"
+                                             Minimum="0"
+                                             Maximum="100"
+                                             Value="{Binding Adjustments.ColorNoiseReduction, Mode=TwoWay}" />
+
+                  <TextBlock Margin="0,12,0,4"
+                             Style="{StaticResource SectionHeaderStyle}"
+                             Text="LENS AND VIGNETTE" />
+                  <controls:AdjustmentSlider Label="Vignette"
+                                             Value="{Binding Adjustments.Vignette, Mode=TwoWay}" />
+                  <controls:AdjustmentSlider Label="Devignette"
+                                             Minimum="0"
+                                             Maximum="100"
+                                             Value="{Binding Adjustments.LensVignetting, Mode=TwoWay}" />
+                  <controls:AdjustmentSlider Label="Distortion"
+                                             Value="{Binding Adjustments.LensDistortion, Mode=TwoWay}" />
+                  <controls:AdjustmentSlider Label="Fringing"
+                                             Value="{Binding Adjustments.ChromaticAberration, Mode=TwoWay}" />
+
+                  <Button Margin="0,12,0,0"
+                          HorizontalAlignment="Right"
+                          Command="{Binding Adjustments.ResetDetailCommand}"
+                          Content="Reset detail" />
+                </StackPanel>
+              </ScrollViewer>
+            </TabItem>
+
+            <TabItem Header="Geometry">
+              <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <StackPanel Margin="8,8,10,12">
+                  <TextBlock Style="{StaticResource SectionHeaderStyle}"
+                             Text="STRAIGHTEN" />
+                  <controls:AdjustmentSlider Label="Angle"
+                                             Minimum="-45"
+                                             Maximum="45"
+                                             ValueFormat="0.0"
+                                             Value="{Binding Adjustments.StraightenAngle, Mode=TwoWay}" />
+                  <TextBlock Margin="0,12,0,4"
+                             Style="{StaticResource SectionHeaderStyle}"
+                             Text="PERSPECTIVE" />
+                  <controls:AdjustmentSlider Label="Vertical"
+                                             Value="{Binding Adjustments.PerspectiveVertical, Mode=TwoWay}" />
+                  <controls:AdjustmentSlider Label="Horizontal"
+                                             Value="{Binding Adjustments.PerspectiveHorizontal, Mode=TwoWay}" />
+                  <TextBlock Margin="0,10,0,0"
+                             FontSize="11"
+                             Foreground="#79808D"
+                             Text="Straightening and keystone correction scale the frame up just enough that no empty corner is left behind."
+                             TextWrapping="Wrap" />
+
+                  <TextBlock Margin="0,14,0,4"
+                             Style="{StaticResource SectionHeaderStyle}"
+                             Text="CROP" />
+                  <StackPanel x:Name="CropRatioPanel" />
+                  <Button Margin="0,8,0,0"
+                          HorizontalAlignment="Right"
+                          Content="Clear crop"
+                          Click="OnClearCropClick" />
+                </StackPanel>
+              </ScrollViewer>
+            </TabItem>
+          </TabControl>
+        </Grid>
+      </Border>
     </Grid>
 
     <Border Grid.Row="2"

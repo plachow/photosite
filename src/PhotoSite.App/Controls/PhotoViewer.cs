@@ -9,6 +9,18 @@ using PhotoSite.Services.Imaging;
 
 namespace PhotoSite.Controls;
 
+public enum PreviewComparisonMode
+{
+    /// <summary>The photograph as edited - the normal editor view.</summary>
+    Edited,
+
+    /// <summary>The decoded original, for a straight before/after toggle.</summary>
+    Original,
+
+    /// <summary>Original on the left, edited on the right.</summary>
+    Split
+}
+
 public sealed class PhotoViewer : FrameworkElement
 {
     private const double TransitionDurationMilliseconds = 60;
@@ -98,6 +110,29 @@ public sealed class PhotoViewer : FrameworkElement
                 FrameworkPropertyMetadataOptions.AffectsRender,
                 OnSelectionModeChanged));
 
+    public static readonly DependencyProperty IsColorPickerModeProperty =
+        DependencyProperty.Register(
+            nameof(IsColorPickerMode),
+            typeof(bool),
+            typeof(PhotoViewer),
+            new FrameworkPropertyMetadata(false, OnColorPickerModeChanged));
+
+    public static readonly DependencyProperty ComparisonModeProperty =
+        DependencyProperty.Register(
+            nameof(ComparisonMode),
+            typeof(PreviewComparisonMode),
+            typeof(PhotoViewer),
+            new FrameworkPropertyMetadata(
+                PreviewComparisonMode.Edited,
+                FrameworkPropertyMetadataOptions.AffectsRender));
+
+    public static readonly DependencyProperty SelectionAspectRatioProperty =
+        DependencyProperty.Register(
+            nameof(SelectionAspectRatio),
+            typeof(double),
+            typeof(PhotoViewer),
+            new FrameworkPropertyMetadata(0d, OnSelectionAspectRatioChanged));
+
     private static readonly DependencyPropertyKey HasSelectionPropertyKey =
         DependencyProperty.RegisterReadOnly(
             nameof(HasSelection),
@@ -109,8 +144,12 @@ public sealed class PhotoViewer : FrameworkElement
         HasSelectionPropertyKey.DependencyProperty;
 
     private BitmapSource? bitmap;
+    private BitmapSource? rawBitmap;
     private BitmapSource? previousBitmap;
     private CancellationTokenSource? loadCancellation;
+    private CancellationTokenSource? adjustmentCancellation;
+    private EditRecipe? renderedPixelRecipe;
+    private readonly System.Windows.Threading.DispatcherTimer adjustmentTimer;
     private EditRecipe bitmapRecipe = EditRecipe.Empty;
     private EditRecipe previousBitmapRecipe = EditRecipe.Empty;
     private string? bitmapPath;
@@ -145,10 +184,23 @@ public sealed class PhotoViewer : FrameworkElement
     {
         Focusable = true;
         ClipToBounds = true;
+        // Dragging a slider changes the recipe far faster than a full-frame
+        // render can keep up with, so renders are coalesced rather than
+        // queued: the canvas stays responsive and only the last value counts.
+        adjustmentTimer = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(70)
+        };
+        adjustmentTimer.Tick += (_, _) =>
+        {
+            adjustmentTimer.Stop();
+            BeginAdjustmentRender();
+        };
         Loaded += (_, _) => BeginLoad();
         Unloaded += (_, _) =>
         {
             CancelLoad();
+            CancelAdjustmentRender();
             StopTransition();
         };
         SizeChanged += (_, _) =>
@@ -222,6 +274,46 @@ public sealed class PhotoViewer : FrameworkElement
     {
         get => (bool)GetValue(IsSelectionModeProperty);
         set => SetValue(IsSelectionModeProperty, value);
+    }
+
+    /// <summary>
+    /// While active the next click samples a colour instead of panning, which
+    /// is how the white balance eyedropper is armed.
+    /// </summary>
+    public bool IsColorPickerMode
+    {
+        get => (bool)GetValue(IsColorPickerModeProperty);
+        set => SetValue(IsColorPickerModeProperty, value);
+    }
+
+    public PreviewComparisonMode ComparisonMode
+    {
+        get => (PreviewComparisonMode)GetValue(ComparisonModeProperty);
+        set => SetValue(ComparisonModeProperty, value);
+    }
+
+    /// <summary>Raised with the averaged colour the eyedropper sampled.</summary>
+    public event EventHandler<(double Red, double Green, double Blue)>?
+        PreviewColorPicked;
+
+    private static void OnColorPickerModeChanged(
+        DependencyObject dependencyObject,
+        DependencyPropertyChangedEventArgs eventArgs)
+    {
+        var viewer = (PhotoViewer)dependencyObject;
+        viewer.Cursor = (bool)eventArgs.NewValue
+            ? Cursors.Cross
+            : Cursors.Arrow;
+    }
+
+    /// <summary>
+    /// Width divided by height of the crop, measured as the user sees it.
+    /// Zero means a free selection. Use -1 for "the photo's own ratio".
+    /// </summary>
+    public double SelectionAspectRatio
+    {
+        get => (double)GetValue(SelectionAspectRatioProperty);
+        set => SetValue(SelectionAspectRatioProperty, value);
     }
 
     public bool HasSelection => (bool)GetValue(HasSelectionProperty);
@@ -363,8 +455,83 @@ public sealed class PhotoViewer : FrameworkElement
             return;
         }
 
-        DrawBitmap(drawingContext, bitmap, bitmapRecipe, 1);
+        DrawComparison(drawingContext);
         DrawSelection(drawingContext);
+    }
+
+    /// <summary>
+    /// Paints the edited surface, the untouched original, or both split down
+    /// the middle so the two can be judged against each other in place.
+    /// </summary>
+    private void DrawComparison(DrawingContext drawingContext)
+    {
+        if (bitmap is null)
+        {
+            return;
+        }
+
+        var original = rawBitmap ?? bitmap;
+        switch (ComparisonMode)
+        {
+            case PreviewComparisonMode.Original:
+                DrawBitmap(drawingContext, original, bitmapRecipe, 1);
+                DrawComparisonBadge(drawingContext, "BEFORE", alignRight: false);
+                break;
+            case PreviewComparisonMode.Split:
+                var middle = ActualWidth / 2;
+                drawingContext.PushClip(
+                    new RectangleGeometry(new Rect(0, 0, middle, ActualHeight)));
+                DrawBitmap(drawingContext, original, bitmapRecipe, 1);
+                drawingContext.Pop();
+
+                drawingContext.PushClip(
+                    new RectangleGeometry(
+                        new Rect(middle, 0, ActualWidth - middle, ActualHeight)));
+                DrawBitmap(drawingContext, bitmap, bitmapRecipe, 1);
+                drawingContext.Pop();
+
+                drawingContext.DrawRectangle(
+                    SelectionHandleBrush,
+                    null,
+                    new Rect(middle - 0.5, 0, 1, ActualHeight));
+                DrawComparisonBadge(drawingContext, "BEFORE", alignRight: false);
+                DrawComparisonBadge(drawingContext, "AFTER", alignRight: true);
+                break;
+            default:
+                DrawBitmap(drawingContext, bitmap, bitmapRecipe, 1);
+                break;
+        }
+    }
+
+    private void DrawComparisonBadge(
+        DrawingContext drawingContext,
+        string text,
+        bool alignRight)
+    {
+        var formatted = new FormattedText(
+            text,
+            System.Globalization.CultureInfo.CurrentUICulture,
+            FlowDirection.LeftToRight,
+            new Typeface("Segoe UI"),
+            11,
+            SelectionHandleBrush,
+            VisualTreeHelper.GetDpi(this).PixelsPerDip);
+        var padding = 6d;
+        var x = alignRight
+            ? ActualWidth - formatted.Width - padding - 10
+            : 10 + padding;
+        var background = new Rect(
+            x - padding,
+            10,
+            formatted.Width + (padding * 2),
+            formatted.Height + 4);
+        drawingContext.DrawRoundedRectangle(
+            SelectionShadeBrush,
+            null,
+            background,
+            3,
+            3);
+        drawingContext.DrawText(formatted, new Point(x, 12));
     }
 
     private void DrawBitmap(
@@ -548,6 +715,18 @@ public sealed class PhotoViewer : FrameworkElement
         base.OnMouseLeftButtonDown(e);
         Focus();
 
+        if (IsColorPickerMode)
+        {
+            if (SampleOriginalColor(e.GetPosition(this)) is { } sample)
+            {
+                PreviewColorPicked?.Invoke(this, sample);
+            }
+
+            IsColorPickerMode = false;
+            e.Handled = true;
+            return;
+        }
+
         if (IsSelectionMode
             && (Keyboard.Modifiers & ModifierKeys.Control) == 0
             && !Keyboard.IsKeyDown(Key.Space))
@@ -695,7 +874,7 @@ public sealed class PhotoViewer : FrameworkElement
         var viewer = (PhotoViewer)dependencyObject;
         var displaysInMemorySource =
             viewer.SourceBitmap is { } sourceBitmap
-            && ReferenceEquals(viewer.bitmap, sourceBitmap);
+            && ReferenceEquals(viewer.rawBitmap, sourceBitmap);
         var displaysPathSource =
             viewer.SourceBitmap is null
             && !string.IsNullOrWhiteSpace(viewer.SourcePath)
@@ -706,10 +885,170 @@ public sealed class PhotoViewer : FrameworkElement
         if (displaysInMemorySource || displaysPathSource)
         {
             viewer.bitmapRecipe = (EditRecipe)eventArgs.NewValue;
+            viewer.ScheduleAdjustmentRender();
         }
 
         viewer.ConstrainPan();
         viewer.InvalidateVisual();
+    }
+
+    /// <summary>
+    /// True when the pixel work in the recipe differs from what the currently
+    /// displayed surface was rendered with. Geometry is excluded: crop,
+    /// rotation and flips are transforms the canvas applies for free.
+    /// </summary>
+    private bool NeedsAdjustmentRender()
+    {
+        if (rawBitmap is null)
+        {
+            return false;
+        }
+
+        var recipe = EditRecipe;
+        return renderedPixelRecipe is null
+               || renderedPixelRecipe.Adjustments != recipe.Adjustments
+               || !renderedPixelRecipe.Filters.SequenceEqual(recipe.Filters)
+               || renderedPixelRecipe.StraightenAngle != recipe.StraightenAngle
+               || renderedPixelRecipe.PerspectiveVertical
+                   != recipe.PerspectiveVertical
+               || renderedPixelRecipe.PerspectiveHorizontal
+                   != recipe.PerspectiveHorizontal;
+    }
+
+    private void ScheduleAdjustmentRender()
+    {
+        if (!NeedsAdjustmentRender())
+        {
+            return;
+        }
+
+        adjustmentTimer.Stop();
+        adjustmentTimer.Start();
+    }
+
+    private void CancelAdjustmentRender()
+    {
+        adjustmentTimer.Stop();
+        adjustmentCancellation?.Cancel();
+        adjustmentCancellation?.Dispose();
+        adjustmentCancellation = null;
+    }
+
+    private async void BeginAdjustmentRender()
+    {
+        if (rawBitmap is not { } source)
+        {
+            return;
+        }
+
+        adjustmentCancellation?.Cancel();
+        adjustmentCancellation?.Dispose();
+        adjustmentCancellation = new CancellationTokenSource();
+        var token = adjustmentCancellation.Token;
+        var recipe = EditRecipe;
+
+        try
+        {
+            // Explicitly marshalled: the render can complete before the
+            // dispatcher starts pumping, and a continuation on a thread-pool
+            // thread would touch the visual tree from the wrong thread.
+            var rendered = await Task.Run(
+                    () => ImageRenderer.RenderPreviewSurface(source, recipe, token),
+                    token)
+                .ConfigureAwait(false);
+            await Dispatcher.InvokeAsync(() =>
+            {
+                if (token.IsCancellationRequested
+                    || !ReferenceEquals(rawBitmap, source))
+                {
+                    return;
+                }
+
+                bitmap = rendered;
+                renderedPixelRecipe = recipe;
+                PreviewRendered?.Invoke(this, EventArgs.Empty);
+                InvalidateVisual();
+            });
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception exception)
+        {
+            await Dispatcher.InvokeAsync(() =>
+            {
+                error = $"The preview could not be rendered\n{exception.Message}";
+                InvalidateVisual();
+            });
+        }
+    }
+
+    /// <summary>Raised whenever a freshly adjusted surface is on screen.</summary>
+    public event EventHandler? PreviewRendered;
+
+    /// <summary>
+    /// The surface currently on the canvas, used by the histogram so it
+    /// measures exactly what the user is looking at.
+    /// </summary>
+    public BitmapSource? DisplayedBitmap => bitmap;
+
+    /// <summary>The decoded pixels before any adjustment, for before/after.</summary>
+    public BitmapSource? OriginalBitmap => rawBitmap;
+
+    /// <summary>
+    /// Samples the unadjusted image at a viewer point, which is what the
+    /// white-balance eyedropper needs: it must measure the original cast,
+    /// not the cast left after the correction already applied.
+    /// </summary>
+    public (double Red, double Green, double Blue)? SampleOriginalColor(
+        Point viewerPoint)
+    {
+        if (rawBitmap is not { } source
+            || !TryGetNormalizedSourcePoint(
+                viewerPoint,
+                clampToImage: true,
+                out var normalized,
+                out var isInsideImage)
+            || !isInsideImage)
+        {
+            return null;
+        }
+
+        // A small patch rather than one pixel, so sensor noise cannot decide
+        // the white balance of the whole photograph.
+        const int patch = 5;
+        var x = Math.Clamp(
+            (int)(normalized.X * source.PixelWidth) - (patch / 2),
+            0,
+            Math.Max(0, source.PixelWidth - patch));
+        var y = Math.Clamp(
+            (int)(normalized.Y * source.PixelHeight) - (patch / 2),
+            0,
+            Math.Max(0, source.PixelHeight - patch));
+        var width = Math.Min(patch, source.PixelWidth);
+        var height = Math.Min(patch, source.PixelHeight);
+
+        var converted = source.Format == PixelFormats.Bgra32
+            ? source
+            : new FormatConvertedBitmap(source, PixelFormats.Bgra32, null, 0);
+        var stride = width * 4;
+        var pixels = new byte[stride * height];
+        converted.CopyPixels(
+            new Int32Rect(x, y, width, height),
+            pixels,
+            stride,
+            0);
+
+        double red = 0, green = 0, blue = 0;
+        var count = width * height;
+        for (var index = 0; index < pixels.Length; index += 4)
+        {
+            blue += pixels[index];
+            green += pixels[index + 1];
+            red += pixels[index + 2];
+        }
+
+        return (red / count, green / count, blue / count);
     }
 
     private static void OnSelectionModeChanged(
@@ -778,6 +1117,11 @@ public sealed class PhotoViewer : FrameworkElement
                 imageBounds,
                 selectionDragOrigin,
                 current);
+            updated = ApplyAspectRatio(
+                updated,
+                imageBounds,
+                anchorLeft: current.X >= selectionDragOrigin.X,
+                anchorTop: current.Y >= selectionDragOrigin.Y);
         }
         else if (selectionOperation == SelectionOperation.Move)
         {
@@ -790,10 +1134,119 @@ public sealed class PhotoViewer : FrameworkElement
         else
         {
             updated = ResizeSelection(current, imageBounds);
+            updated = ApplyAspectRatio(
+                updated,
+                imageBounds,
+                anchorLeft: !selectionOperation.HasFlag(SelectionOperation.Left),
+                anchorTop: !selectionOperation.HasFlag(SelectionOperation.Top));
         }
 
         SetSelection(updated);
         UpdateCursor(position);
+    }
+
+    private static void OnSelectionAspectRatioChanged(
+        DependencyObject dependencyObject,
+        DependencyPropertyChangedEventArgs eventArgs)
+    {
+        var viewer = (PhotoViewer)dependencyObject;
+        if (viewer.selection is not { } selected)
+        {
+            return;
+        }
+
+        viewer.SetSelection(
+            viewer.ApplyAspectRatio(
+                selected,
+                GetRecipeCrop(viewer.EditRecipe),
+                anchorLeft: true,
+                anchorTop: true));
+    }
+
+    /// <summary>
+    /// Forces a region to the requested display aspect ratio, keeping the
+    /// corner the user is dragging away from fixed and shrinking rather than
+    /// growing so the result always stays inside the photo.
+    /// </summary>
+    private CropRegion ApplyAspectRatio(
+        CropRegion region,
+        CropRegion bounds,
+        bool anchorLeft,
+        bool anchorTop)
+    {
+        var ratio = GetEffectiveAspectRatio();
+        if (ratio <= 0 || bitmap is null || region.IsEmpty)
+        {
+            return region;
+        }
+
+        // The region is normalized to the frame, so a display ratio has to be
+        // converted into the frame's own coordinate space first.
+        var pixelRatio = ratio
+                         * bitmap.PixelHeight
+                         / Math.Max(1, bitmap.PixelWidth);
+
+        var width = region.Width;
+        var height = region.Height;
+        if (width / Math.Max(0.0001, height) > pixelRatio)
+        {
+            width = height * pixelRatio;
+        }
+        else
+        {
+            height = width / Math.Max(0.0001, pixelRatio);
+        }
+
+        var left = anchorLeft ? region.X : region.Right - width;
+        var top = anchorTop ? region.Y : region.Bottom - height;
+
+        // Clamp back inside the frame, preserving the ratio if the drag ran
+        // past an edge.
+        if (left < bounds.X)
+        {
+            left = bounds.X;
+        }
+
+        if (top < bounds.Y)
+        {
+            top = bounds.Y;
+        }
+
+        if (left + width > bounds.Right)
+        {
+            width = bounds.Right - left;
+            height = width / Math.Max(0.0001, pixelRatio);
+        }
+
+        if (top + height > bounds.Bottom)
+        {
+            height = bounds.Bottom - top;
+            width = height * pixelRatio;
+        }
+
+        return new CropRegion(left, top, Math.Max(0, width), Math.Max(0, height));
+    }
+
+    private double GetEffectiveAspectRatio()
+    {
+        var ratio = SelectionAspectRatio;
+        if (ratio == 0 || bitmap is null)
+        {
+            return 0;
+        }
+
+        if (ratio < 0)
+        {
+            // "Original" means the ratio of the whole frame as displayed.
+            ratio = bitmap.PixelWidth / (double)Math.Max(1, bitmap.PixelHeight);
+            return ratio;
+        }
+
+        // A quarter turn swaps what "wider than tall" means on screen.
+        return EditRecipe.Rotation is QuarterRotation.Clockwise90
+            or QuarterRotation.Clockwise270
+            ? 1 / ratio
+            : ratio;
     }
 
     private CropRegion ResizeSelection(
@@ -1392,22 +1845,27 @@ public sealed class PhotoViewer : FrameworkElement
     private void BeginLoad(bool fullResolution = false)
     {
         CancelLoad();
+        CancelAdjustmentRender();
         StopTransition();
         error = null;
+        renderedPixelRecipe = null;
         InvalidateVisual();
 
         if (SourceBitmap is { } inMemory)
         {
+            rawBitmap = inMemory;
             bitmap = inMemory;
             bitmapPath = null;
             bitmapRecipe = EditRecipe;
             isFullResolutionBitmap = true;
+            ScheduleAdjustmentRender();
             InvalidateVisual();
             return;
         }
 
         if (string.IsNullOrWhiteSpace(SourcePath))
         {
+            rawBitmap = null;
             bitmap = null;
             bitmapPath = null;
             bitmapRecipe = EditRecipe.Empty;
@@ -1469,45 +1927,33 @@ public sealed class PhotoViewer : FrameworkElement
         BitmapSource loaded,
         bool fullResolution)
     {
-        if (bitmap is null)
+        var crossfades = bitmap is not null && ShouldCrossfade(bitmapPath, path);
+        if (crossfades)
         {
-            bitmap = loaded;
-            bitmapPath = path;
-            bitmapRecipe = EditRecipe;
-            isFullResolutionBitmap = fullResolution;
-            if (fullResolution)
-            {
-                SetActualSize();
-            }
-
-            InvalidateVisual();
-            return;
+            previousBitmap = bitmap;
+            previousBitmapRecipe = bitmapRecipe;
         }
 
-        if (!ShouldCrossfade(bitmapPath, path))
-        {
-            bitmap = loaded;
-            bitmapPath = path;
-            bitmapRecipe = EditRecipe;
-            isFullResolutionBitmap = fullResolution;
-            if (fullResolution)
-            {
-                SetActualSize();
-            }
-
-            InvalidateVisual();
-            return;
-        }
-
-        previousBitmap = bitmap;
-        previousBitmapRecipe = bitmapRecipe;
+        rawBitmap = loaded;
         bitmap = loaded;
         bitmapPath = path;
         bitmapRecipe = EditRecipe;
+        renderedPixelRecipe = null;
         isFullResolutionBitmap = fullResolution;
         if (fullResolution)
         {
             SetActualSize();
+        }
+
+        // The freshly decoded frame goes up immediately and the adjusted one
+        // replaces it a moment later; waiting for the render would make every
+        // photograph feel slow to open.
+        ScheduleAdjustmentRender();
+
+        if (!crossfades)
+        {
+            InvalidateVisual();
+            return;
         }
 
         transitionProgress = 0;
