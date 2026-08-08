@@ -104,7 +104,7 @@ public sealed class ThumbnailService
                 Sharpen = true
             };
             settings.TrySetEncoderFormat(ImageMimeTypes.Jpeg);
-            MagicImageProcessor.ProcessImage(sourcePath, temporary, settings);
+            ProcessToFile(sourcePath, temporary, settings);
             cancellationToken.ThrowIfCancellationRequested();
             File.Move(temporary, destination, true);
             return destination;
@@ -116,5 +116,36 @@ public sealed class ThumbnailService
                 File.Delete(temporary);
             }
         }
+    }
+
+    /// <summary>
+    /// A RAW file without an installed codec cannot be scaled directly, so the
+    /// embedded camera preview is scaled instead. Without this, a folder from
+    /// a camera would show nothing but grey tiles.
+    /// </summary>
+    private static void ProcessToFile(
+        string sourcePath,
+        string destinationPath,
+        ProcessImageSettings settings)
+    {
+        try
+        {
+            MagicImageProcessor.ProcessImage(sourcePath, destinationPath, settings);
+            return;
+        }
+        catch (Exception exception) when (
+            RawImageDecoder.IsRaw(sourcePath)
+            && exception is not (IOException or UnauthorizedAccessException))
+        {
+            if (File.Exists(destinationPath))
+            {
+                File.Delete(destinationPath);
+            }
+        }
+
+        var preview = RawImageDecoder.ExtractEmbeddedJpeg(sourcePath)
+            ?? throw new NotSupportedException(
+                $"No readable preview was found in {Path.GetFileName(sourcePath)}.");
+        MagicImageProcessor.ProcessImage(preview, destinationPath, settings);
     }
 }

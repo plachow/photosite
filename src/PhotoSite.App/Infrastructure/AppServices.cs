@@ -24,6 +24,7 @@ public sealed class AppServices
         MetadataOutbox = new MetadataOutboxProcessor(Catalog, MetadataWriter);
         BatchPresets = new BatchPresetStore(Catalog);
         Batch = new BatchProcessor(Previews, MetadataWriter);
+        Importer = new ImportService();
     }
 
     public AppPaths Paths { get; }
@@ -49,6 +50,8 @@ public sealed class AppServices
     internal BatchPresetStore BatchPresets { get; }
 
     internal BatchProcessor Batch { get; }
+
+    internal ImportService Importer { get; }
 
     public async Task InitializeAsync()
     {

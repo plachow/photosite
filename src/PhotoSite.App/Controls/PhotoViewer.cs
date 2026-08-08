@@ -810,6 +810,7 @@ public sealed partial class PhotoViewer : FrameworkElement
         pan = panOrigin + (current - dragOrigin);
         ConstrainPan();
         InvalidateVisual();
+        RaiseViewStateChanged();
     }
 
     protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e)
@@ -830,6 +831,31 @@ public sealed partial class PhotoViewer : FrameworkElement
         UpdateCursor(e.GetPosition(this));
     }
 
+    /// <summary>
+    /// The current zoom and pan, so several viewers can be kept in step.
+    /// </summary>
+    public (double Zoom, Vector Pan) ViewState => (zoom, pan);
+
+    /// <summary>
+    /// Raised whenever the user zooms or pans, for synchronized comparison.
+    /// </summary>
+    public event EventHandler? ViewStateChanged;
+
+    /// <summary>
+    /// Adopts another viewer's zoom and pan without echoing the change back,
+    /// which would make two synchronized viewers feed each other forever.
+    /// </summary>
+    public void ApplyViewState((double Zoom, Vector Pan) state)
+    {
+        zoom = Math.Max(MinimumZoom, state.Zoom);
+        pan = state.Pan;
+        ConstrainPan();
+        InvalidateVisual();
+    }
+
+    private void RaiseViewStateChanged() =>
+        ViewStateChanged?.Invoke(this, EventArgs.Empty);
+
     private void ChangeZoom(double factor)
     {
         var maximumZoom = bitmap is null
@@ -843,6 +869,7 @@ public sealed partial class PhotoViewer : FrameworkElement
             maximumZoom);
         ConstrainPan();
         InvalidateVisual();
+        RaiseViewStateChanged();
     }
 
     private void SetActualSize()
@@ -856,6 +883,7 @@ public sealed partial class PhotoViewer : FrameworkElement
         pan = default;
         ConstrainPan();
         InvalidateVisual();
+        RaiseViewStateChanged();
     }
 
     private double GetFitScale(BitmapSource source, EditRecipe recipe)

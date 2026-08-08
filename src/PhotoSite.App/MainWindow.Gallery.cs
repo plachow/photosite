@@ -301,6 +301,52 @@ public partial class MainWindow
         ApplyFilterFromUi();
     }
 
+    private async void OnImportClick(object sender, RoutedEventArgs eventArgs) =>
+        await ImportPhotosAsync();
+
+    private async Task ImportPhotosAsync()
+    {
+        var dialog = new ImportDialog(
+            App.Services.Importer,
+            viewModel.CurrentFolder)
+        {
+            Owner = this
+        };
+        dialog.ShowDialog();
+
+        if (!dialog.DidImport || dialog.ImportedInto is not { } destination)
+        {
+            return;
+        }
+
+        // Land the user in what they just imported rather than leaving them
+        // in whatever folder they happened to be browsing.
+        await viewModel.NavigateToAsync(destination);
+        viewModel.ReportStatus($"Imported into {destination}");
+    }
+
+    private void OnCompareClick(object sender, RoutedEventArgs eventArgs) =>
+        CompareSelectedPhotos();
+
+    private void CompareSelectedPhotos()
+    {
+        var selection = GetSelectedManagerPhotos()
+            .Where(photo => File.Exists(photo.Path))
+            .Take(CompareWindow.MaximumPhotos)
+            .ToArray();
+        if (selection.Length < 2)
+        {
+            viewModel.ReportStatus(
+                "Select two to four photos to compare them side by side");
+            return;
+        }
+
+        new CompareWindow(selection)
+        {
+            Owner = this
+        }.ShowDialog();
+    }
+
     private async void OnBatchToolbarClick(
         object sender,
         RoutedEventArgs eventArgs) =>

@@ -24,6 +24,14 @@ public sealed class PreviewService
         cancellationToken.ThrowIfCancellationRequested();
         var rotation = ReadExifRotation(path);
 
+        if (RawImageDecoder.IsRaw(path))
+        {
+            return RawImageDecoder.TryDecode(path, decodePixelWidth, rotation)
+                   ?? throw new NotSupportedException(
+                       "This RAW file carries no readable preview, and no "
+                       + "codec for it is installed on this computer.");
+        }
+
         using var stream = new FileStream(
             path,
             FileMode.Open,

@@ -2429,6 +2429,20 @@ public partial class MainWindow : Window
                 await RunBatchConversionAsync(GetSelectedManagerPhotos());
                 return;
             }
+
+            if (IsImportShortcut(shortcutKey, Keyboard.Modifiers))
+            {
+                eventArgs.Handled = true;
+                await ImportPhotosAsync();
+                return;
+            }
+
+            if (IsCompareShortcut(shortcutKey, Keyboard.Modifiers))
+            {
+                eventArgs.Handled = true;
+                CompareSelectedPhotos();
+                return;
+            }
         }
 
         if (viewModel.IsEditorMode
@@ -2734,6 +2748,16 @@ public partial class MainWindow : Window
         Key key,
         ModifierKeys modifiers) =>
         key == Key.B && modifiers == ModifierKeys.Control;
+
+    internal static bool IsImportShortcut(
+        Key key,
+        ModifierKeys modifiers) =>
+        key == Key.I && modifiers == ModifierKeys.Control;
+
+    internal static bool IsCompareShortcut(
+        Key key,
+        ModifierKeys modifiers) =>
+        key == Key.K && modifiers == ModifierKeys.Control;
 
     internal static bool IsQuickFileCopyShortcut(
         Key key,

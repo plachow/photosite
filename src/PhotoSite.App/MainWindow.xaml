@@ -808,6 +808,18 @@
         <StackPanel Grid.Column="2" Orientation="Horizontal">
           <Button Margin="1,0"
                   Padding="10,4"
+                  AutomationProperties.Name="Import photos"
+                  Content="Import…"
+                  Click="OnImportClick"
+                  ToolTip="Import from a camera or memory card (Ctrl+I)" />
+          <Button Margin="1,0"
+                  Padding="10,4"
+                  AutomationProperties.Name="Compare selected photos"
+                  Content="Compare"
+                  Click="OnCompareClick"
+                  ToolTip="Compare 2–4 selected photos side by side (Ctrl+K)" />
+          <Button Margin="1,0"
+                  Padding="10,4"
                   AutomationProperties.Name="Create folder"
                   Content="New folder"
                   Click="OnCreateFolderClick"

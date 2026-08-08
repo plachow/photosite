@@ -1,0 +1,158 @@
+<Window x:Class="PhotoSite.Dialogs.ImportDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Import photos"
+        Width="760"
+        SizeToContent="Height"
+        ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False">
+  <Border Margin="16" Style="{StaticResource DialogPanelStyle}">
+    <StackPanel>
+      <TextBlock Style="{StaticResource SectionHeaderStyle}" Text="SOURCE" />
+      <Grid Margin="0,0,0,6">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+        <TextBox x:Name="SourceBox" TextChanged="OnSettingChanged" />
+        <Button Grid.Column="1"
+                MinWidth="92"
+                Margin="8,0,0,0"
+                Content="Browse…"
+                Click="OnBrowseSourceClick" />
+      </Grid>
+      <StackPanel x:Name="DetectedSourcesPanel"
+                  Margin="0,0,0,6"
+                  Orientation="Horizontal" />
+      <CheckBox x:Name="IncludeSubfoldersBox"
+                Margin="0,0,0,12"
+                Content="Include subfolders"
+                IsChecked="True"
+                Click="OnSettingChanged" />
+
+      <TextBlock Style="{StaticResource SectionHeaderStyle}" Text="DESTINATION" />
+      <Grid Margin="0,0,0,6">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+        <TextBox x:Name="DestinationBox" TextChanged="OnSettingChanged" />
+        <Button Grid.Column="1"
+                MinWidth="92"
+                Margin="8,0,0,0"
+                Content="Browse…"
+                Click="OnBrowseDestinationClick" />
+      </Grid>
+      <Grid Margin="0,0,0,12">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+        <CheckBox x:Name="OrganizeByDateBox"
+                  VerticalAlignment="Center"
+                  Content="Folders by date"
+                  IsChecked="True"
+                  Click="OnSettingChanged" />
+        <TextBlock Grid.Column="1"
+                   Margin="14,0,8,0"
+                   Style="{StaticResource FieldLabelStyle}"
+                   Text="Pattern" />
+        <TextBox x:Name="DateFolderBox"
+                 Grid.Column="2"
+                 TextChanged="OnSettingChanged"
+                 ToolTip="A date format; backslashes create nested folders" />
+      </Grid>
+
+      <TextBlock Style="{StaticResource SectionHeaderStyle}" Text="FILE NAMES" />
+      <Grid Margin="0,0,0,12">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+        <CheckBox x:Name="RenameBox"
+                  VerticalAlignment="Center"
+                  Content="Rename during import"
+                  Click="OnSettingChanged" />
+        <TextBlock Grid.Column="1"
+                   Margin="14,0,8,0"
+                   Style="{StaticResource FieldLabelStyle}"
+                   Text="Pattern" />
+        <TextBox x:Name="RenamePatternBox"
+                 Grid.Column="2"
+                 TextChanged="OnSettingChanged"
+                 ToolTip="A date format applied to the capture time" />
+      </Grid>
+
+      <TextBlock Style="{StaticResource SectionHeaderStyle}" Text="OPTIONS" />
+      <CheckBox x:Name="SkipImportedBox"
+                Margin="0,0,0,6"
+                Content="Skip files that are already in the destination"
+                IsChecked="True"
+                Click="OnSettingChanged" />
+      <Grid Margin="0,0,0,6">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+        <CheckBox x:Name="BackupBox"
+                  VerticalAlignment="Center"
+                  Margin="0,0,10,0"
+                  Content="Second copy to"
+                  Click="OnSettingChanged" />
+        <TextBox x:Name="BackupBox2"
+                 Grid.Column="1"
+                 TextChanged="OnSettingChanged" />
+        <Button Grid.Column="2"
+                MinWidth="92"
+                Margin="8,0,0,0"
+                Content="Browse…"
+                Click="OnBrowseBackupClick" />
+      </Grid>
+      <CheckBox x:Name="MoveBox"
+                Margin="0,0,0,12"
+                Content="Delete the originals from the card after a successful copy"
+                Click="OnSettingChanged" />
+
+      <Border Padding="12,10"
+              Background="#20242B"
+              BorderBrush="#3A3F4B"
+              BorderThickness="1"
+              CornerRadius="5">
+        <StackPanel>
+          <TextBlock x:Name="SummaryText"
+                     FontSize="13"
+                     Foreground="{StaticResource PrimaryTextBrush}"
+                     TextWrapping="Wrap" />
+          <TextBlock x:Name="SampleText"
+                     Margin="0,5,0,0"
+                     FontSize="11"
+                     Foreground="{StaticResource MutedTextBrush}"
+                     TextTrimming="CharacterEllipsis" />
+          <ProgressBar x:Name="ImportProgressBar"
+                       Margin="0,9,0,0"
+                       Visibility="Collapsed" />
+        </StackPanel>
+      </Border>
+
+      <StackPanel Margin="0,14,0,0"
+                  HorizontalAlignment="Right"
+                  Orientation="Horizontal">
+        <Button x:Name="ImportButton"
+                MinWidth="120"
+                Content="Import"
+                IsDefault="True"
+                Click="OnImportClick" />
+        <Button x:Name="CloseButton"
+                MinWidth="96"
+                Margin="8,0,0,0"
+                Content="Close"
+                IsCancel="True"
+                Click="OnCloseClick" />
+      </StackPanel>
+    </StackPanel>
+  </Border>
+</Window>

@@ -1113,6 +1113,8 @@ try
 
     AssertImagingPipeline();
     AssertFolderNavigation(testRoot, photoRoot, nested);
+    AssertRawPreviewExtraction();
+    await AssertImportWorkflowAsync(testRoot);
     await AssertBatchProcessingAsync(testRoot, repository, previews);
 
     await AssertWindowClosesCleanlyAsync(
@@ -1450,6 +1452,166 @@ static void SaveTestPng(string path, int width, int height)
     encoder.Frames.Add(BitmapFrame.Create(bitmap));
     using var stream = File.Create(path);
     encoder.Save(stream);
+}
+
+static void AssertRawPreviewExtraction()
+{
+    Assert(
+        RawImageDecoder.IsRaw(@"C:\photos\a.CR2")
+        && RawImageDecoder.IsRaw(@"C:\photos\a.nef")
+        && !RawImageDecoder.IsRaw(@"C:\photos\a.jpg"),
+        "RAW detection should be extension-based and case-insensitive.");
+
+    // A synthetic RAW container: a small thumbnail JPEG, then a larger
+    // preview, wrapped in the sort of binary noise a real file carries.
+    var thumbnail = CreateJpegBytes(64, 48);
+    var preview = CreateJpegBytes(900, 600);
+    Assert(
+        preview.Length > 24 * 1024,
+        "The synthetic preview must be large enough to be treated as one.");
+
+    var container = new List<byte>();
+    container.AddRange(Enumerable.Repeat((byte)0x2A, 512));
+    container.AddRange(thumbnail);
+    container.AddRange(Enumerable.Repeat((byte)0xFF, 64));
+    container.AddRange(preview);
+    container.AddRange(Enumerable.Repeat((byte)0x00, 256));
+
+    var extracted = RawImageDecoder.ExtractLargestJpeg(container.ToArray());
+    Assert(
+        extracted is not null && extracted.SequenceEqual(preview),
+        "The largest embedded JPEG should be recovered, not the thumbnail.");
+
+    using var stream = new MemoryStream(extracted!);
+    var decoded = BitmapFrame.Create(
+        stream,
+        BitmapCreateOptions.None,
+        BitmapCacheOption.OnLoad);
+    Assert(
+        decoded.PixelWidth == 900 && decoded.PixelHeight == 600,
+        "The recovered preview should decode at its own size.");
+
+    Assert(
+        RawImageDecoder.ExtractLargestJpeg(
+            Enumerable.Repeat((byte)0x11, 4096).ToArray()) is null,
+        "A file with no embedded JPEG should report none rather than throw.");
+}
+
+static byte[] CreateJpegBytes(int width, int height)
+{
+    // Noise rather than a flat colour, so the encoder cannot compress the
+    // preview below the size that marks it as more than a thumbnail.
+    var random = new Random(width * 7919);
+    var pixels = new byte[width * height * 4];
+    random.NextBytes(pixels);
+    for (var index = 3; index < pixels.Length; index += 4)
+    {
+        pixels[index] = 255;
+    }
+
+    var bitmap = BitmapSource.Create(
+        width,
+        height,
+        96,
+        96,
+        PixelFormats.Bgra32,
+        null,
+        pixels,
+        width * 4);
+    bitmap.Freeze();
+    var encoder = new JpegBitmapEncoder { QualityLevel = 95 };
+    encoder.Frames.Add(BitmapFrame.Create(bitmap));
+    using var stream = new MemoryStream();
+    encoder.Save(stream);
+    return stream.ToArray();
+}
+
+static async Task AssertImportWorkflowAsync(string testRoot)
+{
+    var card = Directory.CreateDirectory(
+        Path.Combine(testRoot, "card", "DCIM", "100CANON")).FullName;
+    var library = Path.Combine(testRoot, "library");
+    var backup = Path.Combine(testRoot, "library-backup");
+
+    var first = Path.Combine(card, "IMG_0001.png");
+    var second = Path.Combine(card, "IMG_0002.png");
+    SaveTestPng(first, 60, 40);
+    SaveTestPng(second, 40, 60);
+    File.SetLastWriteTime(first, new DateTime(2025, 8, 3, 10, 15, 0));
+    File.SetLastWriteTime(second, new DateTime(2025, 8, 4, 11, 30, 0));
+    await File.WriteAllTextAsync(
+        Path.Combine(card, "notes.txt"),
+        "not a photograph");
+
+    var importer = new ImportService();
+    var options = new ImportOptions(
+        Path.Combine(testRoot, "card"),
+        library,
+        IncludeSubfolders: true,
+        OrganizeByDate: true,
+        DateFolderFormat: "yyyy-MM-dd",
+        RenameOnImport: true,
+        RenamePattern: "yyyyMMdd_HHmmss",
+        SkipAlreadyImported: true,
+        BackupDirectory: backup);
+
+    var plan = importer.Plan(options);
+    Assert(
+        plan.Candidates.Count == 2 && plan.NewCount == 2,
+        "The import plan should find the photos and ignore other files.");
+    Assert(
+        plan.Candidates.All(item =>
+            item.DestinationPath.Contains("2025-08-0", StringComparison.Ordinal)),
+        "Organizing by date should place each photo in its own dated folder.");
+    Assert(
+        plan.Candidates.All(item =>
+            Path.GetFileNameWithoutExtension(item.DestinationPath).Length == 15),
+        "Renaming during import should use the capture timestamp.");
+
+    var outcome = await importer.RunAsync(plan, options);
+    Assert(
+        outcome is { Imported: 2, Failed: 0 },
+        "Both photos should import: " + string.Join(" | ", outcome.Errors));
+    Assert(
+        Directory.EnumerateFiles(library, "*", SearchOption.AllDirectories)
+            .Count() == 2,
+        "The library should contain exactly the imported photos.");
+    Assert(
+        Directory.EnumerateFiles(backup, "*", SearchOption.AllDirectories)
+            .Count() == 2,
+        "The second copy should mirror the library layout.");
+    Assert(
+        File.Exists(first) && File.Exists(second),
+        "A plain import must leave the card untouched.");
+
+    var repeatPlan = importer.Plan(options);
+    Assert(
+        repeatPlan.NewCount == 0 && repeatPlan.DuplicateCount == 2,
+        "Re-importing the same card should recognise every file as already "
+        + "imported rather than making a second copy.");
+
+    var withoutSkip = importer.Plan(options with { SkipAlreadyImported = false });
+    Assert(
+        withoutSkip.NewCount == 2
+        && withoutSkip.Candidates.All(item =>
+            !File.Exists(item.DestinationPath)),
+        "Turning the duplicate check off should plan fresh, non-colliding names.");
+
+    var flatOptions = options with
+    {
+        OrganizeByDate = false,
+        RenameOnImport = false,
+        DestinationDirectory = Path.Combine(testRoot, "library-flat"),
+        BackupDirectory = null
+    };
+    var flatPlan = importer.Plan(flatOptions);
+    Assert(
+        flatPlan.Candidates.All(item =>
+            Path.GetDirectoryName(item.DestinationPath)
+            == Path.GetFullPath(flatOptions.DestinationDirectory))
+        && flatPlan.Candidates.Any(item =>
+            Path.GetFileName(item.DestinationPath) == "IMG_0001.png"),
+        "Without date folders or renaming, files keep their names in one folder.");
 }
 
 static void AssertFolderNavigation(
