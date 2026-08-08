@@ -15,6 +15,7 @@ using PhotoSite.Controls;
 using PhotoSite.Domain;
 using PhotoSite.Infrastructure;
 using PhotoSite.Services;
+using PhotoSite.Services.Imaging;
 using PhotoSite.ViewModels;
 
 var testRoot = Path.Combine(
@@ -1032,6 +1033,8 @@ try
         && Math.Abs(readLon - 16.606836) < 0.0001,
         "Metadata written by exiftool should be read back during indexing.");
 
+    AssertImagingPipeline();
+
     await AssertWindowClosesCleanlyAsync(
         repository,
         indexer,
@@ -1110,6 +1113,297 @@ static void AssertIncrementalPresentation(
     Assert(
         resets == 0 && photos.Count == 0,
         "Clearing a small gallery should remove rather than reset.");
+}
+
+static void AssertImagingPipeline()
+{
+    var flatGray = CreateTestBitmap(48, 32, 90, 90, 90);
+
+    var brightened = ImageRenderer.Render(
+        flatGray,
+        EditRecipe.Empty with
+        {
+            Adjustments = PhotoAdjustments.Neutral with { Exposure = 1 }
+        });
+    Assert(
+        ReadPixel(brightened, 10, 10).Red > 150,
+        "A one-stop exposure lift should visibly brighten a flat frame.");
+
+    var darkened = ImageRenderer.Render(
+        flatGray,
+        EditRecipe.Empty with
+        {
+            Adjustments = PhotoAdjustments.Neutral with { Exposure = -1 }
+        });
+    Assert(
+        ReadPixel(darkened, 10, 10).Red < 60,
+        "A one-stop exposure cut should visibly darken a flat frame.");
+
+    var saturatedRed = CreateTestBitmap(16, 16, 220, 40, 40);
+    var grayscaled = ImageRenderer.Render(
+        saturatedRed,
+        EditRecipe.Empty with
+        {
+            Filters = [new FilterStep(PhotoFilterKind.Grayscale, 100)]
+        });
+    var grayPixel = ReadPixel(grayscaled, 8, 8);
+    Assert(
+        Math.Abs(grayPixel.Red - grayPixel.Green) <= 1
+        && Math.Abs(grayPixel.Green - grayPixel.Blue) <= 1,
+        "The grayscale filter should equalize the three channels.");
+
+    var desaturated = ImageRenderer.Render(
+        saturatedRed,
+        EditRecipe.Empty with
+        {
+            Adjustments = PhotoAdjustments.Neutral with { Saturation = -100 }
+        });
+    var desaturatedPixel = ReadPixel(desaturated, 8, 8);
+    Assert(
+        Math.Abs(desaturatedPixel.Red - desaturatedPixel.Blue) <= 2,
+        "Pulling saturation to its minimum should neutralize a red frame.");
+
+    var lifted = ImageRenderer.Render(
+        flatGray,
+        EditRecipe.Empty with
+        {
+            Adjustments = PhotoAdjustments.Neutral with
+            {
+                Curve = ToneCurve.FromPoints(
+                [
+                    new CurvePoint(0, 0),
+                    new CurvePoint(0.35, 0.6),
+                    new CurvePoint(1, 1)
+                ])
+            }
+        });
+    Assert(
+        ReadPixel(lifted, 10, 10).Red > 110,
+        "A curve that lifts the midtones should brighten a midtone frame.");
+
+    var linearTable = ToneCurve.Linear.Sample();
+    Assert(
+        linearTable[0] == 0 && Math.Abs(linearTable[255] - 1) < 0.0001,
+        "A linear curve should sample to the identity ramp.");
+
+    var oriented = ImageRenderer.Render(
+        CreateTestBitmap(6, 4, 10, 10, 10),
+        EditRecipe.Empty with { Rotation = QuarterRotation.Clockwise90 });
+    Assert(
+        oriented.PixelWidth == 4 && oriented.PixelHeight == 6,
+        "A quarter rotation should swap the rendered dimensions.");
+    Assert(
+        ImageRenderer.MeasureOutput(
+            6,
+            4,
+            EditRecipe.Empty with
+            {
+                Rotation = QuarterRotation.Clockwise90,
+                Crop = new CropRegion(0, 0, 0.5, 1)
+            }) == (4, 3),
+        "Measuring an output should combine crop and rotation without rendering.");
+
+    var straightened = ImageRenderer.Render(
+        CreateTestBitmap(64, 48, 200, 180, 160),
+        EditRecipe.Empty with { StraightenAngle = 7 });
+    Assert(
+        straightened.PixelWidth == 64 && straightened.PixelHeight == 48,
+        "Straightening should keep the frame size.");
+    Assert(
+        ReadPixel(straightened, 1, 1).Alpha == 255
+        && ReadPixel(straightened, 62, 46).Alpha == 255,
+        "Straightening should scale up so no transparent corner survives.");
+
+    var dark = CreateTestBitmap(64, 64, 34, 33, 30);
+    var autoFixed = AutoFixAnalyzer.Analyze(
+        PixelBuffer.FromBitmap(dark),
+        PhotoAdjustments.Neutral);
+    Assert(
+        autoFixed.Exposure > 0.2 && autoFixed.Exposure <= 0.75,
+        "Auto Fix should lift a dark frame without exceeding its safety limit.");
+    Assert(
+        Math.Abs(autoFixed.Temperature) <= 22
+        && Math.Abs(autoFixed.Tint) <= 18,
+        "Auto Fix white balance must stay inside its conservative range.");
+
+    var alreadyGood = AutoFixAnalyzer.Analyze(
+        PixelBuffer.FromBitmap(CreateGradientBitmap(128, 64)),
+        PhotoAdjustments.Neutral);
+    Assert(
+        Math.Abs(alreadyGood.Exposure) < 0.35
+        && alreadyGood.Contrast < 12,
+        "Auto Fix should barely touch a frame that already uses the full range.");
+
+    var histogram = HistogramData.FromBitmap(CreateGradientBitmap(256, 8));
+    Assert(
+        histogram.Total > 0
+        && histogram.GetLuminancePercentile(0.02) < 40
+        && histogram.GetLuminancePercentile(0.98) > 200,
+        "A full-range gradient should report a full-range histogram.");
+
+    var layer = new ShapeLayer
+    {
+        Id = "arrow-1",
+        Shape = ShapeKind.Arrow,
+        X1 = 0.1,
+        Y1 = 0.1,
+        X2 = 0.8,
+        Y2 = 0.6
+    };
+    var withLayer = EditRecipe.Empty.WithLayer(layer);
+    Assert(
+        withLayer != EditRecipe.Empty
+        && withLayer == EditRecipe.Empty.WithLayer(layer)
+        && withLayer.WithoutLayer("arrow-1") == EditRecipe.Empty,
+        "Recipes must compare layers and filters by value, not by reference.");
+    Assert(
+        withLayer.WithLayer(layer with { X1 = 0.2 }).Layers.Count == 1,
+        "Storing a layer twice should replace it instead of duplicating it.");
+
+    var annotated = ImageRenderer.Render(
+        CreateTestBitmap(200, 200, 250, 250, 250),
+        withLayer);
+    Assert(
+        annotated.PixelWidth == 200 && CountMarkedPixels(annotated) > 40,
+        "An arrow layer should be composited into the rendered image.");
+
+    var withoutLayers = ImageRenderer.Render(
+        CreateTestBitmap(200, 200, 250, 250, 250),
+        withLayer,
+        new RenderRequest(IncludeLayers: false));
+    Assert(
+        CountMarkedPixels(withoutLayers) == 0,
+        "The editor render path must be able to leave layers to the canvas.");
+
+    var resized = ImageRenderer.Resize(CreateTestBitmap(200, 100, 5, 5, 5), 50);
+    Assert(
+        resized.PixelWidth == 50 && resized.PixelHeight == 25,
+        "Resizing should fit the longest side and preserve the aspect ratio.");
+    Assert(
+        ImageRenderer.Resize(CreateTestBitmap(20, 10, 5, 5, 5), 500).PixelWidth == 20,
+        "Resizing must never enlarge an image.");
+
+    var legacyRecipeJson = JsonSerializer.Deserialize<EditRecipe>(
+        """{"Rotation":1,"FlipHorizontal":true}""");
+    Assert(
+        legacyRecipeJson is
+        {
+            Rotation: QuarterRotation.Clockwise90,
+            FlipHorizontal: true
+        }
+        && legacyRecipeJson.Adjustments.IsNeutral
+        && legacyRecipeJson.Layers.Count == 0,
+        "Recipes stored before adjustments existed must still load.");
+
+    var roundTripped = JsonSerializer.Deserialize<EditRecipe>(
+        JsonSerializer.Serialize(
+            withLayer with
+            {
+                Adjustments = PhotoAdjustments.Neutral with
+                {
+                    Exposure = 0.4,
+                    Curve = ToneCurve.FromPoints(
+                        [new CurvePoint(0, 0.1), new CurvePoint(1, 0.9)])
+                },
+                Filters = [FilterStep.CreateDefault(PhotoFilterKind.Sepia)]
+            }));
+    Assert(
+        roundTripped is not null
+        && roundTripped.Adjustments.Exposure == 0.4
+        && roundTripped.Filters.Count == 1
+        && roundTripped.Layers.Single() is ShapeLayer { Shape: ShapeKind.Arrow }
+        && !roundTripped.Adjustments.Curve.IsLinear,
+        "A full recipe should survive a JSON round-trip including layer types.");
+}
+
+static BitmapSource CreateTestBitmap(
+    int width,
+    int height,
+    byte red,
+    byte green,
+    byte blue)
+{
+    var pixels = new byte[width * height * 4];
+    for (var index = 0; index < pixels.Length; index += 4)
+    {
+        pixels[index] = blue;
+        pixels[index + 1] = green;
+        pixels[index + 2] = red;
+        pixels[index + 3] = 255;
+    }
+
+    var bitmap = BitmapSource.Create(
+        width,
+        height,
+        96,
+        96,
+        PixelFormats.Bgra32,
+        null,
+        pixels,
+        width * 4);
+    bitmap.Freeze();
+    return bitmap;
+}
+
+static BitmapSource CreateGradientBitmap(int width, int height)
+{
+    var pixels = new byte[width * height * 4];
+    for (var row = 0; row < height; row++)
+    {
+        for (var column = 0; column < width; column++)
+        {
+            var value = (byte)(column * 255 / Math.Max(1, width - 1));
+            var index = ((row * width) + column) * 4;
+            pixels[index] = value;
+            pixels[index + 1] = value;
+            pixels[index + 2] = value;
+            pixels[index + 3] = 255;
+        }
+    }
+
+    var bitmap = BitmapSource.Create(
+        width,
+        height,
+        96,
+        96,
+        PixelFormats.Bgra32,
+        null,
+        pixels,
+        width * 4);
+    bitmap.Freeze();
+    return bitmap;
+}
+
+static int CountMarkedPixels(BitmapSource bitmap)
+{
+    var converted = bitmap.Format == PixelFormats.Bgra32
+        ? bitmap
+        : new FormatConvertedBitmap(bitmap, PixelFormats.Bgra32, null, 0);
+    var pixels = new byte[converted.PixelWidth * converted.PixelHeight * 4];
+    converted.CopyPixels(pixels, converted.PixelWidth * 4, 0);
+    var marked = 0;
+    for (var index = 0; index < pixels.Length; index += 4)
+    {
+        if (pixels[index] < 200 || pixels[index + 1] < 200)
+        {
+            marked++;
+        }
+    }
+
+    return marked;
+}
+
+static (byte Blue, byte Green, byte Red, byte Alpha) ReadPixel(
+    BitmapSource bitmap,
+    int x,
+    int y)
+{
+    var converted = bitmap.Format == PixelFormats.Bgra32
+        ? bitmap
+        : new FormatConvertedBitmap(bitmap, PixelFormats.Bgra32, null, 0);
+    var pixel = new byte[4];
+    converted.CopyPixels(new Int32Rect(x, y, 1, 1), pixel, 4, 0);
+    return (pixel[0], pixel[1], pixel[2], pixel[3]);
 }
 
 static void AssertRatingShortcut(Key key, int expectedRating)

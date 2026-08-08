@@ -5,6 +5,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using PhotoSite.Domain;
+using PhotoSite.Services.Imaging;
 
 namespace PhotoSite.Controls;
 
@@ -1295,61 +1296,18 @@ public sealed class PhotoViewer : FrameworkElement
             bottom - top);
     }
 
+    /// <summary>
+    /// Renders <paramref name="region"/> of the photograph with the whole
+    /// recipe applied - geometry, adjustments, filters and annotation layers.
+    /// </summary>
     internal static BitmapSource RenderSelection(
         BitmapSource source,
         EditRecipe recipe,
-        CropRegion region)
-    {
-        var pixelRegion = GetPixelSelectionRect(source, region);
-        var cropped = new CroppedBitmap(source, pixelRegion);
-        cropped.Freeze();
-        var swapsDimensions =
-            recipe.Rotation is QuarterRotation.Clockwise90
-            or QuarterRotation.Clockwise270;
-        var outputWidth = swapsDimensions
-            ? cropped.PixelHeight
-            : cropped.PixelWidth;
-        var outputHeight = swapsDimensions
-            ? cropped.PixelWidth
-            : cropped.PixelHeight;
-        var visual = new DrawingVisual();
-        RenderOptions.SetBitmapScalingMode(
-            visual,
-            BitmapScalingMode.HighQuality);
-        using (var drawingContext = visual.RenderOpen())
-        {
-            var transform = new TransformGroup();
-            transform.Children.Add(
-                new ScaleTransform(
-                    recipe.FlipHorizontal ? -1 : 1,
-                    1));
-            transform.Children.Add(
-                new RotateTransform((int)recipe.Rotation * 90));
-            transform.Children.Add(
-                new TranslateTransform(
-                    outputWidth / 2d,
-                    outputHeight / 2d));
-            drawingContext.PushTransform(transform);
-            drawingContext.DrawImage(
-                cropped,
-                new Rect(
-                    -cropped.PixelWidth / 2d,
-                    -cropped.PixelHeight / 2d,
-                    cropped.PixelWidth,
-                    cropped.PixelHeight));
-            drawingContext.Pop();
-        }
-
-        var rendered = new RenderTargetBitmap(
-            outputWidth,
-            outputHeight,
-            96,
-            96,
-            PixelFormats.Pbgra32);
-        rendered.Render(visual);
-        rendered.Freeze();
-        return rendered;
-    }
+        CropRegion region) =>
+        ImageRenderer.Render(
+            source,
+            recipe,
+            new RenderRequest(RegionOverride: region));
 
     private static async Task SetClipboardImageAsync(
         BitmapSource image,

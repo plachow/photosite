@@ -1,0 +1,192 @@
+using System.Windows;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using PhotoSite.Domain;
+
+namespace PhotoSite.Services.Imaging;
+
+/// <summary>
+/// Which stages of the recipe a caller wants. Deliberately a record class:
+/// as a struct, <c>default</c> would zero the flags instead of running the
+/// constructor defaults and every optional parameter would silently render
+/// geometry only.
+/// </summary>
+internal sealed record RenderRequest(
+    CropRegion? RegionOverride = null,
+    bool IncludeAdjustments = true,
+    bool IncludeFilters = true,
+    bool IncludeLayers = true,
+    int MaxDimension = 0)
+{
+    public static RenderRequest Full { get; } = new();
+
+    /// <summary>Geometry only - what a plain "copy this crop" needs.</summary>
+    public static RenderRequest GeometryOnly { get; } = new(
+        IncludeAdjustments: false,
+        IncludeFilters: false,
+        IncludeLayers: false);
+}
+
+/// <summary>
+/// The single place a recipe becomes pixels. The viewer, Save As, the export
+/// dialog and the batch processor all call this, which is what guarantees the
+/// exported file matches the preview.
+/// </summary>
+internal static class ImageRenderer
+{
+    public static BitmapSource Render(
+        BitmapSource source,
+        EditRecipe recipe,
+        RenderRequest? request = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(recipe);
+        request ??= RenderRequest.Full;
+
+        var buffer = RenderToBuffer(source, recipe, request, cancellationToken);
+        var bitmap = buffer.ToBitmap();
+
+        if (request.MaxDimension > 0)
+        {
+            bitmap = Resize(bitmap, request.MaxDimension);
+        }
+
+        if (request.IncludeLayers && recipe.Layers.Count > 0)
+        {
+            bitmap = LayerRenderer.Compose(bitmap, recipe.Layers);
+        }
+
+        return bitmap;
+    }
+
+    /// <summary>
+    /// Renders everything except the annotation layers, which the editor draws
+    /// itself so they stay live and selectable on the canvas.
+    /// </summary>
+    public static PixelBuffer RenderToBuffer(
+        BitmapSource source,
+        EditRecipe recipe,
+        RenderRequest? request = null,
+        CancellationToken cancellationToken = default)
+    {
+        request ??= RenderRequest.Full;
+        var buffer = PixelBuffer.FromBitmap(source);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (recipe.StraightenAngle != 0
+            || recipe.PerspectiveVertical != 0
+            || recipe.PerspectiveHorizontal != 0)
+        {
+            buffer = GeometryProcessor.Warp(
+                buffer,
+                recipe.StraightenAngle,
+                recipe.PerspectiveVertical,
+                recipe.PerspectiveHorizontal,
+                cancellationToken);
+        }
+
+        var region = request.RegionOverride
+                     ?? recipe.Crop
+                     ?? CropRegion.Full;
+        buffer = GeometryProcessor.Crop(buffer, region);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (request.IncludeAdjustments && !recipe.Adjustments.IsNeutral)
+        {
+            AdjustmentPipeline.Apply(
+                buffer,
+                recipe.Adjustments,
+                cancellationToken);
+        }
+
+        if (request.IncludeFilters)
+        {
+            foreach (var filter in recipe.Filters)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                ImageFilters.Apply(buffer, filter, cancellationToken);
+            }
+        }
+
+        return GeometryProcessor.Orient(
+            buffer,
+            recipe.Rotation,
+            recipe.FlipHorizontal,
+            recipe.FlipVertical);
+    }
+
+    /// <summary>
+    /// Scales so the longest side matches <paramref name="maxDimension"/>,
+    /// never enlarging - upsampling an export silently costs quality.
+    /// </summary>
+    public static BitmapSource Resize(BitmapSource source, int maxDimension)
+    {
+        if (maxDimension <= 0)
+        {
+            return source;
+        }
+
+        var longest = Math.Max(source.PixelWidth, source.PixelHeight);
+        if (longest <= maxDimension)
+        {
+            return source;
+        }
+
+        var scale = maxDimension / (double)longest;
+        return ResizeTo(
+            source,
+            Math.Max(1, (int)Math.Round(source.PixelWidth * scale)),
+            Math.Max(1, (int)Math.Round(source.PixelHeight * scale)));
+    }
+
+    public static BitmapSource ResizeTo(
+        BitmapSource source,
+        int width,
+        int height)
+    {
+        if (width == source.PixelWidth && height == source.PixelHeight)
+        {
+            return source;
+        }
+
+        var visual = new DrawingVisual();
+        System.Windows.Media.RenderOptions.SetBitmapScalingMode(
+            visual,
+            BitmapScalingMode.HighQuality);
+        using (var drawingContext = visual.RenderOpen())
+        {
+            drawingContext.DrawImage(source, new Rect(0, 0, width, height));
+        }
+
+        var rendered = new RenderTargetBitmap(
+            width,
+            height,
+            96,
+            96,
+            PixelFormats.Pbgra32);
+        rendered.Render(visual);
+        rendered.Freeze();
+        return rendered;
+    }
+
+    /// <summary>
+    /// The pixel size a recipe produces for a given source, without doing any
+    /// of the work. Dialogs use it to show the resulting dimensions live.
+    /// </summary>
+    public static (int Width, int Height) MeasureOutput(
+        int sourceWidth,
+        int sourceHeight,
+        EditRecipe recipe)
+    {
+        var region = recipe.Crop ?? CropRegion.Full;
+        var (_, _, width, height) = GeometryProcessor.GetPixelRect(
+            sourceWidth,
+            sourceHeight,
+            region);
+        return recipe.Rotation is QuarterRotation.Clockwise90
+            or QuarterRotation.Clockwise270
+            ? (height, width)
+            : (width, height);
+    }
+}
