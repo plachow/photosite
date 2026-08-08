@@ -8,6 +8,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using CommunityToolkit.Mvvm.Input;
 using MetadataExtractor.Formats.Exif;
 using Microsoft.Data.Sqlite;
 using PhotoSite;
@@ -1111,6 +1112,7 @@ try
         "Metadata written by exiftool should be read back during indexing.");
 
     AssertImagingPipeline();
+    AssertFolderNavigation(testRoot, photoRoot, nested);
     await AssertBatchProcessingAsync(testRoot, repository, previews);
 
     await AssertWindowClosesCleanlyAsync(
@@ -1448,6 +1450,78 @@ static void SaveTestPng(string path, int width, int height)
     encoder.Frames.Add(BitmapFrame.Create(bitmap));
     using var stream = File.Create(path);
     encoder.Save(stream);
+}
+
+static void AssertFolderNavigation(
+    string testRoot,
+    string photoRoot,
+    string nested)
+{
+    var history = new FolderHistory();
+    Assert(
+        !history.CanGoBack && !history.CanGoForward,
+        "An empty history should offer neither direction.");
+
+    history.Record(testRoot);
+    Assert(
+        !history.CanGoBack,
+        "The folder a session opens with must not enable Back.");
+
+    history.Record(photoRoot);
+    history.Record(nested);
+    Assert(
+        history.CanGoBack && !history.CanGoForward,
+        "Navigating forward should enable Back and nothing else.");
+    Assert(
+        history.GoBack() == photoRoot && history.CanGoForward,
+        "Back should return the previous folder and enable Forward.");
+    Assert(
+        history.GoForward() == nested,
+        "Forward should return the folder Back left behind.");
+
+    history.GoBack();
+    history.Record(testRoot);
+    Assert(
+        !history.CanGoForward,
+        "Navigating somewhere new should abandon the forward entries.");
+
+    history.Record(testRoot);
+    Assert(
+        history.GoBack() == photoRoot,
+        "Re-opening the current folder must not create a duplicate entry.");
+
+    var crumbs = BreadcrumbSegment.Build(
+        nested,
+        path => new RelayCommand(() => { }));
+    Assert(
+        crumbs.Count >= 3
+        && crumbs[0].FullPath == Path.GetPathRoot(nested)
+        && crumbs[^1].FullPath == Path.GetFullPath(nested)
+        && crumbs[^1].IsLast
+        && crumbs.Take(crumbs.Count - 1).All(crumb => !crumb.IsLast),
+        "The breadcrumb should start at the drive root and end at the folder.");
+    Assert(
+        BreadcrumbSegment.Build(null, path => new RelayCommand(() => { })).Count == 0,
+        "An unset folder should produce no breadcrumb.");
+
+    Assert(
+        MainWindow.ParseFilterDate("2025", endOfPeriod: false)
+            == new DateTime(2025, 1, 1)
+        && MainWindow.ParseFilterDate("2025", endOfPeriod: true)
+            == new DateTime(2025, 12, 31, 23, 59, 59, 999).AddTicks(9999),
+        "A year typed as an end date should mean the end of that year.");
+    Assert(
+        MainWindow.ParseFilterDate("2025-07", endOfPeriod: false)
+            == new DateTime(2025, 7, 1)
+        && MainWindow.ParseFilterDate("2025-07", endOfPeriod: true)
+            == new DateTime(2025, 8, 1).AddTicks(-1),
+        "A year and month should widen to the whole month.");
+    Assert(
+        MainWindow.ParseFilterDate("2025-07-04", endOfPeriod: false)
+            == new DateTime(2025, 7, 4)
+        && MainWindow.ParseFilterDate("  ", endOfPeriod: false) is null
+        && MainWindow.ParseFilterDate("not a date", endOfPeriod: false) is null,
+        "Full dates should parse and unusable text should simply not filter.");
 }
 
 static void AssertGalleryFiltering(PhotoCatalogRepository repository)
@@ -1973,6 +2047,7 @@ static async Task AssertWindowClosesCleanlyAsync(
                 window.ValidateCatalogTileForSmokeTest(
                     cataloguePhoto.FileName);
                 window.ValidateCatalogScrollResetForSmokeTest();
+                window.ValidateManagerChromeForSmokeTest();
                 window.ValidatePreviewWheelNavigationForSmokeTest();
                 window.Loaded += (_, _) =>
                     window.Dispatcher.BeginInvoke(

@@ -103,6 +103,7 @@ public sealed class PhotoItemViewModel : ObservableObject
         OnPropertyChanged(nameof(LocationText));
         OnPropertyChanged(nameof(ColorLabel));
         OnPropertyChanged(nameof(ColorLabelBrush));
+        OnPropertyChanged(nameof(HasColorLabel));
         OnPropertyChanged(nameof(Flag));
         OnPropertyChanged(nameof(IsRejected));
         OnPropertyChanged(nameof(FlagGlyph));
@@ -181,12 +182,16 @@ public sealed class PhotoItemViewModel : ObservableObject
             }
 
             OnPropertyChanged(nameof(ColorLabelBrush));
+            OnPropertyChanged(nameof(HasColorLabel));
             _ = PersistMetadataAsync(
                 () => catalog.UpdateColorLabelAsync(Path, value));
         }
     }
 
-    public string ColorLabelBrush => colorLabel.ToHexColor();
+    public System.Windows.Media.Brush ColorLabelBrush =>
+        PhotoLabelBrushes.Get(colorLabel);
+
+    public bool HasColorLabel => colorLabel != ColorLabel.None;
 
     public PhotoFlag Flag
     {

@@ -78,6 +78,8 @@ public partial class MainWindow : Window
         GuardedToggleEditorCommand = new AsyncRelayCommand(
             ToggleEditorWithGuardAsync);
         InitializeComponent();
+        BuildLabelFilters();
+        BuildLabelPicker();
         layoutSaveTimer = new DispatcherTimer
         {
             Interval = TimeSpan.FromMilliseconds(350)
@@ -262,10 +264,10 @@ public partial class MainWindow : Window
 
         var items = contextMenu.Items.OfType<MenuItem>().ToArray();
         var separators = contextMenu.Items.OfType<Separator>().ToArray();
-        if (items.Length != 12
+        if (items.Length != 14
             || items.Any(item => item.Icon is null
                                  || !ReferenceEquals(item.Style, itemStyle))
-            || separators.Length != 5
+            || separators.Length != 6
             || separators.Any(separator =>
                 !ReferenceEquals(separator.Style, separatorStyle)))
         {
@@ -894,6 +896,16 @@ public partial class MainWindow : Window
             selectedCount == 1
                 ? "Batch convert…"
                 : $"Batch convert {selectedCount:N0} photos…");
+        SetMenuHeader(
+            items,
+            "DuplicateFiles",
+            selectedCount == 1
+                ? "Duplicate"
+                : $"Duplicate {selectedCount:N0} files");
+        // Renaming is a one-file operation; a bulk rename is what the batch
+        // dialog is for, and it does it far better than a prompt could.
+        items.Single(item => Equals(item.Tag, "RenameFile")).IsEnabled =
+            selectedCount == 1;
         items.Single(item => Equals(item.Tag, "PasteFiles")).IsEnabled =
             HasClipboardFiles();
     }
@@ -2295,6 +2307,18 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (TryGetFolderNavigationCommand(shortcutKey, Keyboard.Modifiers)
+            is { } navigation)
+        {
+            eventArgs.Handled = true;
+            if (navigation.CanExecute(null))
+            {
+                navigation.Execute(null);
+            }
+
+            return;
+        }
+
         if (viewModel.IsEditorMode
             && IsSaveAsShortcut(
                 eventArgs.Key,
@@ -2517,8 +2541,25 @@ public partial class MainWindow : Window
             && viewModel.SelectedPhoto is not null
             && TryGetRatingShortcut(eventArgs.Key, out var rating))
         {
-            viewModel.SelectedPhoto.Rating = rating;
+            ApplyToSelection(photo => photo.Rating = rating);
             eventArgs.Handled = true;
+            return;
+        }
+
+        if (viewModel.SelectedPhoto is not null
+            && TryHandleOrganizationShortcut(eventArgs.Key, Keyboard.Modifiers))
+        {
+            eventArgs.Handled = true;
+            return;
+        }
+
+        if (eventArgs.Key == Key.F2
+            && Keyboard.Modifiers == ModifierKeys.None
+            && !viewModel.IsEditorMode
+            && !viewModel.IsFullscreenMode)
+        {
+            eventArgs.Handled = true;
+            await RenamePhotoAsync(GetSelectedManagerPhotos().FirstOrDefault());
             return;
         }
 
@@ -2662,6 +2703,31 @@ public partial class MainWindow : Window
         Key key,
         ModifierKeys modifiers) =>
         key == Key.U && modifiers == ModifierKeys.Control;
+
+    /// <summary>
+    /// Alt+Left/Right/Up move through the folder history the way a file
+    /// browser does; they are deliberately kept away from the plain arrow
+    /// keys, which step between photographs.
+    /// </summary>
+    private System.Windows.Input.ICommand? TryGetFolderNavigationCommand(
+        Key key,
+        ModifierKeys modifiers)
+    {
+        if (modifiers != ModifierKeys.Alt
+            || viewModel.IsEditorMode
+            || viewModel.IsFullscreenMode)
+        {
+            return null;
+        }
+
+        return key switch
+        {
+            Key.Left => viewModel.GoBackCommand,
+            Key.Right => viewModel.GoForwardCommand,
+            Key.Up => viewModel.GoUpCommand,
+            _ => null
+        };
+    }
 
     private bool TryGetPhotoNavigationCommand(
         Key key,

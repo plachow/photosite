@@ -15,6 +15,9 @@ public sealed class MainViewModel : ObservableObject
     private const string LastDirectorySetting = "last_directory";
     private const string LastPhotoSetting = "last_photo";
     private const string IncludeSubfoldersSetting = "include_subfolders";
+    private const string ThumbnailSizeSetting = "thumbnail_size";
+    private const string ViewModeSetting = "gallery_view_mode";
+    private const string SortSetting = "gallery_sort";
     // Only a backstop against spinning on a permanently locked file - a large
     // RAW landing over a slow link legitimately stays open for a while.
     private const int MaxWatcherRetries = 40;
@@ -55,6 +58,11 @@ public sealed class MainViewModel : ObservableObject
     private bool sortDescending = true;
     private int minimumRating;
     private string searchText = string.Empty;
+    private readonly FolderHistory history = new();
+    private PhotoFilterCriteria filter = PhotoFilterCriteria.None;
+    private GalleryViewMode viewMode = GalleryViewMode.Grid;
+    private double thumbnailSize = DefaultThumbnailSize;
+    private bool suppressHistory;
 
     public MainViewModel(
         PhotoCatalogRepository catalog,
@@ -69,7 +77,16 @@ public sealed class MainViewModel : ObservableObject
             Timeout.InfiniteTimeSpan,
             Timeout.InfiniteTimeSpan);
         DirectoryTree = new DirectoryTreeViewModel(
-            path => _ = LoadFolderAsync(path, CancellationToken.None));
+            path =>
+            {
+                if (!suppressHistory)
+                {
+                    history.Record(path);
+                    NotifyHistoryChanged();
+                }
+
+                _ = LoadFolderAsync(path, CancellationToken.None);
+            });
         OpenFolderCommand = new AsyncRelayCommand(OpenFolderAsync);
         PreviousCommand = new RelayCommand(SelectPrevious, () => SelectedPhoto is not null);
         NextCommand = new RelayCommand(SelectNext, () => SelectedPhoto is not null);
@@ -93,7 +110,25 @@ public sealed class MainViewModel : ObservableObject
             () => ChangeSort(PhotoSortField.FileName));
         SortByRatingCommand = new RelayCommand(
             () => ChangeSort(PhotoSortField.Rating));
+        GoBackCommand = new AsyncRelayCommand(
+            GoBackAsync,
+            () => history.CanGoBack);
+        GoForwardCommand = new AsyncRelayCommand(
+            GoForwardAsync,
+            () => history.CanGoForward);
+        GoUpCommand = new AsyncRelayCommand(GoUpAsync, () => GetParentFolder() is not null);
+        ToggleSortDirectionCommand = new RelayCommand(ToggleSortDirection);
+        ClearFilterCommand = new RelayCommand(
+            () => Filter = PhotoFilterCriteria.None,
+            () => Filter.IsActive || MinimumRating > 0);
+        RefreshCommand = new AsyncRelayCommand(RefreshAsync);
     }
+
+    public const double DefaultThumbnailSize = 204;
+
+    public const double MinimumThumbnailSize = 108;
+
+    public const double MaximumThumbnailSize = 460;
 
     public BulkObservableCollection<PhotoItemViewModel> Photos { get; } = new();
 
@@ -119,6 +154,157 @@ public sealed class MainViewModel : ObservableObject
 
     public IRelayCommand SortByRatingCommand { get; }
 
+    public IAsyncRelayCommand GoBackCommand { get; }
+
+    public IAsyncRelayCommand GoForwardCommand { get; }
+
+    public IAsyncRelayCommand GoUpCommand { get; }
+
+    public IRelayCommand ToggleSortDirectionCommand { get; }
+
+    public IRelayCommand ClearFilterCommand { get; }
+
+    public IAsyncRelayCommand RefreshCommand { get; }
+
+    public IReadOnlyList<PhotoSortField> SortOptions => PhotoSortFields.All;
+
+    public IReadOnlyList<BreadcrumbSegment> Breadcrumb { get; private set; } = [];
+
+    public PhotoSortField SortField
+    {
+        get => sortField;
+        set
+        {
+            if (sortField == value)
+            {
+                return;
+            }
+
+            sortField = value;
+            OnPropertyChanged();
+            NotifySortChanged();
+            ApplyPhotoPresentation();
+            SelectionRevealRequested?.Invoke();
+            _ = PersistSortAsync();
+        }
+    }
+
+    public bool SortDescending
+    {
+        get => sortDescending;
+        private set
+        {
+            if (SetProperty(ref sortDescending, value))
+            {
+                OnPropertyChanged(nameof(SortDirectionGlyph));
+                OnPropertyChanged(nameof(SortDirectionToolTip));
+            }
+        }
+    }
+
+    public string SortDirectionGlyph => sortDescending ? "↓" : "↑";
+
+    public string SortDirectionToolTip => sortDescending
+        ? "Descending - click for ascending"
+        : "Ascending - click for descending";
+
+    public GalleryViewMode ViewMode
+    {
+        get => viewMode;
+        set
+        {
+            if (SetProperty(ref viewMode, value))
+            {
+                OnPropertyChanged(nameof(IsGridView));
+                OnPropertyChanged(nameof(IsDetailsView));
+                _ = PersistSettingAsync(ViewModeSetting, value.ToString());
+            }
+        }
+    }
+
+    public bool IsGridView => viewMode == GalleryViewMode.Grid;
+
+    public bool IsDetailsView => viewMode == GalleryViewMode.Details;
+
+    /// <summary>Tile width in device-independent pixels.</summary>
+    public double ThumbnailSize
+    {
+        get => thumbnailSize;
+        set
+        {
+            var clamped = Math.Clamp(
+                value,
+                MinimumThumbnailSize,
+                MaximumThumbnailSize);
+            if (SetProperty(ref thumbnailSize, clamped))
+            {
+                OnPropertyChanged(nameof(ThumbnailTileHeight));
+                OnPropertyChanged(nameof(ThumbnailImageHeight));
+                _ = PersistSettingAsync(
+                    ThumbnailSizeSetting,
+                    clamped.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            }
+        }
+    }
+
+    /// <summary>The caption strip is a fixed height, so only the image grows.</summary>
+    public double ThumbnailTileHeight => ThumbnailImageHeight + CaptionHeight;
+
+    public double ThumbnailImageHeight => Math.Round(thumbnailSize * 0.66);
+
+    private const double CaptionHeight = 48;
+
+    public PhotoFilterCriteria Filter
+    {
+        get => filter;
+        set
+        {
+            var updated = value with { MinimumRating = minimumRating };
+            if (filter == updated)
+            {
+                return;
+            }
+
+            filter = updated;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(FilterLabel));
+            OnPropertyChanged(nameof(IsFilterActive));
+            ClearFilterCommand.NotifyCanExecuteChanged();
+            ApplyPhotoPresentation();
+        }
+    }
+
+    public string FilterLabel => Filter.IsActive ? Filter.Describe() : "Filter";
+
+    public bool IsFilterActive => Filter.IsActive;
+
+    /// <summary>
+    /// The cameras, lenses and formats actually present in this folder, so
+    /// the filter panel offers real choices instead of a fixed list.
+    /// </summary>
+    public IReadOnlyList<string> AvailableCameras => allPhotos
+        .Select(photo => photo.Record.Camera)
+        .Where(camera => !string.IsNullOrWhiteSpace(camera))
+        .Select(camera => camera!)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .OrderBy(camera => camera, StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+
+    public IReadOnlyList<string> AvailableLenses => allPhotos
+        .Select(photo => photo.Record.Lens)
+        .Where(lens => !string.IsNullOrWhiteSpace(lens))
+        .Select(lens => lens!)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .OrderBy(lens => lens, StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+
+    public IReadOnlyList<string> AvailableFormats => allPhotos
+        .Select(photo => photo.Record.Extension.ToLowerInvariant())
+        .Where(extension => !string.IsNullOrWhiteSpace(extension))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .OrderBy(extension => extension, StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+
     public string TakenAtSortLabel => BuildSortLabel(
         PhotoSortField.TakenAt,
         "Date taken");
@@ -141,10 +327,19 @@ public sealed class MainViewModel : ObservableObject
         set
         {
             var valid = Math.Clamp(value, 0, 5);
-            if (SetProperty(ref minimumRating, valid))
+            if (!SetProperty(ref minimumRating, valid))
             {
-                ApplyPhotoPresentation();
+                return;
             }
+
+            // The star picker in the status bar and the rating inside the
+            // filter panel are the same setting shown twice.
+            filter = filter with { MinimumRating = valid };
+            OnPropertyChanged(nameof(Filter));
+            OnPropertyChanged(nameof(FilterLabel));
+            OnPropertyChanged(nameof(IsFilterActive));
+            ClearFilterCommand.NotifyCanExecuteChanged();
+            ApplyPhotoPresentation();
         }
     }
 
@@ -153,10 +348,14 @@ public sealed class MainViewModel : ObservableObject
         get => searchText;
         set
         {
-            if (SetProperty(ref searchText, value ?? string.Empty))
+            if (!SetProperty(ref searchText, value ?? string.Empty))
             {
-                ApplyPhotoPresentation();
+                return;
             }
+
+            filter = filter with { SearchText = searchText };
+            OnPropertyChanged(nameof(Filter));
+            ApplyPhotoPresentation();
         }
     }
 
@@ -186,7 +385,13 @@ public sealed class MainViewModel : ObservableObject
     public string? CurrentFolder
     {
         get => currentFolder;
-        private set => SetProperty(ref currentFolder, value);
+        private set
+        {
+            if (SetProperty(ref currentFolder, value))
+            {
+                UpdateBreadcrumb();
+            }
+        }
     }
 
     public string StatusText
@@ -267,6 +472,7 @@ public sealed class MainViewModel : ObservableObject
         CancellationToken cancellationToken)
     {
         var startupTarget = ResolveStartupTarget(startupPath);
+        await RestorePreferencesAsync(cancellationToken);
         var savedScope = await catalog.GetSettingAsync(
             IncludeSubfoldersSetting,
             cancellationToken);
@@ -305,6 +511,10 @@ public sealed class MainViewModel : ObservableObject
         await DirectoryTree.SelectPathAsync(
             initialDirectory,
             notifySelection: false);
+        // Seeds the history without counting as a navigation, so Back is
+        // correctly unavailable on the folder the session opened with.
+        history.Record(initialDirectory);
+        NotifyHistoryChanged();
         await LoadFolderAsync(
             initialDirectory,
             cancellationToken,
@@ -433,6 +643,206 @@ public sealed class MainViewModel : ObservableObject
             folder,
             cancellationToken,
             preferredPhotoPath: null);
+    }
+
+    /// <summary>
+    /// The entry point for a navigation the user asked for: it records
+    /// history, keeps the folder tree in step and then loads the folder.
+    /// </summary>
+    public async Task NavigateToAsync(
+        string folder,
+        CancellationToken cancellationToken = default)
+    {
+        if (!Directory.Exists(folder))
+        {
+            StatusText = $"Directory no longer exists: {folder}";
+            return;
+        }
+
+        var fullPath = Path.GetFullPath(folder);
+        if (!suppressHistory)
+        {
+            history.Record(fullPath);
+            NotifyHistoryChanged();
+        }
+
+        await DirectoryTree.SelectPathAsync(fullPath, notifySelection: false);
+        await LoadFolderAsync(fullPath, cancellationToken);
+    }
+
+    private async Task GoBackAsync()
+    {
+        if (history.GoBack() is not { } target)
+        {
+            return;
+        }
+
+        await NavigateWithoutHistoryAsync(target);
+    }
+
+    private async Task GoForwardAsync()
+    {
+        if (history.GoForward() is not { } target)
+        {
+            return;
+        }
+
+        await NavigateWithoutHistoryAsync(target);
+    }
+
+    private async Task GoUpAsync()
+    {
+        if (GetParentFolder() is { } parent)
+        {
+            await NavigateToAsync(parent);
+        }
+    }
+
+    private async Task RefreshAsync()
+    {
+        if (CurrentFolder is { } folder)
+        {
+            await LoadFolderAsync(folder, CancellationToken.None);
+        }
+    }
+
+    private async Task NavigateWithoutHistoryAsync(string target)
+    {
+        if (!Directory.Exists(target))
+        {
+            var fallback = history.RemoveMissing();
+            NotifyHistoryChanged();
+            StatusText = $"Directory no longer exists: {target}";
+            if (fallback is not null)
+            {
+                await NavigateWithoutHistoryAsync(fallback);
+            }
+
+            return;
+        }
+
+        suppressHistory = true;
+        try
+        {
+            await NavigateToAsync(target);
+        }
+        finally
+        {
+            suppressHistory = false;
+            NotifyHistoryChanged();
+        }
+    }
+
+    private string? GetParentFolder()
+    {
+        if (CurrentFolder is not { } folder)
+        {
+            return null;
+        }
+
+        var parent = Path.GetDirectoryName(
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder)));
+        return string.IsNullOrWhiteSpace(parent) || !Directory.Exists(parent)
+            ? null
+            : parent;
+    }
+
+    private void NotifyHistoryChanged()
+    {
+        GoBackCommand.NotifyCanExecuteChanged();
+        GoForwardCommand.NotifyCanExecuteChanged();
+        GoUpCommand.NotifyCanExecuteChanged();
+    }
+
+    private void UpdateBreadcrumb()
+    {
+        Breadcrumb = BreadcrumbSegment.Build(
+            CurrentFolder,
+            path => new AsyncRelayCommand(() => NavigateToAsync(path)));
+        OnPropertyChanged(nameof(Breadcrumb));
+        NotifyHistoryChanged();
+    }
+
+    private void ToggleSortDirection()
+    {
+        SortDescending = !sortDescending;
+        NotifySortChanged();
+        ApplyPhotoPresentation();
+        SelectionRevealRequested?.Invoke();
+        _ = PersistSortAsync();
+    }
+
+    private void NotifySortChanged()
+    {
+        OnPropertyChanged(nameof(TakenAtSortLabel));
+        OnPropertyChanged(nameof(FileNameSortLabel));
+        OnPropertyChanged(nameof(RatingSortLabel));
+    }
+
+    private Task PersistSortAsync() =>
+        PersistSettingAsync(
+            SortSetting,
+            $"{sortField}|{sortDescending}");
+
+    private async Task PersistSettingAsync(string key, string value)
+    {
+        try
+        {
+            await catalog.SetSettingAsync(key, value);
+        }
+        catch
+        {
+            // A preference that fails to persist must not interrupt browsing.
+        }
+    }
+
+    private async Task RestorePreferencesAsync(CancellationToken cancellationToken)
+    {
+        var savedSize = await catalog.GetSettingAsync(
+            ThumbnailSizeSetting,
+            cancellationToken);
+        if (double.TryParse(
+                savedSize,
+                System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var size))
+        {
+            thumbnailSize = Math.Clamp(
+                size,
+                MinimumThumbnailSize,
+                MaximumThumbnailSize);
+            OnPropertyChanged(nameof(ThumbnailSize));
+            OnPropertyChanged(nameof(ThumbnailTileHeight));
+            OnPropertyChanged(nameof(ThumbnailImageHeight));
+        }
+
+        var savedView = await catalog.GetSettingAsync(
+            ViewModeSetting,
+            cancellationToken);
+        if (Enum.TryParse<GalleryViewMode>(savedView, out var mode))
+        {
+            viewMode = mode;
+            OnPropertyChanged(nameof(ViewMode));
+            OnPropertyChanged(nameof(IsGridView));
+            OnPropertyChanged(nameof(IsDetailsView));
+        }
+
+        var savedSort = await catalog.GetSettingAsync(
+            SortSetting,
+            cancellationToken);
+        var parts = savedSort?.Split('|');
+        if (parts is { Length: 2 }
+            && Enum.TryParse<PhotoSortField>(parts[0], out var field)
+            && bool.TryParse(parts[1], out var descending))
+        {
+            sortField = field;
+            sortDescending = descending;
+            OnPropertyChanged(nameof(SortField));
+            OnPropertyChanged(nameof(SortDescending));
+            OnPropertyChanged(nameof(SortDirectionGlyph));
+            OnPropertyChanged(nameof(SortDirectionToolTip));
+            NotifySortChanged();
+        }
     }
 
     public async Task OpenSelectedPhotoFolderInManagerAsync(
@@ -733,6 +1143,18 @@ public sealed class MainViewModel : ObservableObject
         }
 
         ApplyPhotoPresentation(preferredPhotoPath);
+        NotifyFilterSourcesChanged();
+    }
+
+    /// <summary>
+    /// The filter panel offers the cameras, lenses and formats present in the
+    /// folder, so they have to be re-read whenever the gallery is refilled.
+    /// </summary>
+    private void NotifyFilterSourcesChanged()
+    {
+        OnPropertyChanged(nameof(AvailableCameras));
+        OnPropertyChanged(nameof(AvailableLenses));
+        OnPropertyChanged(nameof(AvailableFormats));
     }
 
     private void ApplyPhotoPresentation(string? preferredPhotoPath = null)
@@ -743,8 +1165,7 @@ public sealed class MainViewModel : ObservableObject
             allPhotos,
             sortField,
             sortDescending,
-            minimumRating,
-            searchText);
+            filter);
         // Granular updates keep the realized tiles - and the thumbnails they
         // already decoded - alive; a Reset would blank the whole viewport.
         Photos.SynchronizeTo(presented);
@@ -924,19 +1345,19 @@ public sealed class MainViewModel : ObservableObject
     {
         if (sortField == field)
         {
-            sortDescending = !sortDescending;
+            SortDescending = !sortDescending;
         }
         else
         {
             sortField = field;
-            sortDescending = field != PhotoSortField.FileName;
+            OnPropertyChanged(nameof(SortField));
+            SortDescending = field != PhotoSortField.FileName;
         }
 
-        OnPropertyChanged(nameof(TakenAtSortLabel));
-        OnPropertyChanged(nameof(FileNameSortLabel));
-        OnPropertyChanged(nameof(RatingSortLabel));
+        NotifySortChanged();
         ApplyPhotoPresentation();
         SelectionRevealRequested?.Invoke();
+        _ = PersistSortAsync();
     }
 
     private string BuildSortLabel(PhotoSortField field, string label) =>
@@ -948,15 +1369,27 @@ public sealed class MainViewModel : ObservableObject
         object? sender,
         PropertyChangedEventArgs eventArgs)
     {
-        if (suppressPresentationRefresh
-            || eventArgs.PropertyName != nameof(PhotoItemViewModel.Rating))
+        if (suppressPresentationRefresh)
         {
             return;
         }
 
-        // A rating can only move a photo when the gallery orders or filters
-        // by it; otherwise re-presenting on every keypress is pure churn.
-        if (sortField == PhotoSortField.Rating || minimumRating > 0)
+        // Re-presenting on every keypress is pure churn: a value can only
+        // move a photo when the gallery actually orders or filters by it.
+        var affects = eventArgs.PropertyName switch
+        {
+            nameof(PhotoItemViewModel.Rating) =>
+                sortField == PhotoSortField.Rating || minimumRating > 0,
+            nameof(PhotoItemViewModel.ColorLabel) =>
+                filter.ColorLabels.Count > 0,
+            nameof(PhotoItemViewModel.Flag) =>
+                filter.Flags.Count > 0 || filter.HideRejected,
+            nameof(PhotoItemViewModel.Keywords) =>
+                !string.IsNullOrWhiteSpace(filter.SearchText),
+            _ => false
+        };
+
+        if (affects)
         {
             ApplyPhotoPresentation();
         }
