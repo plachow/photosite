@@ -90,7 +90,13 @@ internal sealed class ExifToolMetadataWriter
             payload,
             sidecar,
             createSidecar);
+        return await RunAsync(arguments, cancellationToken);
+    }
 
+    private async Task<ExifToolResult> RunAsync(
+        IReadOnlyList<string> arguments,
+        CancellationToken cancellationToken)
+    {
         var argumentFile = Path.Combine(
             Path.GetTempPath(),
             $"photosite-exiftool-{Guid.NewGuid():N}.args");
@@ -147,6 +153,59 @@ internal sealed class ExifToolMetadataWriter
                 // A leaked temp file must not fail the metadata write.
             }
         }
+    }
+
+    /// <summary>
+    /// Copies metadata from each source onto its converted output in one
+    /// exiftool run.
+    /// </summary>
+    /// <remarks>
+    /// Starting a process per photograph would add minutes to a large batch,
+    /// so the whole list goes into a single argument file separated by
+    /// <c>-execute</c>, which exiftool processes as consecutive commands.
+    /// </remarks>
+    public async Task<ExifToolResult> CopyMetadataBatchAsync(
+        IReadOnlyList<(string Source, string Destination)> pairs,
+        bool removeLocation,
+        CancellationToken cancellationToken)
+    {
+        if (pairs.Count == 0)
+        {
+            return new ExifToolResult(true, string.Empty);
+        }
+
+        if (!IsAvailable)
+        {
+            return new ExifToolResult(
+                false,
+                $"exiftool was not found at {exePath}");
+        }
+
+        var arguments = new List<string>(pairs.Count * 10);
+        foreach (var (source, destination) in pairs)
+        {
+            arguments.Add("-charset");
+            arguments.Add("filename=UTF8");
+            arguments.Add("-overwrite_original");
+            arguments.Add("-m");
+            arguments.Add("-q");
+            arguments.Add("-TagsFromFile");
+            arguments.Add(source);
+            arguments.Add("-all:all");
+            // The pixels were already rotated on the way out; carrying the
+            // source orientation over would rotate the output a second time.
+            arguments.Add("-Orientation=1");
+            if (removeLocation)
+            {
+                arguments.Add("-gps:all=");
+                arguments.Add("-xmp:geotag=");
+            }
+
+            arguments.Add(destination);
+            arguments.Add("-execute");
+        }
+
+        return await RunAsync(arguments, cancellationToken);
     }
 
     internal static IReadOnlyList<string> BuildArguments(

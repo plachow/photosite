@@ -1,5 +1,6 @@
 using System.Net.Http;
 using PhotoSite.Services;
+using PhotoSite.Services.Batch;
 
 namespace PhotoSite.Infrastructure;
 
@@ -21,6 +22,8 @@ public sealed class AppServices
         Updates = new AppUpdateService();
         MetadataWriter = new ExifToolMetadataWriter();
         MetadataOutbox = new MetadataOutboxProcessor(Catalog, MetadataWriter);
+        BatchPresets = new BatchPresetStore(Catalog);
+        Batch = new BatchProcessor(Previews, MetadataWriter);
     }
 
     public AppPaths Paths { get; }
@@ -43,9 +46,17 @@ public sealed class AppServices
 
     internal MetadataOutboxProcessor MetadataOutbox { get; }
 
+    internal BatchPresetStore BatchPresets { get; }
+
+    internal BatchProcessor Batch { get; }
+
     public async Task InitializeAsync()
     {
         Paths.EnsureCreated();
+        // Registering the bundled libwebp decoder up front means WebP files
+        // browse and open like any other photograph, not only on machines
+        // where the optional Windows codec happens to be installed.
+        ImageEncoder.EnsureCodecsRegistered();
         await Catalog.InitializeAsync();
         MetadataOutbox.Start();
     }

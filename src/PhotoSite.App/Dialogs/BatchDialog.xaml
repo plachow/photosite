@@ -1,0 +1,331 @@
+<Window x:Class="PhotoSite.Dialogs.BatchDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Batch conversion"
+        Width="1020"
+        Height="720"
+        MinWidth="900"
+        MinHeight="620"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False">
+  <Window.Resources>
+    <Style x:Key="RowLabel"
+           TargetType="TextBlock"
+           BasedOn="{StaticResource FieldLabelStyle}">
+      <Setter Property="Margin" Value="0,0,10,0" />
+    </Style>
+    <Style TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
+      <Setter Property="Margin" Value="0,0,0,0" />
+      <Setter Property="MinWidth" Value="150" />
+    </Style>
+  </Window.Resources>
+
+  <Grid Margin="16">
+    <Grid.ColumnDefinitions>
+      <ColumnDefinition Width="222" />
+      <ColumnDefinition Width="*" />
+    </Grid.ColumnDefinitions>
+    <Grid.RowDefinitions>
+      <RowDefinition Height="*" />
+      <RowDefinition Height="Auto" />
+    </Grid.RowDefinitions>
+
+    <!-- Presets -->
+    <Border Grid.Row="0"
+            Grid.Column="0"
+            Margin="0,0,12,0"
+            Style="{StaticResource DialogPanelStyle}">
+      <Grid>
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="*" />
+          <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <TextBlock Style="{StaticResource SectionHeaderStyle}" Text="PRESETS" />
+        <ListBox x:Name="PresetList"
+                 Grid.Row="1"
+                 ItemContainerStyle="{StaticResource PanelListBoxItemStyle}"
+                 SelectionChanged="OnPresetSelectionChanged" />
+        <StackPanel Grid.Row="2" Margin="0,8,0,0">
+          <Button Margin="0,0,0,4"
+                  Content="Save as preset…"
+                  Click="OnSavePresetClick" />
+          <Button Margin="0"
+                  Content="Delete preset"
+                  Click="OnDeletePresetClick" />
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <!-- Settings -->
+    <Border Grid.Row="0" Grid.Column="1" Style="{StaticResource DialogPanelStyle}">
+      <Grid>
+        <Grid.RowDefinitions>
+          <RowDefinition Height="*" />
+          <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+          <StackPanel Margin="0,0,10,0">
+
+            <TextBlock Style="{StaticResource SectionHeaderStyle}" Text="FORMAT" />
+            <Grid Margin="0,0,0,10">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+              </Grid.ColumnDefinitions>
+              <TextBlock Style="{StaticResource RowLabel}" Text="Output format" />
+              <ComboBox x:Name="FormatBox"
+                        Grid.Column="1"
+                        Width="170"
+                        SelectionChanged="OnSettingChanged" />
+              <TextBlock x:Name="QualityLabel"
+                         Grid.Column="2"
+                         Margin="18,0,10,0"
+                         Style="{StaticResource RowLabel}"
+                         Text="Quality" />
+              <Grid Grid.Column="3">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*" />
+                  <ColumnDefinition Width="44" />
+                </Grid.ColumnDefinitions>
+                <Slider x:Name="QualitySlider"
+                        Minimum="1"
+                        Maximum="100"
+                        SmallChange="1"
+                        LargeChange="5"
+                        ValueChanged="OnSettingChanged" />
+                <TextBlock Grid.Column="1"
+                           Style="{StaticResource ValueLabelStyle}"
+                           Text="{Binding Value,
+                                          ElementName=QualitySlider,
+                                          StringFormat={}{0:0}}" />
+              </Grid>
+            </Grid>
+
+            <TextBlock Style="{StaticResource SectionHeaderStyle}" Text="RESIZE" />
+            <Grid Margin="0,0,0,6">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+              </Grid.ColumnDefinitions>
+              <TextBlock Style="{StaticResource RowLabel}" Text="Resize by" />
+              <ComboBox x:Name="ResizeModeBox"
+                        Grid.Column="1"
+                        Width="170"
+                        SelectionChanged="OnSettingChanged" />
+              <TextBox x:Name="ResizeValueBox"
+                       Grid.Column="2"
+                       Width="86"
+                       Margin="10,0,0,0"
+                       TextChanged="OnSettingChanged" />
+              <TextBlock x:Name="ResizeUnitLabel"
+                         Grid.Column="3"
+                         Margin="8,0,0,0"
+                         Style="{StaticResource RowLabel}"
+                         Text="px" />
+              <CheckBox x:Name="AllowEnlargeBox"
+                        Grid.Column="4"
+                        Margin="14,0,0,0"
+                        Content="Allow enlarging"
+                        Click="OnSettingChanged" />
+            </Grid>
+            <TextBlock Margin="0,0,0,10"
+                       FontSize="11"
+                       Foreground="{StaticResource MutedTextBrush}"
+                       Text="The aspect ratio is always preserved."
+                       TextWrapping="Wrap" />
+
+            <Grid Margin="0,0,0,14">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="44" />
+              </Grid.ColumnDefinitions>
+              <TextBlock Style="{StaticResource RowLabel}" Text="Output sharpening" />
+              <Slider x:Name="SharpenSlider"
+                      Grid.Column="1"
+                      Minimum="0"
+                      Maximum="100"
+                      ValueChanged="OnSettingChanged" />
+              <TextBlock Grid.Column="2"
+                         Style="{StaticResource ValueLabelStyle}"
+                         Text="{Binding Value,
+                                        ElementName=SharpenSlider,
+                                        StringFormat={}{0:0}}" />
+            </Grid>
+
+            <TextBlock Style="{StaticResource SectionHeaderStyle}" Text="FILE NAMES" />
+            <Grid Margin="0,0,0,8">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+              </Grid.ColumnDefinitions>
+              <TextBlock Style="{StaticResource RowLabel}" Text="Base name" />
+              <ComboBox x:Name="NameSourceBox"
+                        Grid.Column="1"
+                        Width="170"
+                        SelectionChanged="OnSettingChanged" />
+              <TextBlock x:Name="NameDetailLabel"
+                         Grid.Column="2"
+                         Margin="14,0,10,0"
+                         Style="{StaticResource RowLabel}"
+                         Text="Text" />
+              <TextBox x:Name="NameDetailBox"
+                       Grid.Column="3"
+                       TextChanged="OnSettingChanged" />
+            </Grid>
+            <Grid Margin="0,0,0,8">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+              </Grid.ColumnDefinitions>
+              <TextBlock Style="{StaticResource RowLabel}" Text="Prefix" />
+              <TextBox x:Name="PrefixBox"
+                       Grid.Column="1"
+                       TextChanged="OnSettingChanged" />
+              <TextBlock Grid.Column="2"
+                         Margin="14,0,10,0"
+                         Style="{StaticResource RowLabel}"
+                         Text="Suffix" />
+              <TextBox x:Name="SuffixBox"
+                       Grid.Column="3"
+                       TextChanged="OnSettingChanged" />
+            </Grid>
+            <Grid Margin="0,0,0,14">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+              </Grid.ColumnDefinitions>
+              <CheckBox x:Name="NumberingBox"
+                        Content="Sequential numbering"
+                        Click="OnSettingChanged" />
+              <TextBlock Grid.Column="1"
+                         Margin="16,0,8,0"
+                         Style="{StaticResource RowLabel}"
+                         Text="Start at" />
+              <TextBox x:Name="NumberStartBox"
+                       Grid.Column="2"
+                       Width="62"
+                       TextChanged="OnSettingChanged" />
+              <TextBlock Grid.Column="3"
+                         Margin="14,0,8,0"
+                         Style="{StaticResource RowLabel}"
+                         Text="Digits" />
+              <TextBox x:Name="NumberDigitsBox"
+                       Grid.Column="4"
+                       Width="52"
+                       TextChanged="OnSettingChanged" />
+            </Grid>
+
+            <TextBlock Style="{StaticResource SectionHeaderStyle}"
+                       Text="DESTINATION" />
+            <Grid Margin="0,0,0,8">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+              </Grid.ColumnDefinitions>
+              <TextBox x:Name="OutputDirectoryBox" TextChanged="OnSettingChanged" />
+              <Button Grid.Column="1"
+                      Margin="8,0,0,0"
+                      MinWidth="92"
+                      Content="Browse…"
+                      Click="OnBrowseClick" />
+            </Grid>
+            <StackPanel Margin="0,0,0,8" Orientation="Horizontal">
+              <CheckBox x:Name="UseSourceDirectoryBox"
+                        Content="Save next to the originals"
+                        Click="OnSettingChanged" />
+              <CheckBox x:Name="DateSubfolderBox"
+                        Margin="18,0,0,0"
+                        Content="Subfolder per date"
+                        Click="OnSettingChanged" />
+            </StackPanel>
+            <Grid Margin="0,0,0,14">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+              </Grid.ColumnDefinitions>
+              <TextBlock Style="{StaticResource RowLabel}"
+                         Text="If the file exists" />
+              <ComboBox x:Name="OverwriteBox"
+                        Grid.Column="1"
+                        Width="170"
+                        SelectionChanged="OnSettingChanged" />
+              <TextBlock Grid.Column="2"
+                         Margin="18,0,10,0"
+                         Style="{StaticResource RowLabel}"
+                         Text="Metadata" />
+              <ComboBox x:Name="MetadataBox"
+                        Grid.Column="3"
+                        SelectionChanged="OnSettingChanged" />
+            </Grid>
+
+            <CheckBox x:Name="ApplyEditsBox"
+                      Margin="0,0,0,4"
+                      Content="Apply saved PhotoSite edits (crop, rotation, adjustments)"
+                      Click="OnSettingChanged" />
+          </StackPanel>
+        </ScrollViewer>
+
+        <!-- Summary -->
+        <Border Grid.Row="1"
+                Margin="0,12,0,0"
+                Padding="12,10"
+                Background="#20242B"
+                BorderBrush="#3A3F4B"
+                BorderThickness="1"
+                CornerRadius="5">
+          <StackPanel>
+            <TextBlock x:Name="SummaryText"
+                       FontSize="13"
+                       Foreground="{StaticResource PrimaryTextBrush}"
+                       TextWrapping="Wrap" />
+            <TextBlock x:Name="SampleText"
+                       Margin="0,5,0,0"
+                       FontSize="11"
+                       Foreground="{StaticResource MutedTextBrush}"
+                       TextTrimming="CharacterEllipsis" />
+            <ProgressBar x:Name="BatchProgress"
+                         Margin="0,9,0,0"
+                         Visibility="Collapsed" />
+          </StackPanel>
+        </Border>
+      </Grid>
+    </Border>
+
+    <!-- Buttons -->
+    <StackPanel Grid.Row="1"
+                Grid.Column="1"
+                Margin="0,12,0,0"
+                HorizontalAlignment="Right"
+                Orientation="Horizontal">
+      <Button x:Name="RunButton"
+              MinWidth="132"
+              Content="Convert"
+              IsDefault="True"
+              Click="OnRunClick" />
+      <Button x:Name="CloseButton"
+              MinWidth="96"
+              Margin="8,0,0,0"
+              Content="Close"
+              IsCancel="True"
+              Click="OnCloseClick" />
+    </StackPanel>
+  </Grid>
+</Window>

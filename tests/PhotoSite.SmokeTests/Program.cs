@@ -15,6 +15,7 @@ using PhotoSite.Controls;
 using PhotoSite.Domain;
 using PhotoSite.Infrastructure;
 using PhotoSite.Services;
+using PhotoSite.Services.Batch;
 using PhotoSite.Services.Imaging;
 using PhotoSite.ViewModels;
 
@@ -1110,6 +1111,7 @@ try
         "Metadata written by exiftool should be read back during indexing.");
 
     AssertImagingPipeline();
+    await AssertBatchProcessingAsync(testRoot, repository, previews);
 
     await AssertWindowClosesCleanlyAsync(
         repository,
@@ -1189,6 +1191,263 @@ static void AssertIncrementalPresentation(
     Assert(
         resets == 0 && photos.Count == 0,
         "Clearing a small gallery should remove rather than reset.");
+}
+
+static async Task AssertBatchProcessingAsync(
+    string testRoot,
+    PhotoCatalogRepository repository,
+    PreviewService previews)
+{
+    var batchRoot = Directory.CreateDirectory(
+        Path.Combine(testRoot, "batch-source")).FullName;
+    var batchOutput = Path.Combine(testRoot, "batch-output");
+
+    var wide = Path.Combine(batchRoot, "wide.png");
+    var tall = Path.Combine(batchRoot, "tall.png");
+    SaveTestPng(wide, 400, 200);
+    SaveTestPng(tall, 200, 400);
+
+    var sources = new[]
+    {
+        new BatchSource(
+            wide,
+            EditRecipe.Empty,
+            new DateTime(2025, 7, 4, 9, 30, 0).Ticks,
+            400,
+            200),
+        new BatchSource(
+            tall,
+            EditRecipe.Empty with { Rotation = QuarterRotation.Clockwise90 },
+            new DateTime(2025, 7, 4, 9, 31, 0).Ticks,
+            200,
+            400)
+    };
+
+    Assert(
+        BatchProcessor.MeasureResize(400, 200, new BatchPreset
+        {
+            ResizeMode = BatchResizeMode.LongestSide,
+            ResizeValue = 200
+        }) == (200, 100),
+        "Longest-side resizing should preserve the aspect ratio.");
+    Assert(
+        BatchProcessor.MeasureResize(400, 200, new BatchPreset
+        {
+            ResizeMode = BatchResizeMode.Percentage,
+            ResizeValue = 50
+        }) == (200, 100),
+        "Percentage resizing should scale both axes.");
+    Assert(
+        BatchProcessor.MeasureResize(400, 200, new BatchPreset
+        {
+            ResizeMode = BatchResizeMode.Width,
+            ResizeValue = 800
+        }) is null,
+        "Resizing must not enlarge unless the preset allows it.");
+    Assert(
+        BatchProcessor.MeasureResize(400, 200, new BatchPreset
+        {
+            ResizeMode = BatchResizeMode.Width,
+            ResizeValue = 800,
+            AllowEnlarge = true
+        }) == (800, 400),
+        "Enlarging should happen when the preset opts into it.");
+    Assert(
+        BatchProcessor.MeasureResize(400, 200, new BatchPreset
+        {
+            ResizeMode = BatchResizeMode.ShortestSide,
+            ResizeValue = 100
+        }) == (200, 100),
+        "Shortest-side resizing should target the smaller axis.");
+
+    var namingPreset = new BatchPreset
+    {
+        OutputDirectory = batchOutput,
+        Format = ImageOutputFormat.Jpeg,
+        Prefix = "IS_",
+        Suffix = "_web",
+        NameSource = BatchNameSource.CustomText,
+        CustomName = "iceland",
+        UseSequentialNumbering = true,
+        NumberStart = 7,
+        NumberDigits = 3
+    };
+    Assert(
+        BatchPlanner.BuildFileName(sources[0], namingPreset, 7)
+            == "IS_iceland_web_007.jpg",
+        "File names should combine prefix, base name, suffix and numbering.");
+    Assert(
+        BatchPlanner.BuildFileName(
+            sources[0],
+            namingPreset with
+            {
+                NameSource = BatchNameSource.DateTaken,
+                DateFormat = "yyyy-MM-dd",
+                UseSequentialNumbering = false
+            },
+            1) == "IS_2025-07-04_web.jpg",
+        "Date-based names should use the capture date.");
+    Assert(
+        BatchPlanner.BuildFileName(
+            sources[0],
+            namingPreset with
+            {
+                NameSource = BatchNameSource.CustomText,
+                CustomName = "bad:name*",
+                UseSequentialNumbering = false,
+                Prefix = string.Empty,
+                Suffix = string.Empty
+            },
+            1) == "badname.jpg",
+        "Names must be stripped of characters Windows cannot write.");
+
+    var collidingPlan = BatchPlanner.Plan(
+        sources,
+        namingPreset with { UseSequentialNumbering = false });
+    Assert(
+        collidingPlan.Items.Select(item => item.DestinationPath).Distinct().Count()
+            == 2,
+        "Two sources that would produce the same name must not collide.");
+
+    var skipPlan = BatchPlanner.Plan(
+        sources,
+        namingPreset with
+        {
+            UseSequentialNumbering = false,
+            OverwritePolicy = BatchOverwritePolicy.Skip
+        });
+    Assert(
+        skipPlan.SkipCount == 1 && skipPlan.WriteCount == 1,
+        "A Skip policy should report the colliding photo as skipped.");
+
+    var preset = new BatchPreset
+    {
+        Name = "Smoke web export",
+        OutputDirectory = batchOutput,
+        Format = ImageOutputFormat.Jpeg,
+        Quality = 80,
+        ResizeMode = BatchResizeMode.LongestSide,
+        ResizeValue = 100,
+        SharpenAmount = 25,
+        MetadataPolicy = BatchMetadataPolicy.RemoveAll,
+        Prefix = "web_"
+    };
+
+    var processor = new BatchProcessor(previews, new ExifToolMetadataWriter());
+    var reports = new List<BatchProgress>();
+    var outcome = await processor.RunAsync(
+        BatchPlanner.Plan(sources, preset),
+        preset,
+        new Progress<BatchProgress>(reports.Add));
+
+    Assert(
+        outcome is { Written: 2, Failed: 0, Cancelled: false },
+        "A two-photo batch should write both files: "
+        + string.Join(" | ", outcome.Errors));
+
+    var wideOutput = Path.Combine(batchOutput, "web_wide.jpg");
+    var tallOutput = Path.Combine(batchOutput, "web_tall.jpg");
+    Assert(
+        File.Exists(wideOutput) && File.Exists(tallOutput),
+        "Batch output should land in the chosen folder under the new names.");
+
+    var wideResult = await previews.LoadAsync(wideOutput, 0, CancellationToken.None);
+    var tallResult = await previews.LoadAsync(tallOutput, 0, CancellationToken.None);
+    Assert(
+        wideResult.PixelWidth == 100 && wideResult.PixelHeight == 50,
+        $"The landscape photo should be resized to its longest side, "
+        + $"got {wideResult.PixelWidth}x{wideResult.PixelHeight}.");
+    Assert(
+        tallResult.PixelWidth == 100 && tallResult.PixelHeight == 50,
+        "A rotation in the recipe should be applied before the resize, "
+        + $"got {tallResult.PixelWidth}x{tallResult.PixelHeight}.");
+
+    // WebP has no dependable WIC encoder, so this proves the bundled
+    // libwebp codec is actually registered and reachable.
+    var webpPreset = preset with
+    {
+        Format = ImageOutputFormat.WebP,
+        Prefix = "webp_",
+        ResizeMode = BatchResizeMode.None,
+        SharpenAmount = 0
+    };
+    var webpOutcome = await processor.RunAsync(
+        BatchPlanner.Plan([sources[0]], webpPreset),
+        webpPreset);
+    var webpOutput = Path.Combine(batchOutput, "webp_wide.webp");
+    Assert(
+        webpOutcome.Written == 1 && File.Exists(webpOutput),
+        "WebP conversion should produce a file: "
+        + string.Join(" | ", webpOutcome.Errors));
+    var webpBytes = await File.ReadAllBytesAsync(webpOutput);
+    Assert(
+        webpBytes.Length > 12
+        && System.Text.Encoding.ASCII.GetString(webpBytes, 0, 4) == "RIFF"
+        && System.Text.Encoding.ASCII.GetString(webpBytes, 8, 4) == "WEBP",
+        "The WebP encoder should write a real RIFF/WEBP container.");
+
+    Assert(
+        reports.Count > 0 && reports[^1].Completed == reports[^1].Total,
+        "Batch progress should be reported and end at 100 %.");
+
+    var store = new BatchPresetStore(repository);
+    var seeded = await store.LoadAsync();
+    Assert(
+        seeded.Any(item => item.Name == "Facebook export")
+        && seeded.Any(item => item.Name == "Small email photos"),
+        "The starter presets should be seeded on first use.");
+
+    await store.SaveAsync(preset);
+    var reloaded = await store.LoadAsync();
+    var roundTripped = reloaded.Single(item => item.Name == preset.Name);
+    Assert(
+        roundTripped.Quality == 80
+        && roundTripped.ResizeMode == BatchResizeMode.LongestSide
+        && roundTripped.ResizeValue == 100
+        && roundTripped.Prefix == "web_",
+        "A saved preset should round-trip through the catalogue.");
+
+    await store.DeleteAsync(preset.Name);
+    Assert(
+        (await store.LoadAsync()).All(item => item.Name != preset.Name),
+        "Deleting a preset should remove it.");
+
+    var deletedBuiltIn = seeded.First(item => item.Name == "Web gallery");
+    await store.DeleteAsync(deletedBuiltIn.Name);
+    Assert(
+        (await store.LoadAsync()).All(item => item.Name != deletedBuiltIn.Name),
+        "A deleted starter preset must not come back on the next load.");
+}
+
+static void SaveTestPng(string path, int width, int height)
+{
+    var pixels = new byte[width * height * 4];
+    for (var row = 0; row < height; row++)
+    {
+        for (var column = 0; column < width; column++)
+        {
+            var index = ((row * width) + column) * 4;
+            pixels[index] = (byte)(column * 255 / Math.Max(1, width - 1));
+            pixels[index + 1] = (byte)(row * 255 / Math.Max(1, height - 1));
+            pixels[index + 2] = 140;
+            pixels[index + 3] = 255;
+        }
+    }
+
+    var bitmap = BitmapSource.Create(
+        width,
+        height,
+        96,
+        96,
+        PixelFormats.Bgra32,
+        null,
+        pixels,
+        width * 4);
+    bitmap.Freeze();
+    var encoder = new PngBitmapEncoder();
+    encoder.Frames.Add(BitmapFrame.Create(bitmap));
+    using var stream = File.Create(path);
+    encoder.Save(stream);
 }
 
 static void AssertGalleryFiltering(PhotoCatalogRepository repository)

@@ -14,9 +14,11 @@ using System.Windows.Threading;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Win32;
 using PhotoSite.Controls;
+using PhotoSite.Dialogs;
 using PhotoSite.Domain;
 using PhotoSite.Infrastructure;
 using PhotoSite.Services;
+using PhotoSite.Services.Batch;
 using PhotoSite.ViewModels;
 using ShapePath = System.Windows.Shapes.Path;
 
@@ -32,6 +34,7 @@ public partial class MainWindow : Window
     private const string WindowLayoutSetting = "window_layout_v1";
     private const string LastCopyDestinationSetting = "last_copy_destination";
     private const string LastMoveDestinationSetting = "last_move_destination";
+    private const string LastBatchDestinationSetting = "last_batch_destination";
     private const string ImgurClientIdSetting = "imgur_client_id";
     private const double DefaultNavigatorWidth = 260;
     private const double DefaultCatalogWidth = 420;
@@ -60,6 +63,7 @@ public partial class MainWindow : Window
     private bool refreshCatalogAfterEditorExit;
     private string? lastCopyDestination;
     private string? lastMoveDestination;
+    private string? lastBatchDestination;
 
     public MainWindow(
         MainViewModel viewModel,
@@ -161,6 +165,14 @@ public partial class MainWindow : Window
             {
                 lastMoveDestination = Path.GetFullPath(savedMoveDestination);
             }
+
+            var savedBatchDestination = await catalog.GetSettingAsync(
+                LastBatchDestinationSetting);
+            if (!string.IsNullOrWhiteSpace(savedBatchDestination)
+                && Directory.Exists(savedBatchDestination))
+            {
+                lastBatchDestination = Path.GetFullPath(savedBatchDestination);
+            }
         }
         catch
         {
@@ -250,10 +262,10 @@ public partial class MainWindow : Window
 
         var items = contextMenu.Items.OfType<MenuItem>().ToArray();
         var separators = contextMenu.Items.OfType<Separator>().ToArray();
-        if (items.Length != 11
+        if (items.Length != 12
             || items.Any(item => item.Icon is null
                                  || !ReferenceEquals(item.Style, itemStyle))
-            || separators.Length != 4
+            || separators.Length != 5
             || separators.Any(separator =>
                 !ReferenceEquals(separator.Style, separatorStyle)))
         {
@@ -876,6 +888,12 @@ public partial class MainWindow : Window
             selectedCount == 1
                 ? "Move to Recycle Bin"
                 : $"Move {selectedCount:N0} files to Recycle Bin");
+        SetMenuHeader(
+            items,
+            "BatchConvert",
+            selectedCount == 1
+                ? "Batch convert…"
+                : $"Batch convert {selectedCount:N0} photos…");
         items.Single(item => Equals(item.Tag, "PasteFiles")).IsEnabled =
             HasClipboardFiles();
     }
@@ -958,6 +976,76 @@ public partial class MainWindow : Window
         object sender,
         RoutedEventArgs eventArgs) =>
         await DeleteSelectedFilesAsync(GetContextPhotos(sender));
+
+    private async void OnBatchConvertClick(
+        object sender,
+        RoutedEventArgs eventArgs) =>
+        await RunBatchConversionAsync(GetContextPhotos(sender));
+
+    private async Task RunBatchConversionAsync(
+        IReadOnlyCollection<PhotoItemViewModel> photos)
+    {
+        var sources = photos
+            .Where(photo => !photo.IsTransient && File.Exists(photo.Path))
+            .DistinctBy(photo => photo.Path, StringComparer.OrdinalIgnoreCase)
+            .Select(photo => new BatchSource(
+                photo.Path,
+                photo.EditRecipe,
+                photo.TakenAtTicks,
+                photo.Record.PixelWidth,
+                photo.Record.PixelHeight))
+            .ToArray();
+        if (sources.Length == 0)
+        {
+            viewModel.ReportStatus("Select photos to convert first");
+            return;
+        }
+
+        var dialog = new BatchDialog(
+            sources,
+            App.Services.BatchPresets,
+            App.Services.Batch,
+            lastBatchDestination
+            ?? lastCopyDestination
+            ?? viewModel.CurrentFolder)
+        {
+            Owner = this
+        };
+        dialog.ShowDialog();
+
+        if (!dialog.DidWriteFiles)
+        {
+            return;
+        }
+
+        if (dialog.LastOutputDirectory is { } destination)
+        {
+            lastBatchDestination = destination;
+            await PersistSettingAsync(LastBatchDestinationSetting, destination);
+        }
+
+        // Files written into the folder on screen have to appear in it.
+        if (dialog.LastOutputDirectory is null
+            || IsDestinationInCurrentCatalog(dialog.LastOutputDirectory))
+        {
+            await RefreshCurrentCatalogAsync();
+        }
+
+        viewModel.ReportStatus("Batch conversion finished");
+    }
+
+    private async Task PersistSettingAsync(string key, string value)
+    {
+        try
+        {
+            await catalog.SetSettingAsync(key, value);
+        }
+        catch (Exception exception)
+        {
+            viewModel.ReportStatus(
+                $"The setting could not be saved: {exception.Message}");
+        }
+    }
 
     private static void SetMenuHeader(
         IEnumerable<MenuItem> items,
@@ -2275,6 +2363,13 @@ public partial class MainWindow : Window
                     PhotoFileTransferMode.Move);
                 return;
             }
+
+            if (IsBatchShortcut(shortcutKey, Keyboard.Modifiers))
+            {
+                eventArgs.Handled = true;
+                await RunBatchConversionAsync(GetSelectedManagerPhotos());
+                return;
+            }
         }
 
         if (viewModel.IsEditorMode
@@ -2540,6 +2635,11 @@ public partial class MainWindow : Window
         Key key,
         ModifierKeys modifiers) =>
         key == Key.X && modifiers == ModifierKeys.Alt;
+
+    internal static bool IsBatchShortcut(
+        Key key,
+        ModifierKeys modifiers) =>
+        key == Key.B && modifiers == ModifierKeys.Control;
 
     internal static bool IsQuickFileCopyShortcut(
         Key key,
