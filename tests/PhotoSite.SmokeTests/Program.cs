@@ -829,6 +829,82 @@ try
         "Imgur upload should POST a PNG multipart body with Client-ID "
         + "authorization and return the direct URL.");
 
+    var visionRequest = OllamaVisionService.BuildRequestJson(
+        "qwen3.8:27b",
+        [1, 2, 3],
+        "Czech",
+        disableThinking: true);
+    using (var visionRequestDocument = JsonDocument.Parse(visionRequest))
+    {
+        var visionRoot = visionRequestDocument.RootElement;
+        var message = visionRoot.GetProperty("messages")[0];
+        Assert(
+            visionRoot.GetProperty("model").GetString() == "qwen3.8:27b"
+            && !visionRoot.GetProperty("stream").GetBoolean()
+            && !visionRoot.GetProperty("think").GetBoolean()
+            && visionRoot.GetProperty("format")
+                .GetProperty("required").GetArrayLength() == 3
+            && message.GetProperty("images")[0].GetString()
+                == Convert.ToBase64String(new byte[] { 1, 2, 3 })
+            && message.GetProperty("content").GetString()!.Contains(
+                "in Czech",
+                StringComparison.Ordinal),
+            "The Ollama request should carry the model, the encoded image, "
+            + "the answer schema and the language.");
+    }
+
+    using (var visionRequestDocument = JsonDocument.Parse(
+               OllamaVisionService.BuildRequestJson(
+                   "qwen3.8:27b",
+                   [1],
+                   "English",
+                   disableThinking: false)))
+    {
+        Assert(
+            !visionRequestDocument.RootElement.TryGetProperty("think", out _),
+            "The retry request must leave the thinking switch out entirely.");
+    }
+
+    Assert(
+        OllamaVisionService.BuildUri("localhost:11434/", "api/tags")
+        == new Uri("http://localhost:11434/api/tags"),
+        "A bare host:port server address should become a full HTTP URL.");
+
+    var visionInsights = OllamaVisionService.ParseInsights(
+        """
+        {"message":{"role":"assistant","content":"{\"title\":\"  Západ slunce\\nnad Lipnem \",\"description\":\" Dva lidé sedí na molu.  \",\"keywords\":[\"#západ slunce\",\"molo; jezero\",\"Molo\",\"  \",\"voda\"]}"}}
+        """);
+    Assert(
+        visionInsights.Title == "Západ slunce nad Lipnem"
+        && visionInsights.Description == "Dva lidé sedí na molu."
+        && visionInsights.Keywords.SequenceEqual(
+            ["západ slunce", "molo jezero", "Molo", "voda"]),
+        "AI insights should come back trimmed, without hashtag prefixes, and "
+        + "with the keyword separators removed from each keyword.");
+
+    var visionModels = OllamaVisionService.ParseModelNames(
+        """
+        {"models":[{"name":"text-only:1b","capabilities":["completion"]},{"name":"older:7b"},{"name":"vision:27b","capabilities":["completion","vision"]}]}
+        """);
+    Assert(
+        visionModels.SequenceEqual(["vision:27b", "older:7b"]),
+        "Vision models should lead the list, models without a capability "
+        + "report should stay, and text-only models should be dropped.");
+
+    Assert(
+        OllamaVisionService.MergeKeywords("les; Šumava", ["šumava", "mlha"])
+            == "les; Šumava; mlha"
+        && OllamaVisionService.MergeKeywords(null, []) is null,
+        "AI keywords should merge case-insensitively into the existing list.");
+
+    Assert(
+        OllamaVisionService.ShouldSkip(AiApplyMode.FillEmpty, "t", "d")
+        && !OllamaVisionService.ShouldSkip(AiApplyMode.FillEmpty, "t", null)
+        && !OllamaVisionService.ShouldSkip(AiApplyMode.FillEmpty, null, "d")
+        && !OllamaVisionService.ShouldSkip(AiApplyMode.Overwrite, "t", "d"),
+        "Fill-empty runs should skip only photos that already carry both a "
+        + "title and a description.");
+
     File.Delete(secondPhoto);
     const long secondScan = 200;
     var beforeCleanup = await repository.GetByRootAsync(

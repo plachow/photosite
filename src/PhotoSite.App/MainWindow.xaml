@@ -438,6 +438,25 @@
           </Viewbox>
         </MenuItem.Icon>
       </MenuItem>
+      <MenuItem Padding="10,6"
+                Style="{StaticResource PhotoContextMenuItemStyle}"
+                Header="Describe with AI…"
+                Tag="AiDescribe"
+                Click="OnAiDescribeClick">
+        <MenuItem.Icon>
+          <Viewbox Width="17" Height="17">
+            <Canvas Width="18" Height="18">
+              <Path Data="M8.5,1.5 L10.2,6.8 L15.5,8.5 L10.2,10.2 L8.5,15.5 L6.8,10.2 L1.5,8.5 L6.8,6.8 Z"
+                    Fill="#8BC8FF"
+                    Stroke="#C9E6FF"
+                    StrokeThickness="0.8"
+                    StrokeLineJoin="Round" />
+              <Path Data="M14.5,12.5 L15.2,14.3 L17,15 L15.2,15.7 L14.5,17.5 L13.8,15.7 L12,15 L13.8,14.3 Z"
+                    Fill="#FFD36A" />
+            </Canvas>
+          </Viewbox>
+        </MenuItem.Icon>
+      </MenuItem>
       <Separator Style="{StaticResource PhotoContextMenuSeparatorStyle}" />
       <MenuItem Padding="10,6"
                 Style="{StaticResource PhotoContextMenuItemStyle}"

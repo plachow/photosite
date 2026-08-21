@@ -19,6 +19,13 @@ public sealed class AppServices
             {
                 Timeout = TimeSpan.FromMinutes(2)
             });
+        // A large vision model answers in tens of seconds, and the very first
+        // call also waits for Ollama to load the model into memory.
+        OllamaVision = new OllamaVisionService(
+            new HttpClient
+            {
+                Timeout = TimeSpan.FromMinutes(10)
+            });
         Updates = new AppUpdateService();
         MetadataWriter = new ExifToolMetadataWriter();
         MetadataOutbox = new MetadataOutboxProcessor(Catalog, MetadataWriter);
@@ -40,6 +47,8 @@ public sealed class AppServices
     public ImageSaveService ImageSaver { get; }
 
     public ImgurUploadService ImgurUploader { get; }
+
+    public OllamaVisionService OllamaVision { get; }
 
     public AppUpdateService Updates { get; }
 

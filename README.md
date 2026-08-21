@@ -69,6 +69,19 @@ Settings are saved as named presets. **Facebook export**, **Web gallery**,
 **Original quality JPEG** and **Small email photos** are provided once on first
 use; delete one and it stays deleted.
 
+### AI description
+
+**Describe with AI…** in the gallery context menu sends each selected
+photograph to a vision model running on a local [Ollama](https://ollama.com)
+server and fills in its title, description and keywords, in Czech or English.
+The model sees a downscaled preview, answers a fixed JSON schema, and the
+results are written through the catalogue and the metadata outbox exactly like
+a manual edit - into the database and into the photo files themselves.
+Keywords are merged with the ones already on the photo; by default only empty
+titles and descriptions are filled, and photos that already carry both are
+skipped, so an interrupted overnight run can simply be started again over the
+same selection. Nothing ever leaves the machine.
+
 ## Editor
 
 The editor renders the whole recipe live. Crop, rotation and flips stay cheap

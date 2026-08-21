@@ -266,7 +266,7 @@ public partial class MainWindow : Window
 
         var items = contextMenu.Items.OfType<MenuItem>().ToArray();
         var separators = contextMenu.Items.OfType<Separator>().ToArray();
-        if (items.Length != 14
+        if (items.Length != 15
             || items.Any(item => item.Icon is null
                                  || !ReferenceEquals(item.Style, itemStyle))
             || separators.Length != 6
@@ -904,6 +904,12 @@ public partial class MainWindow : Window
             selectedCount == 1
                 ? "Duplicate"
                 : $"Duplicate {selectedCount:N0} files");
+        SetMenuHeader(
+            items,
+            "AiDescribe",
+            selectedCount == 1
+                ? "Describe with AI…"
+                : $"Describe {selectedCount:N0} photos with AI…");
         // Renaming is a one-file operation; a bulk rename is what the batch
         // dialog is for, and it does it far better than a prompt could.
         items.Single(item => Equals(item.Tag, "RenameFile")).IsEnabled =
@@ -995,6 +1001,40 @@ public partial class MainWindow : Window
         object sender,
         RoutedEventArgs eventArgs) =>
         await RunBatchConversionAsync(GetContextPhotos(sender));
+
+    private void OnAiDescribeClick(object sender, RoutedEventArgs eventArgs) =>
+        RunAiTagging(GetContextPhotos(sender));
+
+    private void RunAiTagging(IReadOnlyCollection<PhotoItemViewModel> photos)
+    {
+        var targets = photos
+            .Where(photo => !photo.IsTransient && File.Exists(photo.Path))
+            .DistinctBy(photo => photo.Path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (targets.Length == 0)
+        {
+            viewModel.ReportStatus("Select photos to describe first");
+            return;
+        }
+
+        var dialog = new AiTagDialog(
+            targets,
+            App.Services.OllamaVision,
+            catalog,
+            App.Services.Previews)
+        {
+            Owner = this
+        };
+        dialog.ShowDialog();
+
+        if (dialog.DescribedCount > 0)
+        {
+            viewModel.ReportStatus(
+                dialog.DescribedCount == 1
+                    ? "AI described 1 photo"
+                    : $"AI described {dialog.DescribedCount:N0} photos");
+        }
+    }
 
     private async Task RunBatchConversionAsync(
         IReadOnlyCollection<PhotoItemViewModel> photos)

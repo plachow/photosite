@@ -61,6 +61,14 @@ keeps whatever destination is already on screen.
 into files by exiftool. The catalogue is updated and the outbox row inserted in
 one transaction, so a crash cannot lose a rating.
 
+**Describe** (`OllamaVisionService`, `AiTagDialog`) — asking a vision model on
+a local Ollama server to fill a photograph's title, description and keywords.
+The model receives a downscaled preview and must answer a fixed JSON schema.
+Results flow through the same catalogue-and-outbox path as a manual edit;
+keywords merge into the existing list, and in fill-empty mode a photo already
+carrying both a title and a description is skipped, which is what makes an
+interrupted bulk run restartable. Rejected synonyms: *auto-tag*, *caption*.
+
 **Surface** — a rendered bitmap the editor canvas paints: straightening,
 adjustments and filters applied, but crop, orientation and layers deliberately
 left out because the canvas expresses those as cheap transforms it can change
