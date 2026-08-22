@@ -81,6 +81,28 @@ public sealed class SortFieldNameConverter : IValueConverter
 }
 
 /// <summary>
+/// True when a tab strip item is the photo open in the editor right now:
+/// values are the tab's photo, the selected photo, and IsEditorMode.
+/// </summary>
+public sealed class ActiveEditorTabConverter : IMultiValueConverter
+{
+    public object Convert(
+        object?[] values,
+        Type targetType,
+        object? parameter,
+        CultureInfo culture) =>
+        values is [{ } tab, { } selected, true]
+        && ReferenceEquals(tab, selected);
+
+    public object[] ConvertBack(
+        object? value,
+        Type[] targetTypes,
+        object? parameter,
+        CultureInfo culture) =>
+        throw new NotSupportedException();
+}
+
+/// <summary>
 /// Compares a bound enum to the value named in the converter parameter, which
 /// is how the view-mode and orientation toggles show their state.
 /// </summary>

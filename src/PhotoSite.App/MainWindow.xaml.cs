@@ -117,8 +117,9 @@ public partial class MainWindow : Window
 
     internal async Task<bool> PrepareForUpdateRestartAsync()
     {
-        if (viewModel.IsEditorMode
-            && viewModel.SelectedPhoto?.IsEditorDirty == true)
+        if (viewModel.EditorTabs.Any(tab => tab.IsEditorDirty)
+            || (viewModel.IsEditorMode
+                && viewModel.SelectedPhoto?.IsEditorDirty == true))
         {
             if (isEditorExitPromptActive)
             {
@@ -126,7 +127,7 @@ public partial class MainWindow : Window
             }
 
             isEditorExitPromptActive = true;
-            var canRestart = await ConfirmEditorExitAsync();
+            var canRestart = await ConfirmAllEditorTabsAsync();
             isEditorExitPromptActive = false;
             if (!canRestart)
             {
@@ -2106,10 +2107,84 @@ public partial class MainWindow : Window
         }
     }
 
+    private void OnManagerTabClick(object sender, RoutedEventArgs eventArgs) =>
+        viewModel.ShowManagerTab();
+
+    private void OnEditorTabClick(object sender, RoutedEventArgs eventArgs)
+    {
+        if (sender is FrameworkElement { Tag: PhotoItemViewModel photo })
+        {
+            viewModel.ActivateEditorTab(photo);
+        }
+    }
+
+    private async void OnEditorTabCloseClick(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        if (sender is FrameworkElement { Tag: PhotoItemViewModel photo })
+        {
+            await CloseEditorTabAsync(photo);
+        }
+    }
+
+    /// <summary>
+    /// Ends one tab's session - prompting for unsaved edits with the photo
+    /// brought on screen first - and removes the tab. False when the user
+    /// cancelled and the tab stays open.
+    /// </summary>
+    private async Task<bool> CloseEditorTabAsync(PhotoItemViewModel photo)
+    {
+        if (photo.IsEditorSessionActive || photo.IsEditorDirty)
+        {
+            if (!viewModel.IsEditorMode
+                || !ReferenceEquals(viewModel.SelectedPhoto, photo))
+            {
+                viewModel.ActivateEditorTab(photo);
+            }
+
+            if (!await ConfirmEditorExitAsync())
+            {
+                return false;
+            }
+        }
+
+        viewModel.RemoveEditorTab(photo);
+        return true;
+    }
+
+    /// <summary>
+    /// Walks every open tab before the window closes or restarts, activating
+    /// each dirty one so its save prompt shows the photo it asks about.
+    /// </summary>
+    private async Task<bool> ConfirmAllEditorTabsAsync()
+    {
+        foreach (var photo in viewModel.EditorTabs.ToArray())
+        {
+            if (!photo.IsEditorDirty)
+            {
+                continue;
+            }
+
+            viewModel.ActivateEditorTab(photo);
+            if (!await ConfirmEditorExitAsync())
+            {
+                return false;
+            }
+        }
+
+        // A dirty photo can sit outside the tabs only through an unforeseen
+        // path; the old single-photo prompt still covers it.
+        return !viewModel.IsEditorMode
+               || viewModel.SelectedPhoto?.IsEditorDirty != true
+               || await ConfirmEditorExitAsync();
+    }
+
     private async Task LeaveEditorAsync()
     {
-        if (!await ConfirmEditorExitAsync())
+        if (viewModel.SelectedPhoto is { } photo)
         {
+            await CloseEditorTabAsync(photo);
             return;
         }
 
@@ -2142,6 +2217,9 @@ public partial class MainWindow : Window
         viewModel.SelectedPhoto = viewModel.Photos[targetIndex];
         if (viewModel.IsEditorMode)
         {
+            // Paging through photos retargets the current tab rather than
+            // opening a new tab per photograph passed.
+            viewModel.ReplaceEditorTab(current, viewModel.SelectedPhoto);
             viewModel.SelectedPhoto.BeginEditorSession();
         }
     }
@@ -2922,6 +3000,7 @@ public partial class MainWindow : Window
         if (eventArgs.PropertyName == nameof(MainViewModel.IsEditorMode)
             && viewModel.IsEditorMode)
         {
+            viewModel.EnsureEditorTabForSelection();
             viewModel.SelectedPhoto?.BeginEditorSession();
         }
 
@@ -3200,8 +3279,9 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (viewModel.IsEditorMode
-            && viewModel.SelectedPhoto?.IsEditorDirty == true)
+        if (viewModel.EditorTabs.Any(tab => tab.IsEditorDirty)
+            || (viewModel.IsEditorMode
+                && viewModel.SelectedPhoto?.IsEditorDirty == true))
         {
             eventArgs.Cancel = true;
             if (isEditorExitPromptActive)
@@ -3210,7 +3290,7 @@ public partial class MainWindow : Window
             }
 
             isEditorExitPromptActive = true;
-            var canClose = await ConfirmEditorExitAsync();
+            var canClose = await ConfirmAllEditorTabsAsync();
             isEditorExitPromptActive = false;
             if (canClose)
             {

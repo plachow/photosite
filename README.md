@@ -93,6 +93,13 @@ The editor renders the whole recipe live. Crop, rotation and flips stay cheap
 transforms, while adjustments, filters and straightening are rendered off the
 UI thread and coalesced, so dragging a slider stays smooth.
 
+Every photo opened in the editor gets a tab next to the permanent **Manager**
+tab, so the mouse alone moves between the gallery and any number of open
+editors. Switching tabs keeps each editing session - undo history included -
+alive without save prompts; closing a tab (its ✕, or Esc in the editor) is
+what ends the session and asks about unsaved edits. Paging to the next photo
+inside the editor moves the current tab to it instead of piling up new tabs.
+
 - **Light and colour** - exposure, contrast, highlights, shadows, whites,
   blacks, brightness, clarity, temperature, tint, vibrance, saturation, black
   and white points, midpoint and gamma;

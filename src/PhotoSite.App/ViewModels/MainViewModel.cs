@@ -122,6 +122,8 @@ public sealed class MainViewModel : ObservableObject
             () => Filter = PhotoFilterCriteria.None,
             () => Filter.IsActive || MinimumRating > 0);
         RefreshCommand = new AsyncRelayCommand(RefreshAsync);
+        EditorTabs.CollectionChanged +=
+            (_, _) => OnPropertyChanged(nameof(HasEditorTabs));
     }
 
     public const double DefaultThumbnailSize = 204;
@@ -444,6 +446,156 @@ public sealed class MainViewModel : ObservableObject
             ShowManagerCommand.NotifyCanExecuteChanged();
             ToggleEditorCommand.NotifyCanExecuteChanged();
         }
+    }
+
+    /// <summary>
+    /// The open editors, one tab each. A photo joins when it is opened in the
+    /// editor and leaves when its tab is closed; switching to the Manager tab
+    /// keeps every session - undo history included - alive in its tab.
+    /// </summary>
+    public System.Collections.ObjectModel.ObservableCollection<PhotoItemViewModel>
+        EditorTabs { get; } = [];
+
+    public bool HasEditorTabs => EditorTabs.Count > 0;
+
+    /// <summary>
+    /// Puts the selected photo on the tab strip when the editor opens. When a
+    /// tab for the same file already exists, the instance that holds a live
+    /// session wins, so re-opening a photo never orphans its undo history.
+    /// </summary>
+    public void EnsureEditorTabForSelection()
+    {
+        if (SelectedPhoto is not { } photo)
+        {
+            return;
+        }
+
+        var existing = FindEditorTab(photo);
+        if (existing is null)
+        {
+            EditorTabs.Add(photo);
+            return;
+        }
+
+        if (ReferenceEquals(existing, photo))
+        {
+            return;
+        }
+
+        if (existing.IsEditorSessionActive || existing.IsEditorDirty)
+        {
+            SelectedPhoto = existing;
+            return;
+        }
+
+        // The tab still points at a view model from before a folder reload;
+        // the fresh instance carries the newer record.
+        EditorTabs[EditorTabs.IndexOf(existing)] = photo;
+    }
+
+    public void ActivateEditorTab(PhotoItemViewModel photo)
+    {
+        if (!EditorTabs.Contains(photo))
+        {
+            EditorTabs.Add(photo);
+        }
+
+        IsFullscreenMode = false;
+        SelectedPhoto = photo;
+        IsEditorMode = true;
+        photo.BeginEditorSession();
+    }
+
+    /// <summary>
+    /// The Manager tab: back to the gallery with every editor session left
+    /// running in its tab - deliberately without a save prompt.
+    /// </summary>
+    public void ShowManagerTab()
+    {
+        if (IsFullscreenMode || !IsEditorMode)
+        {
+            return;
+        }
+
+        ShowManager();
+    }
+
+    /// <summary>
+    /// Keeps the active tab pointed at the photo the editor navigated to,
+    /// so paging through photos moves one tab instead of piling up new ones.
+    /// </summary>
+    public void ReplaceEditorTab(
+        PhotoItemViewModel previous,
+        PhotoItemViewModel replacement)
+    {
+        var index = EditorTabs.IndexOf(previous);
+        if (index < 0)
+        {
+            EnsureEditorTabForSelection();
+            return;
+        }
+
+        if (EditorTabs.Contains(replacement))
+        {
+            EditorTabs.RemoveAt(index);
+            return;
+        }
+
+        EditorTabs[index] = replacement;
+    }
+
+    /// <summary>
+    /// Drops a closed tab and, when it was the active one, moves to its
+    /// neighbour - or back to the Manager once no tab is left. The caller is
+    /// responsible for having ended the photo's session first.
+    /// </summary>
+    public void RemoveEditorTab(PhotoItemViewModel photo)
+    {
+        var index = EditorTabs.IndexOf(photo);
+        if (index >= 0)
+        {
+            EditorTabs.RemoveAt(index);
+        }
+
+        if (!IsEditorMode || !ReferenceEquals(SelectedPhoto, photo))
+        {
+            return;
+        }
+
+        if (EditorTabs.Count > 0)
+        {
+            ActivateEditorTab(EditorTabs[Math.Min(index, EditorTabs.Count - 1)]);
+        }
+        else
+        {
+            ShowManager();
+        }
+    }
+
+    private PhotoItemViewModel? FindEditorTab(PhotoItemViewModel photo) =>
+        EditorTabs.FirstOrDefault(tab => ReferenceEquals(tab, photo))
+        ?? (photo.IsTransient
+            ? null
+            : EditorTabs.FirstOrDefault(tab =>
+                !tab.IsTransient
+                && string.Equals(
+                    tab.Path,
+                    photo.Path,
+                    StringComparison.OrdinalIgnoreCase)));
+
+    private void DropEditorTabForPath(string path)
+    {
+        var tab = EditorTabs.FirstOrDefault(item =>
+            !item.IsTransient
+            && string.Equals(item.Path, path, StringComparison.OrdinalIgnoreCase));
+        if (tab is null)
+        {
+            return;
+        }
+
+        // The file is gone; there is nothing left to save a session into.
+        tab.DiscardEditorSession();
+        RemoveEditorTab(tab);
     }
 
     public bool IncludeSubfolders
@@ -1574,6 +1726,7 @@ public sealed class MainViewModel : ObservableObject
         foreach (var path in deletedPaths)
         {
             presentationChanged |= RemovePhotoByPath(path);
+            DropEditorTabForPath(path);
         }
 
         if (presentationChanged)

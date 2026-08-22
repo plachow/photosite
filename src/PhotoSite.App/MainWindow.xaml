@@ -17,6 +17,49 @@
     <infrastructure:BooleanToVisibilityConverter x:Key="BoolToVisibility" />
     <infrastructure:EnumEqualsConverter x:Key="EnumEquals" />
     <infrastructure:SortFieldNameConverter x:Key="SortFieldName" />
+    <infrastructure:ActiveEditorTabConverter x:Key="ActiveEditorTab" />
+
+    <!-- Tab strip: one Manager tab, one tab per open editor. -->
+    <Style x:Key="TabLabelButtonStyle" TargetType="Button">
+      <Setter Property="Foreground" Value="#C8CDD8" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="Padding" Value="12,6" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="FontSize" Value="12" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border Background="{TemplateBinding Background}"
+                    Padding="{TemplateBinding Padding}">
+              <ContentPresenter HorizontalAlignment="Center"
+                                VerticalAlignment="Center" />
+            </Border>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style x:Key="TabCloseButtonStyle"
+           TargetType="Button"
+           BasedOn="{StaticResource TabLabelButtonStyle}">
+      <Setter Property="Padding" Value="6,6,10,6" />
+      <Setter Property="FontSize" Value="11" />
+      <Setter Property="Foreground" Value="#79808D" />
+      <Style.Triggers>
+        <Trigger Property="IsMouseOver" Value="True">
+          <Setter Property="Foreground" Value="#FF9A9A" />
+        </Trigger>
+      </Style.Triggers>
+    </Style>
+
+    <Style x:Key="EditorTabStyle" TargetType="Border">
+      <Setter Property="Background" Value="#1D2129" />
+      <Setter Property="BorderBrush" Value="#303541" />
+      <Setter Property="BorderThickness" Value="1,1,1,0" />
+      <Setter Property="CornerRadius" Value="6,6,0,0" />
+      <Setter Property="Margin" Value="0,0,4,0" />
+    </Style>
 
     <Style x:Key="NavigationButtonStyle"
            TargetType="Button"
@@ -744,14 +787,127 @@
       </Style>
     </Grid.Resources>
     <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
       <RowDefinition Style="{StaticResource ManagerChromeRowStyle}" />
       <RowDefinition Height="*" />
       <RowDefinition Style="{StaticResource ManagerChromeRowStyle}" />
     </Grid.RowDefinitions>
 
+    <!-- Tab strip: appears once an editor is open and survives the switch
+         back to Manager; only fullscreen hides it. -->
+    <Border x:Name="EditorTabStrip"
+            Grid.Row="0"
+            Background="#14161C"
+            BorderBrush="#303541"
+            BorderThickness="0,0,0,1"
+            Padding="6,5,6,0">
+      <Border.Style>
+        <Style TargetType="Border">
+          <Setter Property="Visibility" Value="Visible" />
+          <Style.Triggers>
+            <DataTrigger Binding="{Binding HasEditorTabs}" Value="False">
+              <Setter Property="Visibility" Value="Collapsed" />
+            </DataTrigger>
+            <DataTrigger Binding="{Binding IsFullscreenMode}" Value="True">
+              <Setter Property="Visibility" Value="Collapsed" />
+            </DataTrigger>
+          </Style.Triggers>
+        </Style>
+      </Border.Style>
+      <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                    VerticalScrollBarVisibility="Disabled">
+        <StackPanel Orientation="Horizontal">
+          <Border>
+            <Border.Style>
+              <Style TargetType="Border" BasedOn="{StaticResource EditorTabStyle}">
+                <Style.Triggers>
+                  <DataTrigger Binding="{Binding IsEditorMode}" Value="False">
+                    <Setter Property="Background" Value="#284967" />
+                  </DataTrigger>
+                </Style.Triggers>
+              </Style>
+            </Border.Style>
+            <Button AutomationProperties.Name="Manager tab"
+                    Style="{StaticResource TabLabelButtonStyle}"
+                    ToolTip="Back to the gallery; open editors stay on their tabs"
+                    Click="OnManagerTabClick">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Margin="0,0,6,0"
+                           FontFamily="Segoe UI Symbol"
+                           Foreground="#8BC8FF"
+                           Text="▤" />
+                <TextBlock Text="Manager" />
+              </StackPanel>
+            </Button>
+          </Border>
+          <ItemsControl x:Name="EditorTabList"
+                        ItemsSource="{Binding EditorTabs}">
+            <ItemsControl.ItemsPanel>
+              <ItemsPanelTemplate>
+                <StackPanel Orientation="Horizontal" />
+              </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+              <DataTemplate>
+                <Border>
+                  <Border.Style>
+                    <Style TargetType="Border"
+                           BasedOn="{StaticResource EditorTabStyle}">
+                      <Style.Triggers>
+                        <DataTrigger Value="True">
+                          <DataTrigger.Binding>
+                            <MultiBinding
+                                Converter="{StaticResource ActiveEditorTab}">
+                              <Binding />
+                              <Binding Path="DataContext.SelectedPhoto"
+                                       RelativeSource="{RelativeSource
+                                           AncestorType=Window}" />
+                              <Binding Path="DataContext.IsEditorMode"
+                                       RelativeSource="{RelativeSource
+                                           AncestorType=Window}" />
+                            </MultiBinding>
+                          </DataTrigger.Binding>
+                          <Setter Property="Background" Value="#284967" />
+                        </DataTrigger>
+                      </Style.Triggers>
+                    </Style>
+                  </Border.Style>
+                  <StackPanel Orientation="Horizontal">
+                    <Button Style="{StaticResource TabLabelButtonStyle}"
+                            Tag="{Binding}"
+                            ToolTip="{Binding Path}"
+                            Click="OnEditorTabClick">
+                      <StackPanel Orientation="Horizontal">
+                        <TextBlock Margin="0,0,6,0"
+                                   VerticalAlignment="Center"
+                                   FontSize="9"
+                                   Foreground="#FFD36A"
+                                   Text="●"
+                                   ToolTip="Unsaved edits"
+                                   Visibility="{Binding IsEditorDirty,
+                                                        Converter={StaticResource BoolToVisibility}}" />
+                        <TextBlock Foreground="#F2F4F8"
+                                   Text="{Binding FileName}" />
+                      </StackPanel>
+                    </Button>
+                    <Button AutomationProperties.Name="Close editor tab"
+                            Style="{StaticResource TabCloseButtonStyle}"
+                            Content="✕"
+                            Tag="{Binding}"
+                            ToolTip="Close this editor"
+                            Click="OnEditorTabCloseClick" />
+                  </StackPanel>
+                </Border>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </StackPanel>
+      </ScrollViewer>
+    </Border>
+
     <!-- Navigation -->
     <Border x:Name="NavigationBar"
-            Grid.Row="0"
+            Grid.Row="1"
             Background="{StaticResource PanelBrush}"
             BorderBrush="#303541"
             BorderThickness="0,0,0,1"
@@ -855,7 +1011,7 @@
       </Grid>
     </Border>
 
-    <Grid Grid.Row="1">
+    <Grid Grid.Row="2">
       <Grid.ColumnDefinitions>
         <ColumnDefinition x:Name="NavigatorColumn"
                           Width="260"
@@ -2081,7 +2237,7 @@
       </Border>
     </Grid>
 
-    <Border Grid.Row="2"
+    <Border Grid.Row="3"
             Background="{StaticResource PanelBrush}"
             BorderBrush="#303541"
             BorderThickness="0,1,0,0"

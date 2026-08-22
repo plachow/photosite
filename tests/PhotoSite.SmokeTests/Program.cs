@@ -2301,6 +2301,7 @@ static async Task AssertWindowClosesCleanlyAsync(
                 window.ValidateCatalogScrollResetForSmokeTest();
                 window.ValidateManagerChromeForSmokeTest();
                 window.ValidateEditorPanelForSmokeTest();
+                window.ValidateEditorTabsForSmokeTest();
                 window.ValidatePreviewWheelNavigationForSmokeTest();
                 window.Loaded += (_, _) =>
                     window.Dispatcher.BeginInvoke(

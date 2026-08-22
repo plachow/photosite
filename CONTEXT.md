@@ -31,6 +31,14 @@ frame. Used both for the recipe's crop and for a transient canvas selection.
 **Record** (`PhotoRecord`) — one immutable row of the catalogue: the file's
 identity, its indexed metadata, and the organisation applied to it.
 
+**Tab** (`MainViewModel.EditorTabs`) — the strip above the window: one Manager
+tab plus one tab per open editor. A tab owns its photo's editor session, undo
+history included, so switching to Manager or to another tab never prompts to
+save; only closing a tab (its ✕, or Esc inside the editor) ends the session
+and asks about unsaved edits. Paging to the next photo inside the editor
+retargets the current tab rather than opening new ones. Rejected synonyms:
+*document*, *workspace*.
+
 ## Organisation
 
 **Rating** — 0 to 5 stars. Written into the file (XMP and EXIF).

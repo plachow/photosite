@@ -463,6 +463,101 @@ public partial class MainWindow
         }
     }
 
+    internal void ValidateEditorTabsForSmokeTest()
+    {
+        if (Content is not UIElement content)
+        {
+            throw new InvalidOperationException("The main window has no content.");
+        }
+
+        var photo = viewModel.SelectedPhoto
+            ?? throw new InvalidOperationException(
+                "The tab test needs a selected photo.");
+
+        // Earlier harness scenarios leave their own tabs behind; this test
+        // owns the strip from a clean slate.
+        foreach (var stale in viewModel.EditorTabs.ToArray())
+        {
+            viewModel.RemoveEditorTab(stale);
+        }
+
+        viewModel.ShowEditorCommand.Execute(null);
+        content.Measure(new Size(1500, 900));
+        content.Arrange(new Rect(0, 0, 1500, 900));
+        content.UpdateLayout();
+
+        if (!viewModel.EditorTabs.Contains(photo))
+        {
+            throw new InvalidOperationException(
+                "Opening the editor must put the photo on the tab strip.");
+        }
+
+        if (EditorTabStrip.Visibility != Visibility.Visible
+            || EditorTabStrip.ActualHeight <= 0)
+        {
+            throw new InvalidOperationException(
+                "The tab strip must be visible while an editor tab is open.");
+        }
+
+        viewModel.ShowManagerTab();
+        content.UpdateLayout();
+        if (viewModel.IsEditorMode)
+        {
+            throw new InvalidOperationException(
+                "The Manager tab must return to the gallery.");
+        }
+
+        if (!photo.IsEditorSessionActive
+            || !viewModel.EditorTabs.Contains(photo))
+        {
+            throw new InvalidOperationException(
+                "Switching to Manager must keep the editor session alive on "
+                + "its tab.");
+        }
+
+        if (EditorTabStrip.Visibility != Visibility.Visible)
+        {
+            throw new InvalidOperationException(
+                "The tab strip must stay visible in Manager while editors "
+                + "are open.");
+        }
+
+        viewModel.ActivateEditorTab(photo);
+        content.UpdateLayout();
+        if (!viewModel.IsEditorMode
+            || !ReferenceEquals(viewModel.SelectedPhoto, photo))
+        {
+            throw new InvalidOperationException(
+                "Activating a tab must reopen its editor.");
+        }
+
+        // Nothing is dirty, so this must finish without any dialog.
+        if (!CloseEditorTabAsync(photo).GetAwaiter().GetResult())
+        {
+            throw new InvalidOperationException(
+                "Closing a clean tab must not ask for confirmation.");
+        }
+
+        content.Measure(new Size(1500, 900));
+        content.Arrange(new Rect(0, 0, 1500, 900));
+        content.UpdateLayout();
+        if (viewModel.IsEditorMode
+            || viewModel.EditorTabs.Contains(photo)
+            || photo.IsEditorSessionActive)
+        {
+            throw new InvalidOperationException(
+                "Closing the last tab must end the session and land in "
+                + "Manager.");
+        }
+
+        if (viewModel.EditorTabs.Count == 0
+            && EditorTabStrip.Visibility == Visibility.Visible)
+        {
+            throw new InvalidOperationException(
+                "The tab strip must collapse once every tab is closed.");
+        }
+    }
+
     private void OnEditorModeChanged()
     {
         AttachEditorTarget(viewModel.SelectedPhoto);
