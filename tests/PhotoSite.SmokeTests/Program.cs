@@ -1042,6 +1042,14 @@ try
         && (await repository.GetFacesForPersonAsync(suggestPersonId)).Count == 2,
         "Confirming a suggestion assigns the face and clears the suggestion.");
 
+    var peopleByPhoto = await repository.GetPeopleByPhotoAsync();
+    Assert(
+        peopleByPhoto.TryGetValue(firstPhoto, out var photoPeople)
+        && photoPeople.Select(tag => tag.Name)
+            .SequenceEqual(["Suggested Person"]),
+        "The per-photo people map should list each named person once per "
+        + "photo.");
+
     await repository.ReplaceFacesAsync(
         firstPhoto,
         555,
@@ -1096,34 +1104,41 @@ try
 
     var personCriteria = PhotoFilterCriteria.None with
     {
-        PersonId = 7,
-        PersonName = "Jana"
+        PersonIds = new HashSet<long> { 7, 9 },
+        PersonNames = ["Jana", "Petr"]
     };
     var personFilterViewModel = new PhotoItemViewModel(
         new PhotoRecord(firstPhoto, photoRoot, "first.png", ".png", 1, 1, 0, 1),
         EditRecipe.Empty,
         repository);
+    var onlyJana = new Dictionary<string, HashSet<long>>(
+        StringComparer.OrdinalIgnoreCase)
+    {
+        [firstPhoto] = [7]
+    };
+    var bothPeople = new Dictionary<string, HashSet<long>>(
+        StringComparer.OrdinalIgnoreCase)
+    {
+        [firstPhoto] = [7, 9, 11]
+    };
     Assert(
         personCriteria.IsActive
-        && personCriteria.Describe().Contains("Jana", StringComparison.Ordinal)
+        && personCriteria.Describe().Contains(
+            "Jana + Petr",
+            StringComparison.Ordinal)
         && !personCriteria.Equals(PhotoFilterCriteria.None)
         && !MainViewModel.Matches(personFilterViewModel, personCriteria)
         && !MainViewModel.Matches(
             personFilterViewModel,
             personCriteria,
-            new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            {
-                "other.jpg"
-            })
+            onlyJana)
         && MainViewModel.Matches(
             personFilterViewModel,
             personCriteria,
-            new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            {
-                firstPhoto
-            })
+            bothPeople)
         && MainViewModel.Matches(personFilterViewModel, PhotoFilterCriteria.None),
-        "The person facet should pass only photos on the person's path list.");
+        "The person facet is a conjunction: every chosen person must be on "
+        + "the photo.");
 
     const string vanishedPhoto = @"Z:\nowhere\gone.jpg";
     await repository.ReplaceFacesAsync(

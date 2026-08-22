@@ -35,11 +35,14 @@ public sealed record PhotoFilterCriteria
 
     public string? SearchText { get; init; }
 
-    /// <summary>The person whose photos to show, from the face catalogue.</summary>
-    public long? PersonId { get; init; }
+    /// <summary>
+    /// People who must all appear on a photo (conjunction), from the face
+    /// catalogue.
+    /// </summary>
+    public IReadOnlySet<long> PersonIds { get; init; } = new HashSet<long>();
 
-    /// <summary>Carried alongside the id so the filter label can name them.</summary>
-    public string? PersonName { get; init; }
+    /// <summary>Carried alongside the ids so the filter label can name them.</summary>
+    public IReadOnlyList<string> PersonNames { get; init; } = [];
 
     /// <summary>
     /// Excludes rejects unless the user asked to see them, so a culling pass
@@ -58,7 +61,7 @@ public sealed record PhotoFilterCriteria
         || TakenFrom is not null
         || TakenTo is not null
         || HideRejected
-        || PersonId is not null
+        || PersonIds.Count > 0
         || !string.IsNullOrWhiteSpace(SearchText);
 
     /// <summary>
@@ -115,9 +118,11 @@ public sealed record PhotoFilterCriteria
             parts.Add("date");
         }
 
-        if (PersonId is not null)
+        if (PersonIds.Count > 0)
         {
-            parts.Add(PersonName ?? "person");
+            parts.Add(PersonNames.Count > 0
+                ? string.Join(" + ", PersonNames)
+                : $"{PersonIds.Count} people");
         }
 
         if (HideRejected)
@@ -140,7 +145,7 @@ public sealed record PhotoFilterCriteria
         && Nullable.Equals(TakenFrom, other.TakenFrom)
         && Nullable.Equals(TakenTo, other.TakenTo)
         && HideRejected == other.HideRejected
-        && PersonId == other.PersonId
+        && PersonIds.SetEquals(other.PersonIds)
         && string.Equals(SearchText, other.SearchText, StringComparison.Ordinal);
 
     public override int GetHashCode() =>

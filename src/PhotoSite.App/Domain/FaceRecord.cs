@@ -22,3 +22,9 @@ public sealed record PersonRecord(
     long Id,
     string Name,
     int FaceCount);
+
+/// <summary>
+/// A person appearing on one photograph - the payload of gallery badges,
+/// the info panel's People row and the person filter.
+/// </summary>
+public sealed record PersonTag(long Id, string Name);

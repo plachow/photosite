@@ -245,6 +245,30 @@ public sealed class PhotoItemViewModel : ObservableObject
         }
     }
 
+    private IReadOnlyList<PersonTag> people = [];
+
+    /// <summary>
+    /// The named people on this photograph, fed by the catalogue after each
+    /// folder load or People-window session; drives the tile badges and the
+    /// info panel's People row.
+    /// </summary>
+    public IReadOnlyList<PersonTag> People
+    {
+        get => people;
+        internal set
+        {
+            if (SetProperty(ref people, value))
+            {
+                OnPropertyChanged(nameof(PeopleText));
+            }
+        }
+    }
+
+    public string? PeopleText =>
+        people.Count == 0
+            ? null
+            : string.Join(", ", people.Select(person => person.Name));
+
     public string? CameraText => Record.Camera;
 
     public string? LensText => Record.Lens;

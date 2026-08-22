@@ -3,6 +3,8 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:controls="clr-namespace:PhotoSite.Controls"
         Title="Filters"
+        Background="{DynamicResource WindowBrush}"
+        Foreground="#F2F4F8"
         Width="880"
         Height="620"
         MinWidth="760"

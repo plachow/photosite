@@ -1,13 +1,19 @@
 <Window x:Class="PhotoSite.Dialogs.PeopleDialog"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:infrastructure="clr-namespace:PhotoSite.Infrastructure"
         Title="People"
         Width="980"
         Height="720"
         MinWidth="860"
         MinHeight="560"
+        Background="{DynamicResource WindowBrush}"
+        Foreground="#F2F4F8"
         WindowStartupLocation="CenterOwner"
         ShowInTaskbar="False">
+  <Window.Resources>
+    <infrastructure:PersonBrushConverter x:Key="PersonBrush" />
+  </Window.Resources>
   <Grid Margin="16">
     <Grid.RowDefinitions>
       <RowDefinition Height="*" />
@@ -31,7 +37,8 @@
           <TextBlock Style="{StaticResource SectionHeaderStyle}" Text="PEOPLE" />
           <ListBox x:Name="PeopleList"
                    Grid.Row="1"
-                   ItemContainerStyle="{StaticResource PanelListBoxItemStyle}" />
+                   ItemContainerStyle="{StaticResource PanelListBoxItemStyle}"
+                   SelectionChanged="OnPeopleSelectionChanged" />
           <StackPanel Grid.Row="2" Margin="0,8,0,0">
             <Button Margin="0,0,0,4"
                     Content="Rename…"
@@ -83,6 +90,46 @@
 
           <ScrollViewer Grid.Row="3" VerticalScrollBarVisibility="Auto">
             <StackPanel>
+              <!-- Corrective editing: the faces of the selected person, each
+                   removable when the match was wrong. -->
+              <TextBlock x:Name="PersonFacesHeader"
+                         Style="{StaticResource SectionHeaderStyle}"
+                         Visibility="Collapsed" />
+              <ItemsControl x:Name="PersonFacesList" Margin="0,0,0,6">
+                <ItemsControl.ItemsPanel>
+                  <ItemsPanelTemplate>
+                    <WrapPanel Orientation="Horizontal" />
+                  </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <Grid Margin="0,0,6,6">
+                      <Border Width="64"
+                              Height="64"
+                              Background="#111318"
+                              CornerRadius="4"
+                              ToolTip="{Binding Face.Path}">
+                        <Image Margin="2"
+                               Source="{Binding Thumbnail}"
+                               Stretch="UniformToFill" />
+                      </Border>
+                      <Button Width="18"
+                              Height="18"
+                              Margin="0,2,2,0"
+                              Padding="0"
+                              HorizontalAlignment="Right"
+                              VerticalAlignment="Top"
+                              AutomationProperties.Name="Remove this face from the person"
+                              Content="✕"
+                              FontSize="10"
+                              Tag="{Binding}"
+                              ToolTip="Not them - remove this face from the person"
+                              Click="OnUnassignFaceClick" />
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+
               <TextBlock x:Name="SuggestionsHeader"
                          Style="{StaticResource SectionHeaderStyle}"
                          Text="IS THIS THEM?"
@@ -190,17 +237,38 @@
                       </StackPanel>
                       <StackPanel Grid.Column="1"
                                   Margin="12,0,0,0"
+                                  MaxWidth="250"
                                   VerticalAlignment="Center">
-                        <ComboBox Width="190"
-                                  IsEditable="True"
-                                  ItemsSource="{Binding KnownNames}"
-                                  Text="{Binding Name,
-                                                 Mode=TwoWay,
-                                                 UpdateSourceTrigger=PropertyChanged}" />
-                        <Button Margin="0,6,0,0"
-                                Content="Name this person"
+                        <!-- One click on a chip tags the whole group. -->
+                        <ItemsControl ItemsSource="{Binding AssignChoices}">
+                          <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                              <WrapPanel Orientation="Horizontal" />
+                            </ItemsPanelTemplate>
+                          </ItemsControl.ItemsPanel>
+                          <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                              <Button Style="{StaticResource PersonChipButtonStyle}"
+                                      Tag="{Binding}"
+                                      Click="OnAssignChipClick">
+                                <StackPanel Orientation="Horizontal">
+                                  <Ellipse Width="8"
+                                           Height="8"
+                                           Margin="0,1,5,0"
+                                           VerticalAlignment="Center"
+                                           Fill="{Binding Person,
+                                                          Converter={StaticResource PersonBrush}}" />
+                                  <TextBlock FontSize="11"
+                                             Text="{Binding Person.Name}" />
+                                </StackPanel>
+                              </Button>
+                            </DataTemplate>
+                          </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <Button HorizontalAlignment="Left"
+                                Content="＋ New person…"
                                 Tag="{Binding}"
-                                Click="OnAssignClusterClick" />
+                                Click="OnAssignNewPersonClick" />
                       </StackPanel>
                     </Grid>
                   </Border>

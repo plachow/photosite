@@ -92,8 +92,13 @@ through the outbox as one whole payload per photograph and are rebuilt from
 the catalogue on every change, so a rename carries into the files while a
 removed person's frames follow the same leave-what-was-written policy as
 keywords only when nothing rewrites that photo again. The gallery can filter
-by person, and the viewer frames a photo's faces on demand (the Faces toggle):
-blue for named, amber for suggestions, grey for unnamed.
+by person - the People chips compose by conjunction - and the viewer frames a
+photo's faces on demand (the Faces toggle): blue for named, amber for
+suggestions, grey for unnamed. Each person keeps one stable colour
+(`PersonBrushes`, keyed by id) across thumbnail badges, filter chips and
+tagging chips. Removing a face from a person is the mirror of naming: the
+face returns to the unnamed pool, the keyword comes back out of that photo
+when no other face of the person remains on it, and the regions are rebuilt.
 
 **Describe** (`OllamaVisionService`, `AiTagDialog`) — asking a vision model on
 a local Ollama server to fill a photograph's title, description and keywords.

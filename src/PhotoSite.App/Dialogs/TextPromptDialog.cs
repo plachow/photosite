@@ -24,6 +24,10 @@ internal sealed class TextPromptDialog : Window
         ResizeMode = ResizeMode.NoResize;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         ShowInTaskbar = false;
+        // Derived windows do not inherit the implicit Window style, so the
+        // dark theme has to be stated here.
+        SetResourceReference(BackgroundProperty, "WindowBrush");
+        Foreground = new SolidColorBrush(Color.FromRgb(0xF2, 0xF4, 0xF8));
 
         var panel = new StackPanel
         {

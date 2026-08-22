@@ -2,6 +2,8 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Batch conversion"
+        Background="{DynamicResource WindowBrush}"
+        Foreground="#F2F4F8"
         Width="1020"
         Height="720"
         MinWidth="900"

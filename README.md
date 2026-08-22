@@ -82,9 +82,16 @@ already-named person are assigned automatically; borderline matches become
 **suggestions** with a plain yes/no, and only a yes writes the name anywhere.
 Re-scans skip unchanged files, and nothing ever leaves the machine.
 
-The gallery filter has a **Person** facet, and the **Faces** toggle in the
-editor toolbar frames the known faces over the photograph - blue for named
-people, amber for pending suggestions, grey for faces nobody has named yet.
+Named people are visible everywhere: subtle colour-coded badges sit on the
+gallery thumbnails, the info panel lists them next to the title and
+description, and the **Faces** toggle in the editor toolbar frames the known
+faces over the photograph - blue for named people, amber for pending
+suggestions, grey for faces nobody has named yet. Groups are named with one
+click on a person chip (or **＋ New person…**), the gallery filter's
+**People** chips combine as "all of them on the photo", and selecting a
+person in the People window shows their faces so a wrong match can be
+removed - which also takes the keyword back out of that photo and rebuilds
+its face regions.
 
 ### AI description
 

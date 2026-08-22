@@ -21,6 +21,7 @@ public partial class PeopleDialog : Window
     private const int ThumbnailPixelWidth = 512;
     private const int ThumbnailsPerCluster = 5;
     private const int MaxClustersShown = 60;
+    private const int MaxPersonFacesShown = 60;
 
     private readonly IReadOnlyList<PhotoRecord> photos;
     private readonly FaceEngine engine;
@@ -53,9 +54,18 @@ public partial class PeopleDialog : Window
 
         public required IReadOnlyList<string> Paths { get; init; }
 
-        public required IReadOnlyList<string> KnownNames { get; init; }
+        // Filled right after construction; each chip needs its owning row.
+        public IReadOnlyList<AssignChoice> AssignChoices { get; set; } = [];
+    }
 
-        public string Name { get; set; } = string.Empty;
+    /// <summary>One chip on a group card: this group is that person.</summary>
+    private sealed record AssignChoice(ClusterRow Cluster, PersonRecord Person);
+
+    private sealed class PersonFaceRow
+    {
+        public required ImageSource? Thumbnail { get; init; }
+
+        public required FaceRecord Face { get; init; }
     }
 
     private sealed record PersonRow(PersonRecord Person)
@@ -84,10 +94,14 @@ public partial class PeopleDialog : Window
         try
         {
             var people = await catalog.GetPeopleAsync();
-            PeopleList.ItemsSource = people
+            var selectedPersonId =
+                (PeopleList.SelectedItem as PersonRow)?.Person.Id;
+            var personRows = people
                 .Select(person => new PersonRow(person))
                 .ToArray();
-            var knownNames = people.Select(person => person.Name).ToArray();
+            PeopleList.ItemsSource = personRows;
+            PeopleList.SelectedItem = personRows.FirstOrDefault(
+                row => row.Person.Id == selectedPersonId);
 
             var previewCache = new Dictionary<string, BitmapSource?>(
                 StringComparer.OrdinalIgnoreCase);
@@ -141,7 +155,7 @@ public partial class PeopleDialog : Window
             var rows = new List<ClusterRow>(groups.Length);
             foreach (var cluster in groups)
             {
-                rows.Add(new ClusterRow
+                var row = new ClusterRow
                 {
                     Thumbnails = await LoadClusterThumbnailsAsync(
                         cluster,
@@ -154,12 +168,16 @@ public partial class PeopleDialog : Window
                     Paths = cluster.Faces
                         .Select(face => face.Path)
                         .Distinct(StringComparer.OrdinalIgnoreCase)
-                        .ToArray(),
-                    KnownNames = knownNames
-                });
+                        .ToArray()
+                };
+                row.AssignChoices = people
+                    .Select(person => new AssignChoice(row, person))
+                    .ToArray();
+                rows.Add(row);
             }
 
             ClusterList.ItemsSource = rows;
+            await LoadSelectedPersonFacesAsync();
 
             if (!isScanning)
             {
@@ -570,7 +588,17 @@ public partial class PeopleDialog : Window
         await RefreshAsync();
     }
 
-    private async void OnAssignClusterClick(
+    private async void OnAssignChipClick(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        if (sender is FrameworkElement { Tag: AssignChoice choice })
+        {
+            await AssignClusterAsync(choice.Cluster, choice.Person.Name);
+        }
+    }
+
+    private async void OnAssignNewPersonClick(
         object sender,
         RoutedEventArgs eventArgs)
     {
@@ -579,13 +607,19 @@ public partial class PeopleDialog : Window
             return;
         }
 
-        var name = row.Name.Trim();
-        if (name.Length == 0)
+        var dialog = new TextPromptDialog("New person", "Name", string.Empty)
         {
-            DetailText.Text = "Type or pick a name for the group first.";
-            return;
+            Owner = this
+        };
+        if (dialog.ShowDialog() == true
+            && !string.IsNullOrWhiteSpace(dialog.Value))
+        {
+            await AssignClusterAsync(row, dialog.Value.Trim());
         }
+    }
 
+    private async Task AssignClusterAsync(ClusterRow row, string name)
+    {
         try
         {
             var personId = await catalog.GetOrCreatePersonAsync(name);
@@ -606,6 +640,125 @@ public partial class PeopleDialog : Window
         }
 
         await RefreshAsync();
+    }
+
+    private async void OnPeopleSelectionChanged(
+        object sender,
+        System.Windows.Controls.SelectionChangedEventArgs eventArgs) =>
+        await LoadSelectedPersonFacesAsync();
+
+    /// <summary>
+    /// Shows the selected person's faces for corrective editing; a wrongly
+    /// matched face is removed with its ✕.
+    /// </summary>
+    private async Task LoadSelectedPersonFacesAsync()
+    {
+        if (PeopleList.SelectedItem is not PersonRow row)
+        {
+            PersonFacesHeader.Visibility = Visibility.Collapsed;
+            PersonFacesList.ItemsSource = null;
+            return;
+        }
+
+        try
+        {
+            var faces = (await catalog.GetFacesForPersonAsync(row.Person.Id))
+                .Take(MaxPersonFacesShown)
+                .ToArray();
+            var previewCache = new Dictionary<string, BitmapSource?>(
+                StringComparer.OrdinalIgnoreCase);
+            var faceRows = new List<PersonFaceRow>(faces.Length);
+            foreach (var face in faces)
+            {
+                var thumbnails = await LoadFaceThumbnailsAsync(
+                    [face],
+                    previewCache);
+                faceRows.Add(new PersonFaceRow
+                {
+                    Thumbnail = thumbnails.FirstOrDefault(),
+                    Face = face
+                });
+            }
+
+            PersonFacesHeader.Text =
+                $"FACES OF {row.Person.Name.ToUpperInvariant()}"
+                + (row.Person.FaceCount > faces.Length
+                    ? $" (FIRST {faces.Length:N0} OF {row.Person.FaceCount:N0})"
+                    : string.Empty);
+            PersonFacesHeader.Visibility = Visibility.Visible;
+            PersonFacesList.ItemsSource = faceRows;
+        }
+        catch (Exception exception)
+        {
+            DetailText.Text =
+                $"The person's faces could not be loaded: {exception.Message}";
+        }
+    }
+
+    private async void OnUnassignFaceClick(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        if (sender is not FrameworkElement { Tag: PersonFaceRow row }
+            || row.Face.PersonId is not { } personId
+            || PeopleList.SelectedItem is not PersonRow selected)
+        {
+            return;
+        }
+
+        try
+        {
+            await catalog.AssignFacesAsync([row.Face.Id], null);
+
+            // When that was the person's last face on the photo, the keyword
+            // written earlier no longer holds and comes back out; the region
+            // list is rebuilt either way.
+            var stillPresent = (await catalog.GetFacesForPathAsync(row.Face.Path))
+                .Any(face => face.PersonId == personId);
+            if (!stillPresent)
+            {
+                await RemovePersonKeywordAsync(
+                    row.Face.Path,
+                    selected.Person.Name);
+            }
+
+            await WriteFaceRegionsAsync(row.Face.Path);
+            DetailText.Text =
+                $"Removed a face from “{selected.Person.Name}”; it returned "
+                + "to the unnamed pool.";
+        }
+        catch (Exception exception)
+        {
+            DetailText.Text = $"Removing the face failed: {exception.Message}";
+        }
+
+        await RefreshAsync();
+    }
+
+    /// <summary>
+    /// Takes the person's name back out of the photograph's keywords - the
+    /// mirror of <see cref="WritePersonKeywordAsync"/> for corrections.
+    /// </summary>
+    private async Task RemovePersonKeywordAsync(string path, string name)
+    {
+        var record = await catalog.GetByPathAsync(path);
+        if (record is null)
+        {
+            return;
+        }
+
+        var remaining = record.KeywordList
+            .Where(keyword => !keyword.Equals(
+                name,
+                StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        var joined = remaining.Length == 0
+            ? null
+            : PhotoRecord.JoinKeywords(remaining);
+        if (!string.Equals(joined, record.Keywords, StringComparison.Ordinal))
+        {
+            await catalog.UpdateKeywordsAsync(path, joined);
+        }
     }
 
     private async void OnRenamePersonClick(

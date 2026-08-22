@@ -18,6 +18,28 @@
     <infrastructure:EnumEqualsConverter x:Key="EnumEquals" />
     <infrastructure:SortFieldNameConverter x:Key="SortFieldName" />
     <infrastructure:ActiveEditorTabConverter x:Key="ActiveEditorTab" />
+    <infrastructure:PersonBrushConverter x:Key="PersonBrush" />
+
+    <!-- A person as a small pill: their colour dot and name. -->
+    <DataTemplate x:Key="PersonBadgeTemplate">
+      <Border Margin="0,2,4,0"
+              Padding="6,2,7,3"
+              Background="#242832"
+              BorderBrush="#3A3F4B"
+              BorderThickness="1"
+              CornerRadius="9">
+        <StackPanel Orientation="Horizontal">
+          <Ellipse Width="8"
+                   Height="8"
+                   Margin="0,1,5,0"
+                   VerticalAlignment="Center"
+                   Fill="{Binding Converter={StaticResource PersonBrush}}" />
+          <TextBlock FontSize="11"
+                     Foreground="#E8ECF2"
+                     Text="{Binding Name}" />
+        </StackPanel>
+      </Border>
+    </DataTemplate>
 
     <!-- Tab strip: one Manager tab, one tab per open editor. -->
     <Style x:Key="TabLabelButtonStyle" TargetType="Button">
@@ -696,6 +718,37 @@
                               Color="Black" />
           </TextBlock.Effect>
         </TextBlock>
+        <!-- Who is on the photo, quietly in the corner of the thumbnail. -->
+        <ItemsControl Margin="5,0,5,4"
+                      HorizontalAlignment="Left"
+                      VerticalAlignment="Bottom"
+                      IsHitTestVisible="False"
+                      ItemsSource="{Binding People}">
+          <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate>
+              <WrapPanel Orientation="Horizontal" />
+            </ItemsPanelTemplate>
+          </ItemsControl.ItemsPanel>
+          <ItemsControl.ItemTemplate>
+            <DataTemplate>
+              <Border Margin="0,2,3,0"
+                      Padding="5,1,6,2"
+                      Background="#CC14161C"
+                      CornerRadius="8">
+                <StackPanel Orientation="Horizontal">
+                  <Ellipse Width="7"
+                           Height="7"
+                           Margin="0,1,4,0"
+                           VerticalAlignment="Center"
+                           Fill="{Binding Converter={StaticResource PersonBrush}}" />
+                  <TextBlock FontSize="10"
+                             Foreground="#E8ECF2"
+                             Text="{Binding Name}" />
+                </StackPanel>
+              </Border>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
         <Grid Grid.Row="1" Margin="8,5">
           <Grid.ColumnDefinitions>
             <ColumnDefinition Width="*" />
@@ -1308,11 +1361,13 @@
                 </ItemsControl.ItemTemplate>
               </ItemsControl>
 
-              <TextBlock Style="{StaticResource SectionHeaderStyle}" Text="PERSON" />
-              <ComboBox x:Name="PersonFilterBox"
-                        Margin="0,0,0,8"
-                        DisplayMemberPath="Name"
-                        SelectionChanged="OnFilterChanged" />
+              <TextBlock Style="{StaticResource SectionHeaderStyle}"
+                         Text="PEOPLE" />
+              <!-- One toggle chip per named person; checking several means
+                   "all of them together on the photo". -->
+              <WrapPanel x:Name="PersonFilterPanel"
+                         Margin="0,0,0,8"
+                         Orientation="Horizontal" />
 
               <TextBlock Style="{StaticResource SectionHeaderStyle}" Text="CAMERA" />
               <ComboBox x:Name="CameraFilterBox"
@@ -1906,6 +1961,21 @@
                   <TextBox Text="{Binding Keywords,
                                           Mode=TwoWay,
                                           UpdateSourceTrigger=LostFocus}" />
+                  <TextBlock Margin="0,8,0,3"
+                             Style="{StaticResource InfoCaptionStyle}"
+                             Text="People"
+                             Visibility="{Binding PeopleText,
+                                                  Converter={StaticResource NullToCollapsed}}" />
+                  <ItemsControl ItemTemplate="{StaticResource PersonBadgeTemplate}"
+                                ItemsSource="{Binding People}"
+                                Visibility="{Binding PeopleText,
+                                                     Converter={StaticResource NullToCollapsed}}">
+                    <ItemsControl.ItemsPanel>
+                      <ItemsPanelTemplate>
+                        <WrapPanel Orientation="Horizontal" />
+                      </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                  </ItemsControl>
                 </StackPanel>
               </ScrollViewer>
             </Border>

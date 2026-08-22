@@ -180,6 +180,43 @@ public sealed partial class PhotoCatalogRepository
             path,
             cancellationToken);
 
+    /// <summary>
+    /// Every photograph's named people in one query - the source for the
+    /// gallery badges, the info panel's People row and the person filter.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<string, IReadOnlyList<PersonTag>>>
+        GetPeopleByPhotoAsync(CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT DISTINCT faces.path, people.id, people.name
+            FROM faces
+            JOIN people ON people.id = faces.person_id
+            ORDER BY people.name COLLATE NOCASE;
+            """;
+        var map = new Dictionary<string, IReadOnlyList<PersonTag>>(
+            StringComparer.OrdinalIgnoreCase);
+        await using var reader = await command.ExecuteReaderAsync(
+            cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var path = reader.GetString(0);
+            var tag = new PersonTag(reader.GetInt64(1), reader.GetString(2));
+            if (map.TryGetValue(path, out var existing))
+            {
+                map[path] = [.. existing, tag];
+            }
+            else
+            {
+                map[path] = [tag];
+            }
+        }
+
+        return map;
+    }
+
     /// <summary>The photos a person appears in, for the gallery filter.</summary>
     public async Task<IReadOnlyList<string>> GetPersonPhotoPathsAsync(
         long personId,

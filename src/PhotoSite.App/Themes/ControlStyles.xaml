@@ -322,4 +322,63 @@
     <Setter Property="Padding" Value="14" />
   </Style>
 
+  <!-- Person chips: a rounded pill with the person's colour dot. The toggle
+       flavour filters the gallery, the button flavour tags a face group. -->
+  <Style x:Key="PersonChipToggleStyle" TargetType="ToggleButton">
+    <Setter Property="Margin" Value="0,0,6,6" />
+    <Setter Property="Cursor" Value="Hand" />
+    <Setter Property="Foreground" Value="#D9E6F2" />
+    <Setter Property="Background" Value="#242832" />
+    <Setter Property="BorderBrush" Value="#3A3F4B" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="ToggleButton">
+          <Border Padding="8,3,9,4"
+                  Background="{TemplateBinding Background}"
+                  BorderBrush="{TemplateBinding BorderBrush}"
+                  BorderThickness="1"
+                  CornerRadius="10">
+            <ContentPresenter VerticalAlignment="Center" />
+          </Border>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+    <Style.Triggers>
+      <Trigger Property="IsChecked" Value="True">
+        <Setter Property="Background" Value="#284967" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+      </Trigger>
+      <Trigger Property="IsMouseOver" Value="True">
+        <Setter Property="BorderBrush" Value="#5D6675" />
+      </Trigger>
+    </Style.Triggers>
+  </Style>
+
+  <Style x:Key="PersonChipButtonStyle" TargetType="Button">
+    <Setter Property="Margin" Value="0,0,6,6" />
+    <Setter Property="Cursor" Value="Hand" />
+    <Setter Property="Foreground" Value="#D9E6F2" />
+    <Setter Property="Background" Value="#242832" />
+    <Setter Property="BorderBrush" Value="#3A3F4B" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Button">
+          <Border Padding="8,3,9,4"
+                  Background="{TemplateBinding Background}"
+                  BorderBrush="{TemplateBinding BorderBrush}"
+                  BorderThickness="1"
+                  CornerRadius="10">
+            <ContentPresenter VerticalAlignment="Center" />
+          </Border>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+    <Style.Triggers>
+      <Trigger Property="IsMouseOver" Value="True">
+        <Setter Property="Background" Value="#284967" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+      </Trigger>
+    </Style.Triggers>
+  </Style>
+
 </ResourceDictionary>

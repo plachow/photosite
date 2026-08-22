@@ -16,7 +16,71 @@ namespace PhotoSite;
 public partial class MainWindow
 {
     private readonly List<CheckBox> labelFilterBoxes = [];
+    private readonly List<System.Windows.Controls.Primitives.ToggleButton>
+        personFilterChips = [];
     private bool isFilterUiUpdating;
+
+    /// <summary>
+    /// One toggle chip per named person; several checked chips mean "all of
+    /// them together on the photo". Selections survive a rebuild as long as
+    /// the person still exists.
+    /// </summary>
+    private void RebuildPersonFilterChips(IReadOnlyList<PersonRecord> people)
+    {
+        var checkedIds = personFilterChips
+            .Where(chip => chip.IsChecked == true)
+            .Select(chip => ((PersonRecord)chip.Tag).Id)
+            .ToHashSet();
+        personFilterChips.Clear();
+        PersonFilterPanel.Children.Clear();
+
+        foreach (var person in people)
+        {
+            var chip = new System.Windows.Controls.Primitives.ToggleButton
+            {
+                Tag = person,
+                IsChecked = checkedIds.Contains(person.Id),
+                Style = (Style)FindResource("PersonChipToggleStyle"),
+                ToolTip = $"{person.Name} · {person.FaceCount:N0} faces",
+                Content = BuildPersonChipContent(person.Id, person.Name)
+            };
+            System.Windows.Automation.AutomationProperties.SetName(
+                chip,
+                $"Filter by {person.Name}");
+            chip.Click += OnFilterChanged;
+            personFilterChips.Add(chip);
+            PersonFilterPanel.Children.Add(chip);
+        }
+
+        if (people.Count == 0)
+        {
+            PersonFilterPanel.Children.Add(new TextBlock
+            {
+                FontSize = 11,
+                Foreground = (Brush)FindResource("MutedTextBrush"),
+                Text = "No people named yet"
+            });
+        }
+    }
+
+    internal static StackPanel BuildPersonChipContent(long personId, string name)
+    {
+        var panel = new StackPanel { Orientation = Orientation.Horizontal };
+        panel.Children.Add(new System.Windows.Shapes.Ellipse
+        {
+            Width = 8,
+            Height = 8,
+            Margin = new Thickness(0, 1, 5, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            Fill = Infrastructure.PersonBrushes.Get(personId)
+        });
+        panel.Children.Add(new TextBlock
+        {
+            FontSize = 11,
+            Text = name
+        });
+        return panel;
+    }
 
     private void BuildLabelFilters()
     {
@@ -195,8 +259,14 @@ public partial class MainWindow
             Formats = formats,
             Cameras = cameras,
             Lenses = lenses,
-            PersonId = (PersonFilterBox.SelectedItem as PersonRecord)?.Id,
-            PersonName = (PersonFilterBox.SelectedItem as PersonRecord)?.Name,
+            PersonIds = personFilterChips
+                .Where(chip => chip.IsChecked == true)
+                .Select(chip => ((PersonRecord)chip.Tag).Id)
+                .ToHashSet(),
+            PersonNames = personFilterChips
+                .Where(chip => chip.IsChecked == true)
+                .Select(chip => ((PersonRecord)chip.Tag).Name)
+                .ToArray(),
             Orientation = LandscapeOrientationBox.IsChecked == true
                 ? PhotoOrientation.Landscape
                 : PortraitOrientationBox.IsChecked == true
@@ -281,7 +351,10 @@ public partial class MainWindow
             AnyOrientationBox.IsChecked = true;
             CameraFilterBox.SelectedItem = null;
             LensFilterBox.SelectedItem = null;
-            PersonFilterBox.SelectedItem = null;
+            foreach (var chip in personFilterChips)
+            {
+                chip.IsChecked = false;
+            }
             DateFromBox.Text = string.Empty;
             DateToBox.Text = string.Empty;
             foreach (var format in FormatFilterItems.Items.OfType<string>())

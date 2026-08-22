@@ -2142,6 +2142,7 @@ public partial class MainWindow : Window
         peopleNames.Clear();
         _ = LoadPersonFilterChoicesAsync();
         _ = UpdateFaceOverlaysAsync();
+        _ = viewModel.RefreshPhotoPeopleAsync();
     }
 
     private const string ShowFacesSetting = "show_faces";
@@ -2233,25 +2234,25 @@ public partial class MainWindow : Window
             return;
         }
 
-        // The await resumed off the dispatcher; the combo box has not.
+        // The await resumed off the dispatcher; the chips have not.
         _ = Dispatcher.BeginInvoke(() =>
         {
-            var selectedId = (PersonFilterBox.SelectedItem as PersonRecord)?.Id;
+            var checkedBefore = personFilterChips
+                .Count(chip => chip.IsChecked == true);
             isFilterUiUpdating = true;
             try
             {
-                PersonFilterBox.ItemsSource = people;
-                PersonFilterBox.SelectedItem = people.FirstOrDefault(
-                    person => person.Id == selectedId);
+                RebuildPersonFilterChips(people);
             }
             finally
             {
                 isFilterUiUpdating = false;
             }
 
-            if (selectedId is not null && PersonFilterBox.SelectedItem is null)
+            if (checkedBefore
+                != personFilterChips.Count(chip => chip.IsChecked == true))
             {
-                // The filtered person no longer exists.
+                // A filtered person no longer exists.
                 ApplyFilterFromUi();
             }
         });

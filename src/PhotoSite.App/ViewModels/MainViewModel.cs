@@ -278,45 +278,51 @@ public sealed class MainViewModel : ObservableObject
             OnPropertyChanged(nameof(FilterLabel));
             OnPropertyChanged(nameof(IsFilterActive));
             ClearFilterCommand.NotifyCanExecuteChanged();
-            if (updated.PersonId != personFilterId)
-            {
-                // The person's photo list comes from the catalogue; the
-                // gallery re-presents again once it has arrived.
-                _ = RefreshPersonFilterAsync(updated.PersonId);
-            }
-
             ApplyPhotoPresentation();
         }
     }
 
-    private long? personFilterId;
-    private HashSet<string>? personFilterPaths;
+    private Dictionary<string, HashSet<long>> photoPersonIds =
+        new(StringComparer.OrdinalIgnoreCase);
 
-    private async Task RefreshPersonFilterAsync(long? personId)
+    /// <summary>
+    /// Reloads which people appear on which photo and hands every photo its
+    /// badge list. Called after a folder load and after the People window
+    /// closes, so badges and the person filter track the face catalogue.
+    /// </summary>
+    public async Task RefreshPhotoPeopleAsync(
+        CancellationToken cancellationToken = default)
     {
-        personFilterId = personId;
-        HashSet<string>? paths = null;
-        if (personId is { } id)
+        IReadOnlyDictionary<string, IReadOnlyList<PersonTag>> map;
+        try
         {
-            try
-            {
-                paths = (await catalog.GetPersonPhotoPathsAsync(id))
-                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            }
-            catch (Exception)
-            {
-                paths = [];
-            }
+            map = await catalog.GetPeopleByPhotoAsync(cancellationToken);
         }
-
-        if (personFilterId != personId)
+        catch (Exception)
         {
-            // A newer filter change overtook this load.
+            // Badges are decoration; a failed load must not break browsing.
             return;
         }
 
-        personFilterPaths = paths;
-        ApplyPhotoPresentation();
+        var ids = new Dictionary<string, HashSet<long>>(
+            StringComparer.OrdinalIgnoreCase);
+        foreach (var (path, tags) in map)
+        {
+            ids[path] = tags.Select(tag => tag.Id).ToHashSet();
+        }
+
+        photoPersonIds = ids;
+        foreach (var photo in allPhotos)
+        {
+            photo.People = map.TryGetValue(photo.Path, out var tags)
+                ? tags
+                : [];
+        }
+
+        if (filter.PersonIds.Count > 0)
+        {
+            ApplyPhotoPresentation();
+        }
     }
 
     public string FilterLabel => Filter.IsActive ? Filter.Describe() : "Filter";
@@ -1124,6 +1130,7 @@ public sealed class MainViewModel : ObservableObject
                     rootFolder,
                     preferredPhotoPath,
                     token);
+                await RefreshPhotoPeopleAsync(token);
                 SetPhotoStatus(
                     cached.Count,
                     "cached · checking for changes…");
@@ -1184,6 +1191,7 @@ public sealed class MainViewModel : ObservableObject
                 rootFolder,
                 preferredPhotoPath,
                 token);
+            await RefreshPhotoPeopleAsync(token);
             SetPhotoStatus(current.Count);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -1361,7 +1369,7 @@ public sealed class MainViewModel : ObservableObject
             sortField,
             sortDescending,
             filter,
-            personFilterPaths);
+            photoPersonIds);
         // Granular updates keep the realized tiles - and the thumbnails they
         // already decoded - alive; a Reset would blank the whole viewport.
         Photos.SynchronizeTo(presented);
@@ -1398,10 +1406,10 @@ public sealed class MainViewModel : ObservableObject
         PhotoSortField sortField,
         bool descending,
         PhotoFilterCriteria criteria,
-        IReadOnlySet<string>? personPhotoPaths = null)
+        IReadOnlyDictionary<string, HashSet<long>>? photoPersonIds = null)
     {
         var filtered = source.Where(photo =>
-            Matches(photo, criteria, personPhotoPaths));
+            Matches(photo, criteria, photoPersonIds));
 
         IOrderedEnumerable<PhotoItemViewModel> ordered = sortField switch
         {
@@ -1457,7 +1465,7 @@ public sealed class MainViewModel : ObservableObject
     internal static bool Matches(
         PhotoItemViewModel photo,
         PhotoFilterCriteria criteria,
-        IReadOnlySet<string>? personPhotoPaths = null)
+        IReadOnlyDictionary<string, HashSet<long>>? photoPersonIds = null)
     {
         var record = photo.Record;
         if (photo.Rating < criteria.MinimumRating)
@@ -1465,12 +1473,16 @@ public sealed class MainViewModel : ObservableObject
             return false;
         }
 
-        // The person facet works from the face catalogue's path list; until
-        // that list has loaded, nothing matches rather than everything.
-        if (criteria.PersonId is not null
-            && personPhotoPaths?.Contains(record.Path) != true)
+        // Every chosen person must appear on the photo (conjunction); until
+        // the face map has loaded, nothing matches rather than everything.
+        if (criteria.PersonIds.Count > 0)
         {
-            return false;
+            if (photoPersonIds is null
+                || !photoPersonIds.TryGetValue(record.Path, out var people)
+                || !criteria.PersonIds.All(people.Contains))
+            {
+                return false;
+            }
         }
 
         if (criteria.HideRejected && photo.Flag == PhotoFlag.Rejected)
