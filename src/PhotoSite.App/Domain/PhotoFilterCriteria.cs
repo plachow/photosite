@@ -50,6 +50,19 @@ public sealed record PhotoFilterCriteria
     /// </summary>
     public bool HideRejected { get; init; }
 
+    /// <summary>
+    /// From the face expression scores: true keeps photos where everyone is
+    /// smiling, false keeps photos where someone is not - the reject pile of
+    /// a portrait cull. Null does not filter.
+    /// </summary>
+    public bool? Smiling { get; init; }
+
+    /// <summary>
+    /// True keeps photos where everyone has both eyes open, false keeps the
+    /// blinked ones. Null does not filter.
+    /// </summary>
+    public bool? EyesOpen { get; init; }
+
     public bool IsActive =>
         MinimumRating > 0
         || ColorLabels.Count > 0
@@ -62,6 +75,8 @@ public sealed record PhotoFilterCriteria
         || TakenTo is not null
         || HideRejected
         || PersonIds.Count > 0
+        || Smiling is not null
+        || EyesOpen is not null
         || !string.IsNullOrWhiteSpace(SearchText);
 
     /// <summary>
@@ -125,6 +140,16 @@ public sealed record PhotoFilterCriteria
                 : $"{PersonIds.Count} people");
         }
 
+        if (Smiling is { } smiling)
+        {
+            parts.Add(smiling ? "smiling" : "not smiling");
+        }
+
+        if (EyesOpen is { } eyesOpen)
+        {
+            parts.Add(eyesOpen ? "eyes open" : "closed eyes");
+        }
+
         if (HideRejected)
         {
             parts.Add("no rejects");
@@ -146,6 +171,8 @@ public sealed record PhotoFilterCriteria
         && Nullable.Equals(TakenTo, other.TakenTo)
         && HideRejected == other.HideRejected
         && PersonIds.SetEquals(other.PersonIds)
+        && Smiling == other.Smiling
+        && EyesOpen == other.EyesOpen
         && string.Equals(SearchText, other.SearchText, StringComparison.Ordinal);
 
     public override int GetHashCode() =>

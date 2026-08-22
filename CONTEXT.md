@@ -85,6 +85,19 @@ neither the person nor the unnamed pool until the user answers yes or no in
 the People window; only a yes writes the name anywhere. Deciding a face either
 way always clears its suggestion.
 
+**Expression** (`FaceExpression`, `ExpressionSummary`) — two 0..1 scores the
+face scan attaches to every face: *smile* (FER+ happiness on the aligned
+crop) and *eyes open* (open-closed-eye-0001 per eye, the face keeps the
+weaker eye). Both models are optional files under `tools/models`; a face
+scanned without them stays unscored (`NULL`) and is scored in place on a
+later scan by rectangle overlap, never losing its id or person. Scores stay
+in the catalogue only — nothing is written into files. Per photo they
+aggregate to an `ExpressionSummary` (thresholds at 0.5) behind the 😴 / 🙁
+thumbnail badge, the info panel's Expression row and the filter's Smile/Eyes
+facets, whose sides read "everyone passes" versus "someone fails" so a
+portrait cull can keep either pile. Rejected synonyms: *mood*, *emotion
+detection*.
+
 **Region** — a named face rectangle written into the file as an MWG region
 (`XMP-mwg-rs`, centre-based normalized areas plus the pixel dimensions), the
 format Lightroom, digiKam and Windows read face frames from. Regions travel

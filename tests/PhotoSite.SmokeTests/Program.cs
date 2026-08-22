@@ -967,8 +967,11 @@ try
         firstPhoto,
         111,
         [
-            (0.1, 0.2, 0.3, 0.4, 0.9, faceEmbedding, null, null),
-            (0.5, 0.5, 0.2, 0.2, 0.8, new float[] { 0f, 1f, 0f, 0f }, null, null)
+            new FaceObservation(
+                0.1, 0.2, 0.3, 0.4, 0.9, faceEmbedding,
+                Smile: 0.92, EyesOpen: 0.15),
+            new FaceObservation(
+                0.5, 0.5, 0.2, 0.2, 0.8, new float[] { 0f, 1f, 0f, 0f })
         ]);
     Assert(
         (await repository.GetFaceScanStatesAsync())[firstPhoto] == 111,
@@ -978,8 +981,44 @@ try
         unassignedFaces.Count == 2
         && unassignedFaces[0].Confidence == 0.9
         && unassignedFaces[0].Embedding.SequenceEqual(faceEmbedding)
-        && unassignedFaces[0] is { X: 0.1, Y: 0.2, Width: 0.3, Height: 0.4 },
-        "Detected faces should round-trip ordered by confidence.");
+        && unassignedFaces[0] is { X: 0.1, Y: 0.2, Width: 0.3, Height: 0.4 }
+        && unassignedFaces[0] is { Smile: 0.92, EyesOpen: 0.15 }
+        && unassignedFaces[1] is { Smile: null, EyesOpen: null },
+        "Detected faces should round-trip ordered by confidence, expression "
+        + "scores included.");
+
+    var expressionsByPhoto = await repository.GetExpressionsByPhotoAsync();
+    Assert(
+        expressionsByPhoto.TryGetValue(firstPhoto, out var firstExpressions)
+        && firstExpressions == new ExpressionSummary(2, 1, 1, 0)
+        && firstExpressions is
+            {
+                AllSmiling: false,
+                AllEyesOpen: false,
+                AnyNotSmiling: false,
+                AnyEyesClosed: true
+            },
+        "The per-photo expression tally should count only scored faces "
+        + "against the thresholds.");
+    Assert(
+        (await repository.GetPathsMissingExpressionsAsync())
+            .Contains(firstPhoto, StringComparer.OrdinalIgnoreCase),
+        "A face without expression scores should keep its photo on the "
+        + "backfill list.");
+    await repository.UpdateFaceExpressionsAsync(
+        [(unassignedFaces[1].Id, 0.8, 0.9)]);
+    expressionsByPhoto = await repository.GetExpressionsByPhotoAsync();
+    Assert(
+        (await repository.GetPathsMissingExpressionsAsync()).Count == 0
+        && expressionsByPhoto[firstPhoto] == new ExpressionSummary(2, 2, 2, 1)
+        && expressionsByPhoto[firstPhoto] is
+            {
+                AllSmiling: true,
+                AllEyesOpen: false,
+                AnyEyesClosed: true
+            },
+        "Backfilled expression scores should join the tally and clear the "
+        + "backfill list.");
 
     var personId = await repository.GetOrCreatePersonAsync("Test Person");
     Assert(
@@ -1000,7 +1039,7 @@ try
     await repository.ReplaceFacesAsync(
         firstPhoto,
         222,
-        [(0.1, 0.1, 0.1, 0.1, 0.5, faceEmbedding, personId, null)]);
+        [new FaceObservation(0.1, 0.1, 0.1, 0.1, 0.5, faceEmbedding, personId)]);
     Assert(
         (await repository.GetPeopleAsync())[0].Name == "Renamed Person"
         && (await repository.GetFaceScanStatesAsync())[firstPhoto] == 222
@@ -1021,9 +1060,12 @@ try
         firstPhoto,
         444,
         [
-            (0.1, 0.1, 0.2, 0.2, 0.9, faceEmbedding, null, suggestPersonId),
-            (0.6, 0.6, 0.2, 0.2, 0.8, new float[] { 0f, 1f, 0f, 0f },
-                suggestPersonId, null)
+            new FaceObservation(
+                0.1, 0.1, 0.2, 0.2, 0.9, faceEmbedding,
+                SuggestedPersonId: suggestPersonId),
+            new FaceObservation(
+                0.6, 0.6, 0.2, 0.2, 0.8, new float[] { 0f, 1f, 0f, 0f },
+                suggestPersonId)
         ]);
     var suggestedFaces = await repository.GetSuggestedFacesAsync();
     Assert(
@@ -1053,7 +1095,9 @@ try
     await repository.ReplaceFacesAsync(
         firstPhoto,
         555,
-        [(0.1, 0.1, 0.2, 0.2, 0.9, faceEmbedding, null, suggestPersonId)]);
+        [new FaceObservation(
+            0.1, 0.1, 0.2, 0.2, 0.9, faceEmbedding,
+            SuggestedPersonId: suggestPersonId)]);
     await repository.ClearSuggestionsAsync(
         [(await repository.GetSuggestedFacesAsync())[0].Id]);
     Assert(
@@ -1140,11 +1184,49 @@ try
         "The person facet is a conjunction: every chosen person must be on "
         + "the photo.");
 
+    var smilingCriteria = PhotoFilterCriteria.None with { Smiling = true };
+    var blinkedCriteria = PhotoFilterCriteria.None with { EyesOpen = false };
+    var allGood = new Dictionary<string, ExpressionSummary>(
+        StringComparer.OrdinalIgnoreCase)
+    {
+        [firstPhoto] = new ExpressionSummary(2, 2, 2, 2)
+    };
+    var oneBlinked = new Dictionary<string, ExpressionSummary>(
+        StringComparer.OrdinalIgnoreCase)
+    {
+        [firstPhoto] = new ExpressionSummary(2, 2, 1, 1)
+    };
+    Assert(
+        smilingCriteria.IsActive
+        && smilingCriteria.Describe().Contains("smiling", StringComparison.Ordinal)
+        && blinkedCriteria.Describe().Contains(
+            "closed eyes",
+            StringComparison.Ordinal)
+        && !MainViewModel.Matches(personFilterViewModel, smilingCriteria)
+        && MainViewModel.Matches(
+            personFilterViewModel,
+            smilingCriteria,
+            photoExpressions: allGood)
+        && !MainViewModel.Matches(
+            personFilterViewModel,
+            smilingCriteria,
+            photoExpressions: oneBlinked)
+        && !MainViewModel.Matches(
+            personFilterViewModel,
+            blinkedCriteria,
+            photoExpressions: allGood)
+        && MainViewModel.Matches(
+            personFilterViewModel,
+            blinkedCriteria,
+            photoExpressions: oneBlinked),
+        "The expression facets pick everyone-passes on one side and "
+        + "someone-fails on the other.");
+
     const string vanishedPhoto = @"Z:\nowhere\gone.jpg";
     await repository.ReplaceFacesAsync(
         vanishedPhoto,
         333,
-        [(0.1, 0.1, 0.1, 0.1, 0.9, faceEmbedding, null, null)]);
+        [new FaceObservation(0.1, 0.1, 0.1, 0.1, 0.9, faceEmbedding)]);
     await repository.DeleteByPathsAsync([vanishedPhoto], CancellationToken.None);
     Assert(
         !(await repository.GetFaceScanStatesAsync()).ContainsKey(vanishedPhoto)

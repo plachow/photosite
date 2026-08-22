@@ -718,6 +718,21 @@
                               Color="Black" />
           </TextBlock.Effect>
         </TextBlock>
+        <!-- The expression warning: someone blinked or is not smiling. A
+             photo whose faces all pass shows nothing. -->
+        <Border Margin="5,0,5,4"
+                Padding="4,1,4,2"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Bottom"
+                Background="#CC14161C"
+                CornerRadius="8"
+                IsHitTestVisible="False"
+                Visibility="{Binding ExpressionGlyph,
+                                     Converter={StaticResource NullToCollapsed}}">
+          <TextBlock FontFamily="Segoe UI Emoji"
+                     FontSize="11"
+                     Text="{Binding ExpressionGlyph}" />
+        </Border>
         <!-- Who is on the photo, quietly in the corner of the thumbnail. -->
         <ItemsControl Margin="5,0,5,4"
                       HorizontalAlignment="Left"
@@ -1369,6 +1384,60 @@
                          Margin="0,0,0,8"
                          Orientation="Horizontal" />
 
+              <TextBlock Style="{StaticResource SectionHeaderStyle}"
+                         Text="EXPRESSION" />
+              <!-- From the face scan's smile and eyes scores. "Smiling" and
+                   "Open" mean everyone on the photo; the opposite side keeps
+                   the rejects of a portrait cull. -->
+              <StackPanel Margin="0,0,0,4" Orientation="Horizontal">
+                <TextBlock Width="42"
+                           VerticalAlignment="Center"
+                           FontSize="11"
+                           Foreground="#79808D"
+                           Text="Smile" />
+                <RadioButton x:Name="AnySmileBox"
+                             Content="Any"
+                             GroupName="SmileFilter"
+                             IsChecked="True"
+                             Click="OnFilterChanged" />
+                <RadioButton x:Name="SmilingBox"
+                             Margin="10,0,0,0"
+                             Content="Smiling"
+                             GroupName="SmileFilter"
+                             ToolTip="Everyone on the photo is smiling"
+                             Click="OnFilterChanged" />
+                <RadioButton x:Name="NotSmilingBox"
+                             Margin="10,0,0,0"
+                             Content="Not smiling"
+                             GroupName="SmileFilter"
+                             ToolTip="At least one face is not smiling"
+                             Click="OnFilterChanged" />
+              </StackPanel>
+              <StackPanel Margin="0,0,0,10" Orientation="Horizontal">
+                <TextBlock Width="42"
+                           VerticalAlignment="Center"
+                           FontSize="11"
+                           Foreground="#79808D"
+                           Text="Eyes" />
+                <RadioButton x:Name="AnyEyesBox"
+                             Content="Any"
+                             GroupName="EyesFilter"
+                             IsChecked="True"
+                             Click="OnFilterChanged" />
+                <RadioButton x:Name="EyesOpenBox"
+                             Margin="10,0,0,0"
+                             Content="Open"
+                             GroupName="EyesFilter"
+                             ToolTip="Everyone has both eyes open"
+                             Click="OnFilterChanged" />
+                <RadioButton x:Name="EyesClosedBox"
+                             Margin="10,0,0,0"
+                             Content="Blinked"
+                             GroupName="EyesFilter"
+                             ToolTip="At least one face has closed eyes"
+                             Click="OnFilterChanged" />
+              </StackPanel>
+
               <TextBlock Style="{StaticResource SectionHeaderStyle}" Text="CAMERA" />
               <ComboBox x:Name="CameraFilterBox"
                         Margin="0,0,0,8"
@@ -1976,6 +2045,17 @@
                       </ItemsPanelTemplate>
                     </ItemsControl.ItemsPanel>
                   </ItemsControl>
+                  <TextBlock Margin="0,8,0,3"
+                             Style="{StaticResource InfoCaptionStyle}"
+                             Text="Expression"
+                             Visibility="{Binding ExpressionText,
+                                                  Converter={StaticResource NullToCollapsed}}" />
+                  <TextBlock FontSize="12"
+                             Foreground="#C9CFDA"
+                             Text="{Binding ExpressionText}"
+                             TextWrapping="Wrap"
+                             Visibility="{Binding ExpressionText,
+                                                  Converter={StaticResource NullToCollapsed}}" />
                 </StackPanel>
               </ScrollViewer>
             </Border>

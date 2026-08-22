@@ -285,18 +285,26 @@ public sealed class MainViewModel : ObservableObject
     private Dictionary<string, HashSet<long>> photoPersonIds =
         new(StringComparer.OrdinalIgnoreCase);
 
+    private IReadOnlyDictionary<string, ExpressionSummary> photoExpressions =
+        new Dictionary<string, ExpressionSummary>(
+            StringComparer.OrdinalIgnoreCase);
+
     /// <summary>
-    /// Reloads which people appear on which photo and hands every photo its
-    /// badge list. Called after a folder load and after the People window
-    /// closes, so badges and the person filter track the face catalogue.
+    /// Reloads which people appear on which photo - and how their faces
+    /// scored on expression - and hands every photo its badge data. Called
+    /// after a folder load and after the People window closes, so badges and
+    /// the person and expression filters track the face catalogue.
     /// </summary>
     public async Task RefreshPhotoPeopleAsync(
         CancellationToken cancellationToken = default)
     {
         IReadOnlyDictionary<string, IReadOnlyList<PersonTag>> map;
+        IReadOnlyDictionary<string, ExpressionSummary> expressions;
         try
         {
             map = await catalog.GetPeopleByPhotoAsync(cancellationToken);
+            expressions = await catalog.GetExpressionsByPhotoAsync(
+                cancellationToken);
         }
         catch (Exception)
         {
@@ -312,14 +320,22 @@ public sealed class MainViewModel : ObservableObject
         }
 
         photoPersonIds = ids;
+        photoExpressions = expressions;
         foreach (var photo in allPhotos)
         {
             photo.People = map.TryGetValue(photo.Path, out var tags)
                 ? tags
                 : [];
+            photo.Expressions = expressions.TryGetValue(
+                photo.Path,
+                out var summary)
+                ? summary
+                : null;
         }
 
-        if (filter.PersonIds.Count > 0)
+        if (filter.PersonIds.Count > 0
+            || filter.Smiling is not null
+            || filter.EyesOpen is not null)
         {
             ApplyPhotoPresentation();
         }
@@ -1369,7 +1385,8 @@ public sealed class MainViewModel : ObservableObject
             sortField,
             sortDescending,
             filter,
-            photoPersonIds);
+            photoPersonIds,
+            photoExpressions);
         // Granular updates keep the realized tiles - and the thumbnails they
         // already decoded - alive; a Reset would blank the whole viewport.
         Photos.SynchronizeTo(presented);
@@ -1406,10 +1423,11 @@ public sealed class MainViewModel : ObservableObject
         PhotoSortField sortField,
         bool descending,
         PhotoFilterCriteria criteria,
-        IReadOnlyDictionary<string, HashSet<long>>? photoPersonIds = null)
+        IReadOnlyDictionary<string, HashSet<long>>? photoPersonIds = null,
+        IReadOnlyDictionary<string, ExpressionSummary>? photoExpressions = null)
     {
         var filtered = source.Where(photo =>
-            Matches(photo, criteria, photoPersonIds));
+            Matches(photo, criteria, photoPersonIds, photoExpressions));
 
         IOrderedEnumerable<PhotoItemViewModel> ordered = sortField switch
         {
@@ -1465,7 +1483,8 @@ public sealed class MainViewModel : ObservableObject
     internal static bool Matches(
         PhotoItemViewModel photo,
         PhotoFilterCriteria criteria,
-        IReadOnlyDictionary<string, HashSet<long>>? photoPersonIds = null)
+        IReadOnlyDictionary<string, HashSet<long>>? photoPersonIds = null,
+        IReadOnlyDictionary<string, ExpressionSummary>? photoExpressions = null)
     {
         var record = photo.Record;
         if (photo.Rating < criteria.MinimumRating)
@@ -1480,6 +1499,29 @@ public sealed class MainViewModel : ObservableObject
             if (photoPersonIds is null
                 || !photoPersonIds.TryGetValue(record.Path, out var people)
                 || !criteria.PersonIds.All(people.Contains))
+            {
+                return false;
+            }
+        }
+
+        // The expression facets only ever speak about photos with scored
+        // faces: a landscape has nobody to smile, so it matches neither
+        // side of the filter.
+        if (criteria.Smiling is { } smiling)
+        {
+            if (photoExpressions is null
+                || !photoExpressions.TryGetValue(record.Path, out var moods)
+                || (smiling ? !moods.AllSmiling : !moods.AnyNotSmiling))
+            {
+                return false;
+            }
+        }
+
+        if (criteria.EyesOpen is { } eyesOpen)
+        {
+            if (photoExpressions is null
+                || !photoExpressions.TryGetValue(record.Path, out var moods)
+                || (eyesOpen ? !moods.AllEyesOpen : !moods.AnyEyesClosed))
             {
                 return false;
             }

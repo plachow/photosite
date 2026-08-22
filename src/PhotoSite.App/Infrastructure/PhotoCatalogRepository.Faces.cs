@@ -40,9 +40,7 @@ public sealed partial class PhotoCatalogRepository
     public async Task ReplaceFacesAsync(
         string path,
         long modifiedUtcTicks,
-        IReadOnlyList<(double X, double Y, double Width, double Height,
-            double Confidence, float[] Embedding, long? PersonId,
-            long? SuggestedPersonId)> faces,
+        IReadOnlyList<FaceObservation> faces,
         CancellationToken cancellationToken = default)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
@@ -65,10 +63,10 @@ public sealed partial class PhotoCatalogRepository
                 """
                 INSERT INTO faces (
                     path, x, y, w, h, confidence, embedding, person_id,
-                    suggested_person_id, created_utc)
+                    suggested_person_id, smile, eyes_open, created_utc)
                 VALUES (
                     $path, $x, $y, $w, $h, $confidence, $embedding, $person,
-                    $suggested, $created);
+                    $suggested, $smile, $eyesOpen, $created);
                 """;
             insert.Parameters.AddWithValue("$path", path);
             insert.Parameters.AddWithValue(
@@ -88,6 +86,8 @@ public sealed partial class PhotoCatalogRepository
             var suggested = insert.Parameters.Add(
                 "$suggested",
                 SqliteType.Integer);
+            var smile = insert.Parameters.Add("$smile", SqliteType.Real);
+            var eyesOpen = insert.Parameters.Add("$eyesOpen", SqliteType.Real);
 
             foreach (var face in faces)
             {
@@ -103,6 +103,12 @@ public sealed partial class PhotoCatalogRepository
                     : DBNull.Value;
                 suggested.Value = face.SuggestedPersonId is { } suggestedId
                     ? suggestedId
+                    : DBNull.Value;
+                smile.Value = face.Smile is { } smileValue
+                    ? smileValue
+                    : DBNull.Value;
+                eyesOpen.Value = face.EyesOpen is { } eyesOpenValue
+                    ? eyesOpenValue
                     : DBNull.Value;
                 await insert.ExecuteNonQueryAsync(cancellationToken);
             }
@@ -217,6 +223,112 @@ public sealed partial class PhotoCatalogRepository
         return map;
     }
 
+    /// <summary>
+    /// Every photograph's expression tally in one query - the source for the
+    /// gallery's smile/eyes badges and filter. The thresholds live in
+    /// <see cref="FaceExpression"/> so a stored probability is judged the
+    /// same way everywhere.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<string, ExpressionSummary>>
+        GetExpressionsByPhotoAsync(CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT path,
+                   COUNT(*),
+                   SUM(CASE WHEN smile IS NOT NULL AND eyes_open IS NOT NULL
+                       THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN smile >= $smile THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN eyes_open >= $eyesOpen THEN 1 ELSE 0 END)
+            FROM faces
+            GROUP BY path;
+            """;
+        command.Parameters.AddWithValue("$smile", FaceExpression.SmileThreshold);
+        command.Parameters.AddWithValue(
+            "$eyesOpen",
+            FaceExpression.EyesOpenThreshold);
+        var map = new Dictionary<string, ExpressionSummary>(
+            StringComparer.OrdinalIgnoreCase);
+        await using var reader = await command.ExecuteReaderAsync(
+            cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            map[reader.GetString(0)] = new ExpressionSummary(
+                reader.GetInt32(1),
+                reader.GetInt32(2),
+                reader.GetInt32(3),
+                reader.GetInt32(4));
+        }
+
+        return map;
+    }
+
+    /// <summary>
+    /// The photos whose faces predate the expression models - the work list
+    /// of the backfill pass that scores them without touching who they are.
+    /// </summary>
+    public async Task<IReadOnlyList<string>> GetPathsMissingExpressionsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT DISTINCT path FROM faces
+            WHERE smile IS NULL OR eyes_open IS NULL;
+            """;
+        var paths = new List<string>();
+        await using var reader = await command.ExecuteReaderAsync(
+            cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            paths.Add(reader.GetString(0));
+        }
+
+        return paths;
+    }
+
+    /// <summary>
+    /// Writes expression scores onto existing faces, keeping their ids and
+    /// person assignments - the backfill counterpart of a fresh scan.
+    /// </summary>
+    public async Task UpdateFaceExpressionsAsync(
+        IReadOnlyCollection<(long FaceId, double? Smile, double? EyesOpen)> scores,
+        CancellationToken cancellationToken = default)
+    {
+        if (scores.Count == 0)
+        {
+            return;
+        }
+
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(
+            cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)transaction;
+        command.CommandText =
+            "UPDATE faces SET smile = $smile, eyes_open = $eyesOpen WHERE id = $id;";
+        var smile = command.Parameters.Add("$smile", SqliteType.Real);
+        var eyesOpen = command.Parameters.Add("$eyesOpen", SqliteType.Real);
+        var id = command.Parameters.Add("$id", SqliteType.Integer);
+        foreach (var (faceId, smileValue, eyesOpenValue) in scores)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            smile.Value = smileValue is { } smileScore
+                ? smileScore
+                : DBNull.Value;
+            eyesOpen.Value = eyesOpenValue is { } eyesOpenScore
+                ? eyesOpenScore
+                : DBNull.Value;
+            id.Value = faceId;
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+    }
+
     /// <summary>The photos a person appears in, for the gallery filter.</summary>
     public async Task<IReadOnlyList<string>> GetPersonPhotoPathsAsync(
         long personId,
@@ -249,7 +361,7 @@ public sealed partial class PhotoCatalogRepository
         command.CommandText =
             $"""
             SELECT id, path, x, y, w, h, confidence, embedding, person_id,
-                   suggested_person_id
+                   suggested_person_id, smile, eyes_open
             FROM faces
             {whereClause}
             ORDER BY confidence DESC;
@@ -279,7 +391,9 @@ public sealed partial class PhotoCatalogRepository
                 reader.GetDouble(6),
                 BlobToEmbedding((byte[])reader.GetValue(7)),
                 reader.IsDBNull(8) ? null : reader.GetInt64(8),
-                reader.IsDBNull(9) ? null : reader.GetInt64(9)));
+                reader.IsDBNull(9) ? null : reader.GetInt64(9),
+                reader.IsDBNull(10) ? null : reader.GetDouble(10),
+                reader.IsDBNull(11) ? null : reader.GetDouble(11)));
         }
 
         return faces;

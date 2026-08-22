@@ -272,6 +272,16 @@ public partial class MainWindow
                 : PortraitOrientationBox.IsChecked == true
                     ? PhotoOrientation.Portrait
                     : PhotoOrientation.Unknown,
+            Smiling = SmilingBox.IsChecked == true
+                ? true
+                : NotSmilingBox.IsChecked == true
+                    ? false
+                    : null,
+            EyesOpen = EyesOpenBox.IsChecked == true
+                ? true
+                : EyesClosedBox.IsChecked == true
+                    ? false
+                    : null,
             TakenFrom = ParseFilterDate(DateFromBox.Text, endOfPeriod: false),
             TakenTo = ParseFilterDate(DateToBox.Text, endOfPeriod: true),
             HideRejected = HideRejectedBox.IsChecked == true
@@ -349,6 +359,8 @@ public partial class MainWindow
             RejectedFilterBox.IsChecked = false;
             HideRejectedBox.IsChecked = false;
             AnyOrientationBox.IsChecked = true;
+            AnySmileBox.IsChecked = true;
+            AnyEyesBox.IsChecked = true;
             CameraFilterBox.SelectedItem = null;
             LensFilterBox.SelectedItem = null;
             foreach (var chip in personFilterChips)

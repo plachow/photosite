@@ -182,6 +182,21 @@ public sealed partial class PhotoCatalogRepository
             "suggested_person_id",
             "INTEGER NULL",
             cancellationToken);
+
+        // Expression scores (smiling, eyes open) arrived later still; null
+        // means the face has not met the expression models yet.
+        await EnsureColumnAsync(
+            connection,
+            "faces",
+            "smile",
+            "REAL NULL",
+            cancellationToken);
+        await EnsureColumnAsync(
+            connection,
+            "faces",
+            "eyes_open",
+            "REAL NULL",
+            cancellationToken);
     }
 
     private static readonly (string Column, string Declaration)[] NewerColumns =

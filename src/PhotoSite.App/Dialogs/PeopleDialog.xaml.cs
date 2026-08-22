@@ -282,6 +282,7 @@ public partial class PeopleDialog : Window
         var autoAssigned = 0;
         var suggestionsFound = 0;
         var failures = 0;
+        var expressionsScored = 0;
 
         try
         {
@@ -320,8 +321,7 @@ public partial class PeopleDialog : Window
                         () => engine.Detect(preview),
                         token);
 
-                    var rows = new List<(double, double, double, double,
-                        double, float[], long?, long?)>(detected.Count);
+                    var rows = new List<FaceObservation>(detected.Count);
                     var namesForPhoto = new List<string>();
                     foreach (var face in detected)
                     {
@@ -347,7 +347,7 @@ public partial class PeopleDialog : Window
                             }
                         }
 
-                        rows.Add((
+                        rows.Add(new FaceObservation(
                             face.X,
                             face.Y,
                             face.Width,
@@ -355,7 +355,9 @@ public partial class PeopleDialog : Window
                             face.Confidence,
                             face.Embedding,
                             assignedId,
-                            suggestedId));
+                            suggestedId,
+                            face.Smile,
+                            face.EyesOpen));
                     }
 
                     await catalog.ReplaceFacesAsync(
@@ -388,6 +390,8 @@ public partial class PeopleDialog : Window
                     failures++;
                 }
             }
+
+            expressionsScored = await BackfillExpressionsAsync(token);
         }
         catch (OperationCanceledException)
         {
@@ -419,6 +423,12 @@ public partial class PeopleDialog : Window
             summary.Add($"{suggestionsFound:N0} to confirm below");
         }
 
+        if (expressionsScored > 0)
+        {
+            summary.Add(
+                $"{expressionsScored:N0} older face(s) scored for expression");
+        }
+
         if (skipped > 0)
         {
             summary.Add($"{skipped:N0} already scanned");
@@ -431,6 +441,95 @@ public partial class PeopleDialog : Window
 
         SummaryText.Text = string.Join(" · ", summary);
         await RefreshAsync();
+    }
+
+    /// <summary>
+    /// Faces scanned before the expression models existed carry no smile or
+    /// eyes score. This pass re-detects those photographs and copies the
+    /// scores onto the stored faces by rectangle overlap, leaving their ids,
+    /// names and suggestions untouched.
+    /// </summary>
+    private async Task<int> BackfillExpressionsAsync(CancellationToken token)
+    {
+        if (!FaceEngine.ExpressionModelsAvailable)
+        {
+            return 0;
+        }
+
+        var folderPaths = photos
+            .Select(photo => photo.Path)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var pending = (await catalog.GetPathsMissingExpressionsAsync(token))
+            .Where(folderPaths.Contains)
+            .Where(File.Exists)
+            .ToArray();
+        var scored = 0;
+        for (var index = 0; index < pending.Length; index++)
+        {
+            token.ThrowIfCancellationRequested();
+            var path = pending[index];
+            ScanProgress.Value = 100d * index / pending.Length;
+            SummaryText.Text =
+                $"Expressions · {index + 1:N0} / {pending.Length:N0}"
+                + $" · {Path.GetFileName(path)}";
+            try
+            {
+                var preview = await previews.LoadAsync(
+                    path,
+                    DetectPixelWidth,
+                    token);
+                var detected = await Task.Run(() => engine.Detect(preview), token);
+                var stored = await catalog.GetFacesForPathAsync(path);
+                var updates = new List<(long, double?, double?)>();
+                foreach (var face in stored.Where(face =>
+                             face.Smile is null || face.EyesOpen is null))
+                {
+                    var match = detected
+                        .Where(candidate => Overlap(face, candidate) >= 0.5)
+                        .OrderByDescending(candidate => Overlap(face, candidate))
+                        .FirstOrDefault();
+                    if (match is { Smile: not null } or { EyesOpen: not null })
+                    {
+                        updates.Add((face.Id, match!.Smile, match.EyesOpen));
+                    }
+                }
+
+                await catalog.UpdateFaceExpressionsAsync(updates, token);
+                scored += updates.Count;
+            }
+            catch (OperationCanceledException)
+                when (token.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception)
+            {
+                // The photo keeps its unscored faces; the next scan retries.
+            }
+        }
+
+        return scored;
+    }
+
+    /// <summary>Intersection over union of two normalized face rectangles.</summary>
+    private static double Overlap(FaceRecord stored, DetectedFace detected)
+    {
+        var left = Math.Max(stored.X, detected.X);
+        var top = Math.Max(stored.Y, detected.Y);
+        var right = Math.Min(stored.X + stored.Width, detected.X + detected.Width);
+        var bottom = Math.Min(
+            stored.Y + stored.Height,
+            detected.Y + detected.Height);
+        if (right <= left || bottom <= top)
+        {
+            return 0;
+        }
+
+        var intersection = (right - left) * (bottom - top);
+        var union = stored.Width * stored.Height
+                    + detected.Width * detected.Height
+                    - intersection;
+        return union <= 0 ? 0 : intersection / union;
     }
 
     private sealed record PersonCentroid(long Id, string Name, float[] Centroid);

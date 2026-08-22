@@ -93,6 +93,18 @@ person in the People window shows their faces so a wrong match can be
 removed - which also takes the keyword back out of that photo and rebuilds
 its face regions.
 
+The same scan also scores every face for **expression** with two more small
+local models - FER+ from the ONNX Model Zoo for smiling and
+open-closed-eye-0001 from the OpenVINO Open Model Zoo for open eyes, both
+expected in `tools/models`. A thumbnail whose faces all pass shows nothing;
+someone blinking or not smiling earns the photo a quiet 😴 / 🙁 badge, the
+info panel counts it ("1/2 smiling · 2/2 eyes open"), and the filter's
+**Expression** rows cut a portrait series both ways: *Smiling* / *Open* keep
+the photos where everyone passes, *Not smiling* / *Blinked* collect the
+rejects. Faces scanned before the expression models arrived are scored in
+place on the next **Scan folder for faces** - names, suggestions and regions
+untouched.
+
 ### AI description
 
 **Describe with AI…** in the gallery context menu sends each selected

@@ -269,6 +269,48 @@ public sealed class PhotoItemViewModel : ObservableObject
             ? null
             : string.Join(", ", people.Select(person => person.Name));
 
+    private ExpressionSummary? expressions;
+
+    /// <summary>
+    /// How this photograph's faces scored on expression, fed by the
+    /// catalogue alongside <see cref="People"/>; drives the blink/no-smile
+    /// tile badge and the info panel's Expression row.
+    /// </summary>
+    public ExpressionSummary? Expressions
+    {
+        get => expressions;
+        internal set
+        {
+            if (SetProperty(ref expressions, value))
+            {
+                OnPropertyChanged(nameof(ExpressionGlyph));
+                OnPropertyChanged(nameof(ExpressionText));
+            }
+        }
+    }
+
+    /// <summary>
+    /// The tile's quiet warning: someone blinked, someone is not smiling.
+    /// Nothing is shown when every scored face passes - a good photo needs
+    /// no badge.
+    /// </summary>
+    public string? ExpressionGlyph =>
+        expressions is not { ScoredCount: > 0 } summary
+            ? null
+            : (summary.AnyEyesClosed, summary.AnyNotSmiling) switch
+            {
+                (true, true) => "😴🙁",
+                (true, false) => "😴",
+                (false, true) => "🙁",
+                _ => null
+            };
+
+    public string? ExpressionText =>
+        expressions is not { ScoredCount: > 0 } summary
+            ? null
+            : $"{summary.SmilingCount}/{summary.FaceCount} smiling · "
+              + $"{summary.EyesOpenCount}/{summary.FaceCount} eyes open";
+
     public string? CameraText => Record.Camera;
 
     public string? LensText => Record.Lens;

@@ -5,14 +5,20 @@ using OpenCvSharp.WpfExtensions;
 
 namespace PhotoSite.Services.Faces;
 
-/// <summary>One face found in an image, in normalized 0..1 coordinates.</summary>
+/// <summary>
+/// One face found in an image, in normalized 0..1 coordinates. Smile and
+/// EyesOpen are 0..1 probabilities, or null when the expression models are
+/// not on disk.
+/// </summary>
 public sealed record DetectedFace(
     double X,
     double Y,
     double Width,
     double Height,
     double Confidence,
-    float[] Embedding);
+    float[] Embedding,
+    double? Smile = null,
+    double? EyesOpen = null);
 
 /// <summary>
 /// Local face detection and recognition: YuNet finds the faces and their
@@ -20,6 +26,10 @@ public sealed record DetectedFace(
 /// embedding whose cosine similarity says whether two faces belong to the
 /// same person. Both models come from the OpenCV Zoo (Apache-2.0) and
 /// everything runs on this machine.
+/// Two optional expression models score the same aligned crop: FER+ (ONNX
+/// Model Zoo, MIT) for "smiling" via its happiness class, and
+/// open-closed-eye-0001 (OpenVINO Open Model Zoo, Apache-2.0) for
+/// "eyes open" on a patch around each eye.
 /// </summary>
 public sealed class FaceEngine : IDisposable
 {
@@ -66,12 +76,41 @@ public sealed class FaceEngine : IDisposable
         ModelDirectory,
         "face_recognition_sface_2021dec.onnx");
 
+    private static readonly string EmotionModelPath = Path.Combine(
+        ModelDirectory,
+        "emotion-ferplus-8.onnx");
+
+    private static readonly string EyeStateModelPath = Path.Combine(
+        ModelDirectory,
+        "open_closed_eye.onnx");
+
+    /// <summary>FER+ consumes a 64×64 grayscale face.</summary>
+    private const int EmotionInputSize = 64;
+
+    /// <summary>Happiness is class 1 of FER+'s eight emotions.</summary>
+    private const int HappinessClassIndex = 1;
+
+    /// <summary>
+    /// open-closed-eye-0001 consumes a 32×32 BGR patch; on the 112×112
+    /// aligned face that side length wraps the eye with a healthy margin.
+    /// </summary>
+    private const int EyePatchSize = 32;
+
     private readonly object gate = new();
     private FaceDetectorYN? detector;
     private Net? recognizer;
+    private Net? emotionNet;
+    private Net? eyeStateNet;
 
     public static bool ModelsAvailable =>
         File.Exists(DetectorModelPath) && File.Exists(RecognizerModelPath);
+
+    /// <summary>
+    /// The smile and eyes-open scoring is optional: without these two files
+    /// a scan still finds and recognizes faces, just without expressions.
+    /// </summary>
+    public static bool ExpressionModelsAvailable =>
+        File.Exists(EmotionModelPath) && File.Exists(EyeStateModelPath);
 
     public static string ModelDirectoryPath => ModelDirectory;
 
@@ -137,18 +176,23 @@ public sealed class FaceEngine : IDisposable
                         (float)(faces.At<float>(index, 5 + point * 2) / scale));
                 }
 
-                if (ComputeEmbedding(frame, landmarks) is not { } embedding)
+                using var aligned = Align(frame, landmarks);
+                if (aligned is null)
                 {
                     continue;
                 }
 
+                var embedding = ComputeEmbedding(aligned);
+                var (smile, eyesOpen) = ComputeExpressions(aligned);
                 results.Add(new DetectedFace(
                     Math.Clamp(x / scale / frameWidth, 0, 1),
                     Math.Clamp(y / scale / frameHeight, 0, 1),
                     Math.Clamp(width / scale / frameWidth, 0, 1),
                     Math.Clamp(height / scale / frameHeight, 0, 1),
                     score,
-                    FaceMath.Normalize(embedding)));
+                    FaceMath.Normalize(embedding),
+                    smile,
+                    eyesOpen));
             }
 
             return results;
@@ -156,11 +200,12 @@ public sealed class FaceEngine : IDisposable
     }
 
     /// <summary>
-    /// Warps the face so its landmarks land on the reference positions -
-    /// the same alignment OpenCV's FaceRecognizerSF performs - and runs the
-    /// SFace network on the 112×112 crop.
+    /// Warps the face so its landmarks land on the reference positions - the
+    /// same alignment OpenCV's FaceRecognizerSF performs. Every downstream
+    /// network reads this one 112×112 crop, where the eyes and mouth sit at
+    /// known coordinates.
     /// </summary>
-    private float[]? ComputeEmbedding(Mat frame, Point2f[] landmarks)
+    private static Mat? Align(Mat frame, Point2f[] landmarks)
     {
         using var transform = Cv2.EstimateAffinePartial2D(
             InputArray.Create(landmarks),
@@ -170,13 +215,17 @@ public sealed class FaceEngine : IDisposable
             return null;
         }
 
-        using var aligned = new Mat();
+        var aligned = new Mat();
         Cv2.WarpAffine(
             frame,
             aligned,
             transform,
             new Size(AlignedSize, AlignedSize));
+        return aligned;
+    }
 
+    private float[] ComputeEmbedding(Mat aligned)
+    {
         // SFace consumes the raw BGR crop; no scaling or mean subtraction,
         // matching cv::FaceRecognizerSF::feature.
         using var blob = CvDnn.BlobFromImage(aligned);
@@ -189,6 +238,107 @@ public sealed class FaceEngine : IDisposable
         }
 
         return embedding;
+    }
+
+    /// <summary>
+    /// Scores the aligned face for "smiling" and "eyes open". Nulls when the
+    /// optional models are absent; a failure in either network only costs
+    /// that one score, never the face.
+    /// </summary>
+    private (double? Smile, double? EyesOpen) ComputeExpressions(Mat aligned)
+    {
+        if (emotionNet is null || eyeStateNet is null)
+        {
+            return (null, null);
+        }
+
+        double? smile = null;
+        double? eyesOpen = null;
+        try
+        {
+            smile = ComputeSmile(aligned);
+        }
+        catch (Exception)
+        {
+        }
+
+        try
+        {
+            eyesOpen = ComputeEyesOpen(aligned);
+        }
+        catch (Exception)
+        {
+        }
+
+        return (smile, eyesOpen);
+    }
+
+    /// <summary>
+    /// FER+ over the grayscale face; "smiling" is the softmax probability of
+    /// its happiness class. The network expects raw 0..255 values.
+    /// </summary>
+    private double ComputeSmile(Mat aligned)
+    {
+        using var gray = new Mat();
+        Cv2.CvtColor(aligned, gray, ColorConversionCodes.BGR2GRAY);
+        using var blob = CvDnn.BlobFromImage(
+            gray,
+            1.0,
+            new Size(EmotionInputSize, EmotionInputSize));
+        emotionNet!.SetInput(blob);
+        using var output = emotionNet.Forward();
+        var logits = new float[output.Total()];
+        for (var index = 0; index < logits.Length; index++)
+        {
+            logits[index] = output.At<float>(0, index);
+        }
+
+        return Softmax(logits)[HappinessClassIndex];
+    }
+
+    /// <summary>
+    /// open-closed-eye-0001 on a patch around each aligned eye position;
+    /// class 1 is "open". "Eyes open" means both are, so the face gets the
+    /// weaker eye's probability.
+    /// </summary>
+    private double ComputeEyesOpen(Mat aligned)
+    {
+        var eyesOpen = 1.0;
+        foreach (var eye in new[] { ReferenceLandmarks[0], ReferenceLandmarks[1] })
+        {
+            var left = Math.Clamp(
+                (int)Math.Round(eye.X) - EyePatchSize / 2,
+                0,
+                AlignedSize - EyePatchSize);
+            var top = Math.Clamp(
+                (int)Math.Round(eye.Y) - EyePatchSize / 2,
+                0,
+                AlignedSize - EyePatchSize);
+            using var patch = new Mat(
+                aligned,
+                new Rect(left, top, EyePatchSize, EyePatchSize));
+            // The model's documented preprocessing: (BGR pixel - 127) / 255.
+            using var blob = CvDnn.BlobFromImage(
+                patch,
+                1.0 / 255.0,
+                new Size(EyePatchSize, EyePatchSize),
+                new Scalar(127, 127, 127));
+            eyeStateNet!.SetInput(blob);
+            using var output = eyeStateNet.Forward();
+            // The network normalizes internally: [closed, open] sum to one.
+            var open = (double)output.At<float>(0, 1);
+            eyesOpen = Math.Min(eyesOpen, open);
+        }
+
+        return eyesOpen;
+    }
+
+    private static double[] Softmax(IReadOnlyList<float> logits)
+    {
+        var max = logits.Max();
+        var exponentials = logits.Select(value => Math.Exp(value - max)).ToArray();
+        var sum = exponentials.Sum();
+        return exponentials.Select(value => value / sum).ToArray();
     }
 
     private void EnsureLoaded()
@@ -212,6 +362,23 @@ public sealed class FaceEngine : IDisposable
             ScoreThreshold,
             NmsThreshold);
         recognizer = CvDnn.ReadNetFromOnnx(RecognizerModelPath);
+
+        if (ExpressionModelsAvailable)
+        {
+            try
+            {
+                emotionNet = CvDnn.ReadNetFromOnnx(EmotionModelPath);
+                eyeStateNet = CvDnn.ReadNetFromOnnx(EyeStateModelPath);
+            }
+            catch (Exception)
+            {
+                // A corrupt expression model must not take face detection
+                // down with it; the scan simply runs without expressions.
+                emotionNet?.Dispose();
+                emotionNet = null;
+                eyeStateNet = null;
+            }
+        }
     }
 
     /// <summary>
@@ -247,8 +414,12 @@ public sealed class FaceEngine : IDisposable
         {
             detector?.Dispose();
             recognizer?.Dispose();
+            emotionNet?.Dispose();
+            eyeStateNet?.Dispose();
             detector = null;
             recognizer = null;
+            emotionNet = null;
+            eyeStateNet = null;
         }
     }
 }
