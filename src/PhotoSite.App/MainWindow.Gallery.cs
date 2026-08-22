@@ -707,6 +707,31 @@ public partial class MainWindow
         }
     }
 
+    private static IEnumerable<T> FindChildren<T>(DependencyObject? root)
+        where T : DependencyObject
+    {
+        if (root is null)
+        {
+            yield break;
+        }
+
+        for (var index = 0;
+             index < VisualTreeHelper.GetChildrenCount(root);
+             index++)
+        {
+            var child = VisualTreeHelper.GetChild(root, index);
+            if (child is T match)
+            {
+                yield return match;
+            }
+
+            foreach (var nested in FindChildren<T>(child))
+            {
+                yield return nested;
+            }
+        }
+    }
+
     private static T? FindChild<T>(DependencyObject? root)
         where T : DependencyObject
     {

@@ -160,8 +160,11 @@ public partial class MainWindow : Window
                     out var showFaces)
                 && showFaces)
             {
-                FacesOverlayButton.IsChecked = true;
-                PreviewViewer.ShowFaceOverlays = true;
+                _ = Dispatcher.BeginInvoke(() =>
+                {
+                    FacesOverlayButton.IsChecked = true;
+                    PreviewViewer.ShowFaceOverlays = true;
+                });
             }
 
             await LoadPersonFilterChoicesAsync();
@@ -2179,16 +2182,7 @@ public partial class MainWindow : Window
                 }
             }
 
-            if (!string.Equals(
-                    viewModel.SelectedPhoto?.Path,
-                    path,
-                    StringComparison.OrdinalIgnoreCase))
-            {
-                // The selection moved on while the query ran.
-                return;
-            }
-
-            PreviewViewer.FaceOverlays = faces
+            var overlays = faces
                 .Select(face => new Controls.FaceOverlay(
                     face.X,
                     face.Y,
@@ -2198,10 +2192,22 @@ public partial class MainWindow : Window
                     IsSuggestion: face.PersonId is null
                                   && face.SuggestedPersonId is not null))
                 .ToArray();
+            // The awaits above may have resumed off the dispatcher; the
+            // viewer is only ever touched from it.
+            _ = Dispatcher.BeginInvoke(() =>
+            {
+                if (string.Equals(
+                        viewModel.SelectedPhoto?.Path,
+                        path,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    PreviewViewer.FaceOverlays = overlays;
+                }
+            });
         }
         catch (Exception)
         {
-            PreviewViewer.FaceOverlays = null;
+            _ = Dispatcher.BeginInvoke(() => PreviewViewer.FaceOverlays = null);
         }
     }
 
@@ -2216,25 +2222,39 @@ public partial class MainWindow : Window
 
     private async Task LoadPersonFilterChoicesAsync()
     {
+        IReadOnlyList<PersonRecord> people;
         try
         {
-            var people = await catalog.GetPeopleAsync();
+            people = await catalog.GetPeopleAsync();
+        }
+        catch (Exception)
+        {
+            // The filter facet simply stays empty when the catalogue balks.
+            return;
+        }
+
+        // The await resumed off the dispatcher; the combo box has not.
+        _ = Dispatcher.BeginInvoke(() =>
+        {
             var selectedId = (PersonFilterBox.SelectedItem as PersonRecord)?.Id;
             isFilterUiUpdating = true;
-            PersonFilterBox.ItemsSource = people;
-            PersonFilterBox.SelectedItem = people.FirstOrDefault(
-                person => person.Id == selectedId);
-            isFilterUiUpdating = false;
+            try
+            {
+                PersonFilterBox.ItemsSource = people;
+                PersonFilterBox.SelectedItem = people.FirstOrDefault(
+                    person => person.Id == selectedId);
+            }
+            finally
+            {
+                isFilterUiUpdating = false;
+            }
+
             if (selectedId is not null && PersonFilterBox.SelectedItem is null)
             {
                 // The filtered person no longer exists.
                 ApplyFilterFromUi();
             }
-        }
-        catch (Exception)
-        {
-            // The filter facet simply stays empty when the catalogue balks.
-        }
+        });
     }
 
     private void OnManagerTabClick(object sender, RoutedEventArgs eventArgs) =>

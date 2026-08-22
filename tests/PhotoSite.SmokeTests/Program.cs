@@ -2502,6 +2502,29 @@ static async Task AssertWindowClosesCleanlyAsync(
                 };
                 application.InitializeComponent();
                 App.ValidateScrollBarDirections();
+
+                // An editable combo is how people get named and models get
+                // typed; the dark template must carry the text-entry part.
+                var editableCombo = new System.Windows.Controls.ComboBox
+                {
+                    IsEditable = true,
+                    Style = (Style)application.FindResource(
+                        typeof(System.Windows.Controls.ComboBox))
+                };
+                editableCombo.ApplyTemplate();
+                if (editableCombo.Template.FindName(
+                        "PART_EditableTextBox",
+                        editableCombo)
+                    is not System.Windows.Controls.TextBox
+                    {
+                        Visibility: Visibility.Visible
+                    })
+                {
+                    throw new InvalidOperationException(
+                        "The ComboBox template must expose a visible "
+                        + "PART_EditableTextBox when IsEditable is set; "
+                        + "without it typed text goes nowhere.");
+                }
                 application.DispatcherUnhandledException += (_, eventArgs) =>
                 {
                     dispatcherException = eventArgs.Exception;

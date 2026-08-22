@@ -369,12 +369,48 @@
                   </ControlTemplate>
                 </ToggleButton.Template>
               </ToggleButton>
-              <ContentPresenter Margin="9,2,25,2"
+              <ContentPresenter x:Name="ContentSite"
+                                Margin="9,2,25,2"
                                 HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
                                 VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
                                 Content="{TemplateBinding SelectionBoxItem}"
                                 ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
                                 IsHitTestVisible="False" />
+              <!-- The text entry of an editable combo. WPF wires the part up
+                   by this exact name; without it, IsEditable is a no-op and
+                   typed names silently go nowhere. -->
+              <TextBox x:Name="PART_EditableTextBox"
+                       Margin="6,1,22,1"
+                       VerticalAlignment="Center"
+                       Focusable="True"
+                       Visibility="Collapsed">
+                <TextBox.Style>
+                  <Style TargetType="TextBox">
+                    <Setter Property="Foreground" Value="#F2F4F8" />
+                    <Setter Property="CaretBrush" Value="#F2F4F8" />
+                    <Setter Property="SelectionBrush"
+                            Value="{StaticResource AccentBrush}" />
+                    <Setter Property="Background" Value="Transparent" />
+                    <Setter Property="BorderThickness" Value="0" />
+                    <!-- A minimal template of its own, so the app-wide dark
+                         TextBox chrome cannot draw a second border inside
+                         the combo. -->
+                    <Setter Property="Template">
+                      <Setter.Value>
+                        <ControlTemplate TargetType="TextBox">
+                          <ScrollViewer x:Name="PART_ContentHost"
+                                        Padding="3,2"
+                                        VerticalAlignment="Center"
+                                        Background="Transparent"
+                                        Focusable="False"
+                                        HorizontalScrollBarVisibility="Hidden"
+                                        VerticalScrollBarVisibility="Hidden" />
+                        </ControlTemplate>
+                      </Setter.Value>
+                    </Setter>
+                  </Style>
+                </TextBox.Style>
+              </TextBox>
               <Path Width="8"
                     Height="5"
                     Margin="0,0,9,0"
@@ -410,6 +446,14 @@
               </Popup>
             </Grid>
             <ControlTemplate.Triggers>
+              <Trigger Property="IsEditable" Value="True">
+                <Setter TargetName="PART_EditableTextBox"
+                        Property="Visibility"
+                        Value="Visible" />
+                <Setter TargetName="ContentSite"
+                        Property="Visibility"
+                        Value="Hidden" />
+              </Trigger>
               <Trigger Property="IsKeyboardFocusWithin" Value="True">
                 <Setter TargetName="ControlBorder"
                         Property="BorderBrush"

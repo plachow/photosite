@@ -398,7 +398,11 @@ public partial class MainWindow
                 + "Generic.xaml.");
         }
 
-        var textBox = FindChild<TextBox>(EditorPanel);
+        // A combo's editable text entry deliberately stays transparent so the
+        // combo chrome shows through; the themed field check wants a plain
+        // standalone text box.
+        var textBox = FindChildren<TextBox>(EditorPanel)
+            .FirstOrDefault(box => box.TemplatedParent is not ComboBox);
         if (textBox is not null
             && (textBox.Background is not System.Windows.Media.SolidColorBrush
                 {
