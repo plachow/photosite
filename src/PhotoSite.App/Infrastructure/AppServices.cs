@@ -26,6 +26,9 @@ public sealed class AppServices
             {
                 Timeout = TimeSpan.FromMinutes(10)
             });
+        // The ONNX sessions load lazily on the first detection, so carrying
+        // the engine costs nothing until the People window is used.
+        Faces = new Services.Faces.FaceEngine();
         Updates = new AppUpdateService();
         MetadataWriter = new ExifToolMetadataWriter();
         MetadataOutbox = new MetadataOutboxProcessor(Catalog, MetadataWriter);
@@ -49,6 +52,8 @@ public sealed class AppServices
     public ImgurUploadService ImgurUploader { get; }
 
     public OllamaVisionService OllamaVision { get; }
+
+    public Services.Faces.FaceEngine Faces { get; }
 
     public AppUpdateService Updates { get; }
 

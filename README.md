@@ -69,6 +69,17 @@ Settings are saved as named presets. **Facebook export**, **Web gallery**,
 **Original quality JPEG** and **Small email photos** are provided once on first
 use; delete one and it stays deleted.
 
+### People
+
+The **People** button scans the folder's photos with two small local models -
+YuNet face detection and SFace embeddings from the OpenCV Zoo, expected in
+`tools/models` next to the bundled exiftool - and groups similar unnamed
+faces. A whole group is named at once; the name becomes a person in the
+catalogue and a keyword on every photo they appear in, written into the files
+like any other keyword. Faces scanned later that clearly match an
+already-named person are assigned automatically, re-scans skip unchanged
+files, and nothing ever leaves the machine.
+
 ### AI description
 
 **Describe with AI…** in the gallery context menu sends each selected

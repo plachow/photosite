@@ -2107,6 +2107,25 @@ public partial class MainWindow : Window
         }
     }
 
+    private void OnPeopleClick(object sender, RoutedEventArgs eventArgs)
+    {
+        var records = viewModel.AllPhotos
+            .Where(photo => !photo.IsTransient)
+            .Select(photo => photo.Record)
+            .ToArray();
+        var dialog = new PeopleDialog(
+            records,
+            App.Services.Faces,
+            catalog,
+            App.Services.Previews)
+        {
+            Owner = this
+        };
+        dialog.ShowDialog();
+        // Keyword writes go through the outbox; exiftool's file rewrites come
+        // back in through the folder watcher, so no manual refresh is needed.
+    }
+
     private void OnManagerTabClick(object sender, RoutedEventArgs eventArgs) =>
         viewModel.ShowManagerTab();
 

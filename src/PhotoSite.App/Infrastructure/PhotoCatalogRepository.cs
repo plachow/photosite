@@ -4,7 +4,7 @@ using PhotoSite.Domain;
 
 namespace PhotoSite.Infrastructure;
 
-public sealed class PhotoCatalogRepository
+public sealed partial class PhotoCatalogRepository
 {
     private const string PhotoColumns =
         """
@@ -140,6 +140,35 @@ public sealed class PhotoCatalogRepository
                 payload_json TEXT NOT NULL,
                 updated_utc  TEXT NOT NULL,
                 PRIMARY KEY (kind, name)
+            );
+
+            CREATE TABLE IF NOT EXISTS people (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                name         TEXT NOT NULL COLLATE NOCASE,
+                created_utc  TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS faces (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                path         TEXT NOT NULL COLLATE NOCASE,
+                x            REAL NOT NULL,
+                y            REAL NOT NULL,
+                w            REAL NOT NULL,
+                h            REAL NOT NULL,
+                confidence   REAL NOT NULL,
+                embedding    BLOB NOT NULL,
+                person_id    INTEGER NULL,
+                created_utc  TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_faces_path ON faces(path);
+            CREATE INDEX IF NOT EXISTS ix_faces_person ON faces(person_id);
+
+            CREATE TABLE IF NOT EXISTS face_scans (
+                path                TEXT PRIMARY KEY COLLATE NOCASE,
+                modified_utc_ticks  INTEGER NOT NULL,
+                face_count          INTEGER NOT NULL,
+                scanned_utc         TEXT NOT NULL
             );
             """;
         await indexCommand.ExecuteNonQueryAsync(cancellationToken);
@@ -373,7 +402,12 @@ public sealed class PhotoCatalogRepository
             cancellationToken);
         await using var command = connection.CreateCommand();
         command.Transaction = (SqliteTransaction)transaction;
-        command.CommandText = "DELETE FROM photos WHERE path = $path;";
+        command.CommandText =
+            """
+            DELETE FROM photos WHERE path = $path;
+            DELETE FROM faces WHERE path = $path;
+            DELETE FROM face_scans WHERE path = $path;
+            """;
         var path = command.Parameters.Add("$path", SqliteType.Text);
 
         foreach (var value in paths)

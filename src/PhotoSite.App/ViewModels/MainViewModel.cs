@@ -134,6 +134,12 @@ public sealed class MainViewModel : ObservableObject
 
     public BulkObservableCollection<PhotoItemViewModel> Photos { get; } = new();
 
+    /// <summary>
+    /// Every indexed photo of the folder, ignoring the gallery filter - the
+    /// population a whole-folder job such as the face scan works on.
+    /// </summary>
+    public IReadOnlyList<PhotoItemViewModel> AllPhotos => allPhotos;
+
     public DirectoryTreeViewModel DirectoryTree { get; }
 
     public IAsyncRelayCommand OpenFolderCommand { get; }

@@ -1,0 +1,164 @@
+<Window x:Class="PhotoSite.Dialogs.PeopleDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="People"
+        Width="980"
+        Height="720"
+        MinWidth="860"
+        MinHeight="560"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False">
+  <Grid Margin="16">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="*" />
+      <RowDefinition Height="Auto" />
+    </Grid.RowDefinitions>
+
+    <Grid>
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="270" />
+        <ColumnDefinition Width="*" />
+      </Grid.ColumnDefinitions>
+
+      <!-- Named people -->
+      <Border Margin="0,0,12,0" Style="{StaticResource DialogPanelStyle}">
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+          </Grid.RowDefinitions>
+          <TextBlock Style="{StaticResource SectionHeaderStyle}" Text="PEOPLE" />
+          <ListBox x:Name="PeopleList"
+                   Grid.Row="1"
+                   ItemContainerStyle="{StaticResource PanelListBoxItemStyle}" />
+          <StackPanel Grid.Row="2" Margin="0,8,0,0">
+            <Button Margin="0,0,0,4"
+                    Content="Rename…"
+                    Click="OnRenamePersonClick" />
+            <Button Content="Remove person"
+                    ToolTip="Faces return to the unnamed groups; keywords already written into files stay."
+                    Click="OnDeletePersonClick" />
+          </StackPanel>
+        </Grid>
+      </Border>
+
+      <!-- Scan + unnamed groups -->
+      <Border Grid.Column="1" Style="{StaticResource DialogPanelStyle}">
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+          </Grid.RowDefinitions>
+
+          <TextBlock Style="{StaticResource SectionHeaderStyle}"
+                     Text="SCAN" />
+          <Grid Grid.Row="1" Margin="0,0,0,8">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="Auto" />
+              <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Button x:Name="ScanButton"
+                    MinWidth="170"
+                    Content="Scan folder for faces"
+                    Click="OnScanClick" />
+            <ProgressBar x:Name="ScanProgress"
+                         Grid.Column="1"
+                         Margin="10,0,0,0"
+                         Visibility="Collapsed" />
+          </Grid>
+          <StackPanel Grid.Row="2" Margin="0,0,0,10">
+            <TextBlock x:Name="SummaryText"
+                       FontSize="13"
+                       Foreground="{StaticResource PrimaryTextBrush}"
+                       TextWrapping="Wrap" />
+            <TextBlock x:Name="DetailText"
+                       Margin="0,4,0,0"
+                       FontSize="11"
+                       Foreground="{StaticResource MutedTextBrush}"
+                       TextWrapping="Wrap" />
+          </StackPanel>
+
+          <TextBlock Grid.Row="3"
+                     Style="{StaticResource SectionHeaderStyle}"
+                     Text="UNNAMED GROUPS" />
+          <ScrollViewer Grid.Row="4" VerticalScrollBarVisibility="Auto">
+            <ItemsControl x:Name="ClusterList">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                  <Border Margin="0,0,6,8"
+                          Padding="10"
+                          Background="#20242B"
+                          BorderBrush="#3A3F4B"
+                          BorderThickness="1"
+                          CornerRadius="5">
+                    <Grid>
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                      </Grid.ColumnDefinitions>
+                      <StackPanel>
+                        <ItemsControl ItemsSource="{Binding Thumbnails}">
+                          <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                              <StackPanel Orientation="Horizontal" />
+                            </ItemsPanelTemplate>
+                          </ItemsControl.ItemsPanel>
+                          <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                              <Border Width="64"
+                                      Height="64"
+                                      Margin="0,0,6,0"
+                                      Background="#111318"
+                                      CornerRadius="4">
+                                <Image Margin="2"
+                                       Source="{Binding}"
+                                       Stretch="UniformToFill" />
+                              </Border>
+                            </DataTemplate>
+                          </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock Margin="0,6,0,0"
+                                   FontSize="11"
+                                   Foreground="{StaticResource MutedTextBrush}"
+                                   Text="{Binding CountText}" />
+                      </StackPanel>
+                      <StackPanel Grid.Column="1"
+                                  Margin="12,0,0,0"
+                                  VerticalAlignment="Center">
+                        <ComboBox Width="190"
+                                  IsEditable="True"
+                                  ItemsSource="{Binding KnownNames}"
+                                  Text="{Binding Name,
+                                                 Mode=TwoWay,
+                                                 UpdateSourceTrigger=PropertyChanged}" />
+                        <Button Margin="0,6,0,0"
+                                Content="Name this person"
+                                Tag="{Binding}"
+                                Click="OnAssignClusterClick" />
+                      </StackPanel>
+                    </Grid>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+        </Grid>
+      </Border>
+    </Grid>
+
+    <StackPanel Grid.Row="1"
+                Margin="0,12,0,0"
+                HorizontalAlignment="Right"
+                Orientation="Horizontal">
+      <Button x:Name="CloseButton"
+              MinWidth="96"
+              Content="Close"
+              IsCancel="True"
+              Click="OnCloseClick" />
+    </StackPanel>
+  </Grid>
+</Window>

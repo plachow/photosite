@@ -17,6 +17,7 @@ using PhotoSite.Domain;
 using PhotoSite.Infrastructure;
 using PhotoSite.Services;
 using PhotoSite.Services.Batch;
+using PhotoSite.Services.Faces;
 using PhotoSite.Services.Imaging;
 using PhotoSite.ViewModels;
 
@@ -913,6 +914,121 @@ try
         && !OllamaVisionService.ShouldSkip(AiApplyMode.Overwrite, "t", "d"),
         "Fill-empty runs should skip only photos that already carry both a "
         + "title and a description.");
+
+    Assert(
+        Math.Abs(FaceMath.Cosine([1f, 0f], [1f, 0f]) - 1) < 1e-9
+        && Math.Abs(FaceMath.Cosine([1f, 0f], [0f, 1f])) < 1e-9
+        && Math.Abs(
+            FaceMath.Normalize([3f, 4f])
+                .Zip([0.6f, 0.8f])
+                .Max(pair => Math.Abs(pair.First - pair.Second))) < 1e-6,
+        "Cosine similarity and normalization must behave like the textbook.");
+
+    var faceClusters = FaceClusterer.Cluster(
+    [
+        new FaceRecord(1, "a.jpg", 0, 0, 0.2, 0.2, 0.9, [1f, 0f, 0f]),
+        new FaceRecord(2, "b.jpg", 0, 0, 0.2, 0.2, 0.8, [0.9f, 0.1f, 0f]),
+        new FaceRecord(3, "c.jpg", 0, 0, 0.2, 0.2, 0.95, [0f, 1f, 0f]),
+        new FaceRecord(4, "a.jpg", 0, 0, 0.2, 0.2, 0.7, [0.1f, 0.95f, 0f]),
+        new FaceRecord(5, "d.jpg", 0, 0, 0.2, 0.2, 0.6, [0f, 0f, 1f])
+    ]);
+    Assert(
+        faceClusters.Count == 3
+        && faceClusters[0].Faces.Count == 2
+        && faceClusters[1].Faces.Count == 2
+        && faceClusters[2].Faces.Count == 1
+        && faceClusters.Single(cluster => cluster.Faces.Count == 1)
+            .Faces[0].Id == 5,
+        "Similar embeddings should group; an unrelated face should stand "
+        + "alone.");
+
+    var centerCrop = FaceCropper.ComputeCropRect(
+        1000,
+        1000,
+        new FaceRecord(0, "x", 0.4, 0.4, 0.2, 0.2, 1, []));
+    var edgeCrop = FaceCropper.ComputeCropRect(
+        1000,
+        800,
+        new FaceRecord(0, "x", 0.9, 0.9, 0.2, 0.2, 1, []));
+    Assert(
+        centerCrop is { X: 330, Y: 330, Width: 340, Height: 340 }
+        && edgeCrop.X + edgeCrop.Width == 1000
+        && edgeCrop.Y + edgeCrop.Height == 800,
+        "Face crops should grow by their margin and clamp to the frame.");
+
+    var faceEmbedding = new float[] { 1f, 0f, 0.25f, -0.5f };
+    Assert(
+        PhotoCatalogRepository.BlobToEmbedding(
+                PhotoCatalogRepository.EmbeddingToBlob(faceEmbedding))
+            .SequenceEqual(faceEmbedding),
+        "Embeddings must survive the BLOB round-trip bit-exactly.");
+
+    await repository.ReplaceFacesAsync(
+        firstPhoto,
+        111,
+        [
+            (0.1, 0.2, 0.3, 0.4, 0.9, faceEmbedding, null),
+            (0.5, 0.5, 0.2, 0.2, 0.8, new float[] { 0f, 1f, 0f, 0f }, null)
+        ]);
+    Assert(
+        (await repository.GetFaceScanStatesAsync())[firstPhoto] == 111,
+        "A face scan should stamp the file it covered.");
+    var unassignedFaces = await repository.GetUnassignedFacesAsync();
+    Assert(
+        unassignedFaces.Count == 2
+        && unassignedFaces[0].Confidence == 0.9
+        && unassignedFaces[0].Embedding.SequenceEqual(faceEmbedding)
+        && unassignedFaces[0] is { X: 0.1, Y: 0.2, Width: 0.3, Height: 0.4 },
+        "Detected faces should round-trip ordered by confidence.");
+
+    var personId = await repository.GetOrCreatePersonAsync("Test Person");
+    Assert(
+        await repository.GetOrCreatePersonAsync("test person") == personId,
+        "Person names must match without regard to case.");
+    await repository.AssignFacesAsync([unassignedFaces[0].Id], personId);
+    var peopleRows = await repository.GetPeopleAsync();
+    Assert(
+        peopleRows.Count == 1
+        && peopleRows[0].Name == "Test Person"
+        && peopleRows[0].FaceCount == 1
+        && (await repository.GetUnassignedFacesAsync()).Count == 1
+        && (await repository.GetFacesForPersonAsync(personId)).Count == 1,
+        "Assigning a face should move it from the unnamed pool to its "
+        + "person.");
+
+    await repository.RenamePersonAsync(personId, "Renamed Person");
+    await repository.ReplaceFacesAsync(
+        firstPhoto,
+        222,
+        [(0.1, 0.1, 0.1, 0.1, 0.5, faceEmbedding, personId)]);
+    Assert(
+        (await repository.GetPeopleAsync())[0].Name == "Renamed Person"
+        && (await repository.GetFaceScanStatesAsync())[firstPhoto] == 222
+        && (await repository.GetAssignedFacesAsync()).Count == 1
+        && (await repository.GetUnassignedFacesAsync()).Count == 0,
+        "A re-scan should replace a file's faces and keep assignments the "
+        + "detector re-established.");
+
+    await repository.DeletePersonAsync(personId);
+    Assert(
+        (await repository.GetPeopleAsync()).Count == 0
+        && (await repository.GetUnassignedFacesAsync()).Count == 1,
+        "Removing a person should return their faces to the unnamed pool.");
+
+    const string vanishedPhoto = @"Z:\nowhere\gone.jpg";
+    await repository.ReplaceFacesAsync(
+        vanishedPhoto,
+        333,
+        [(0.1, 0.1, 0.1, 0.1, 0.9, faceEmbedding, null)]);
+    await repository.DeleteByPathsAsync([vanishedPhoto], CancellationToken.None);
+    Assert(
+        !(await repository.GetFaceScanStatesAsync()).ContainsKey(vanishedPhoto)
+        && (await repository.GetUnassignedFacesAsync())
+            .All(face => face.Path != vanishedPhoto),
+        "Deleting a photo must take its faces and scan stamp with it.");
+
+    // Leave no face rows behind for the scenarios that follow.
+    await repository.ReplaceFacesAsync(firstPhoto, 222, []);
 
     File.Delete(secondPhoto);
     const long secondScan = 200;

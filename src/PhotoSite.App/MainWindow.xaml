@@ -997,6 +997,12 @@
                   ToolTip="Compare 2–4 selected photos side by side (Ctrl+K)" />
           <Button Margin="1,0"
                   Padding="10,4"
+                  AutomationProperties.Name="People"
+                  Content="People"
+                  Click="OnPeopleClick"
+                  ToolTip="Find faces in this folder and name the people on them" />
+          <Button Margin="1,0"
+                  Padding="10,4"
                   AutomationProperties.Name="Create folder"
                   Content="New folder"
                   Click="OnCreateFolderClick"

@@ -69,6 +69,16 @@ keeps whatever destination is already on screen.
 into files by exiftool. The catalogue is updated and the outbox row inserted in
 one transaction, so a crash cannot lose a rating.
 
+**Face scan** (`FaceEngine`, `PeopleDialog`) — finding the faces in a folder
+with the local YuNet detector and describing each with an SFace embedding
+(OpenCV Zoo models under `tools/models`; nothing leaves the machine). Faces
+live only in the catalogue (`faces`, `people`, `face_scans`); unnamed ones are
+grouped by embedding similarity for bulk naming, and naming a group writes the
+person's name into each photograph's keywords through the outbox. During a
+scan, a face that clearly matches an already-named person (cosine ≥ 0.5) is
+assigned automatically; unchanged files are skipped, so the sweep is
+incremental. Rejected synonyms: *face tagging*, *people detection*.
+
 **Describe** (`OllamaVisionService`, `AiTagDialog`) — asking a vision model on
 a local Ollama server to fill a photograph's title, description and keywords.
 The model receives a downscaled preview and must answer a fixed JSON schema.
