@@ -222,6 +222,14 @@ public partial class AiTagDialog : Window
         var mode = GetApplyMode();
         await PersistSettingsAsync(endpoint, model, language, mode);
 
+        // The model answers in the selected language; when that is not
+        // English, the same call also returns an English description for the
+        // catalogue, so both languages are searchable.
+        var includeEnglish = !string.Equals(
+            language,
+            "English",
+            StringComparison.OrdinalIgnoreCase);
+        var pendingAtStart = photos.Count - CountSkipped();
         runCancellation = new CancellationTokenSource();
         var token = runCancellation.Token;
         SetRunningState(true);
@@ -229,6 +237,7 @@ public partial class AiTagDialog : Window
         var skipped = 0;
         var failures = new List<string>();
         var stopMessage = (string?)null;
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
 
         try
         {
@@ -238,7 +247,11 @@ public partial class AiTagDialog : Window
                 var photo = photos[index];
                 RunProgress.Value = 100d * index / photos.Count;
                 SummaryText.Text =
-                    $"{index + 1:N0} / {photos.Count:N0} · {photo.FileName}";
+                    $"{index + 1:N0} / {photos.Count:N0} · {photo.FileName}"
+                    + DescribePace(
+                        stopwatch.Elapsed,
+                        described + failures.Count,
+                        pendingAtStart);
 
                 if (OllamaVisionService.ShouldSkip(
                         mode,
@@ -263,8 +276,9 @@ public partial class AiTagDialog : Window
                         model,
                         jpeg,
                         language,
+                        includeEnglish,
                         token);
-                    Apply(photo, insights, mode);
+                    Apply(photo, insights, mode, includeEnglish);
                     described++;
                     DescribedCount++;
                     DetailText.Text = DescribeResult(photo, insights);
@@ -310,8 +324,43 @@ public partial class AiTagDialog : Window
             SetRunningState(false);
         }
 
-        ReportOutcome(described, skipped, failures, stopMessage);
+        stopwatch.Stop();
+        ReportOutcome(
+            described,
+            skipped,
+            failures,
+            stopMessage,
+            stopwatch.Elapsed,
+            DateTime.Now);
     }
+
+    /// <summary>
+    /// The running average and the projected finish, shown next to the
+    /// progress counter once at least one photograph has been attempted.
+    /// </summary>
+    internal static string DescribePace(
+        TimeSpan elapsed,
+        int attempted,
+        int pendingAtStart)
+    {
+        if (attempted == 0)
+        {
+            return string.Empty;
+        }
+
+        var average = elapsed / attempted;
+        var remaining = Math.Max(0, pendingAtStart - attempted);
+        var finish = DateTime.Now + average * remaining;
+        return $" · {FormatDuration(average)}/photo"
+               + $" · finish ~{finish:HH:mm}";
+    }
+
+    internal static string FormatDuration(TimeSpan duration) =>
+        duration.TotalSeconds < 60
+            ? $"{Math.Max(1, duration.TotalSeconds):0} s"
+            : duration.TotalHours < 1
+                ? $"{(int)duration.TotalMinutes} min {duration.Seconds:00} s"
+                : $"{(int)duration.TotalHours} h {duration.Minutes:00} min";
 
     private async Task<byte[]> LoadRequestImageAsync(
         PhotoItemViewModel photo,
@@ -341,7 +390,8 @@ public partial class AiTagDialog : Window
     private static void Apply(
         PhotoItemViewModel photo,
         AiPhotoInsights insights,
-        AiApplyMode mode)
+        AiApplyMode mode,
+        bool primaryLanguageIsNotEnglish)
     {
         if (!string.IsNullOrWhiteSpace(insights.Title)
             && (mode == AiApplyMode.Overwrite
@@ -355,6 +405,18 @@ public partial class AiTagDialog : Window
                 || string.IsNullOrWhiteSpace(photo.Description)))
         {
             photo.Description = insights.Description;
+        }
+
+        // When the run already speaks English, the primary description doubles
+        // as the catalogue's English one.
+        var english = primaryLanguageIsNotEnglish
+            ? insights.DescriptionEn
+            : insights.Description;
+        if (!string.IsNullOrWhiteSpace(english)
+            && (mode == AiApplyMode.Overwrite
+                || string.IsNullOrWhiteSpace(photo.DescriptionEn)))
+        {
+            photo.DescriptionEn = english;
         }
 
         if (OllamaVisionService.MergeKeywords(photo.Keywords, insights.Keywords)
@@ -378,7 +440,9 @@ public partial class AiTagDialog : Window
         int described,
         int skipped,
         IReadOnlyList<string> failures,
-        string? stopMessage)
+        string? stopMessage,
+        TimeSpan elapsed,
+        DateTime finishedAt)
     {
         var parts = new List<string>
         {
@@ -400,14 +464,28 @@ public partial class AiTagDialog : Window
         }
 
         SummaryText.Text = string.Join(" · ", parts);
-        if (failures.Count > 0)
+
+        // The last photo's metadata has served its purpose; the lasting
+        // answer is how the whole run went.
+        var attempted = described + failures.Count;
+        var lines = new List<string>();
+        if (attempted > 0)
         {
-            DetailText.Text = string.Join(
-                Environment.NewLine,
-                failures.Take(6))
-                + (failures.Count > 6
-                    ? $"{Environment.NewLine}…and {failures.Count - 6:N0} more"
-                    : string.Empty);
+            lines.Add(
+                $"{attempted:N0} photo(s) in {FormatDuration(elapsed)}"
+                + $" ({FormatDuration(elapsed / attempted)} per photo)"
+                + $" · finished at {finishedAt:HH:mm}");
+        }
+
+        lines.AddRange(failures.Take(6));
+        if (failures.Count > 6)
+        {
+            lines.Add($"…and {failures.Count - 6:N0} more");
+        }
+
+        if (lines.Count > 0)
+        {
+            DetailText.Text = string.Join(Environment.NewLine, lines);
         }
     }
 

@@ -15,6 +15,7 @@ public sealed class PhotoItemViewModel : ObservableObject
     private int rating;
     private string? title;
     private string? description;
+    private string? descriptionEn;
     private double? latitude;
     private double? longitude;
     private ColorLabel colorLabel;
@@ -37,6 +38,7 @@ public sealed class PhotoItemViewModel : ObservableObject
         rating = record.Rating;
         title = record.Title;
         description = record.Description;
+        descriptionEn = record.DescriptionEn;
         latitude = record.Latitude;
         longitude = record.Longitude;
         colorLabel = record.ColorLabel;
@@ -88,6 +90,7 @@ public sealed class PhotoItemViewModel : ObservableObject
         rating = updated.Rating;
         title = updated.Title;
         description = updated.Description;
+        descriptionEn = updated.DescriptionEn;
         latitude = updated.Latitude;
         longitude = updated.Longitude;
         colorLabel = updated.ColorLabel;
@@ -100,6 +103,7 @@ public sealed class PhotoItemViewModel : ObservableObject
         OnPropertyChanged(nameof(RatingText));
         OnPropertyChanged(nameof(Title));
         OnPropertyChanged(nameof(Description));
+        OnPropertyChanged(nameof(DescriptionEn));
         OnPropertyChanged(nameof(LocationText));
         OnPropertyChanged(nameof(ColorLabel));
         OnPropertyChanged(nameof(ColorLabelBrush));
@@ -294,12 +298,16 @@ public sealed class PhotoItemViewModel : ObservableObject
 
     public bool HasLocation => latitude is not null && longitude is not null;
 
-    /// <summary>An OpenStreetMap pin for the "Open in map" action.</summary>
+    /// <summary>
+    /// The Mapy.com tourist map for the "Open in map" action; x is the
+    /// longitude and y the latitude, and source=coor drops a pin on the
+    /// exact spot the photograph was taken.
+    /// </summary>
     public string? MapUrl =>
         latitude is { } lat && longitude is { } lon
             ? string.Create(
                 System.Globalization.CultureInfo.InvariantCulture,
-                $"https://www.openstreetmap.org/?mlat={lat:0.######}&mlon={lon:0.######}#map=15/{lat:0.######}/{lon:0.######}")
+                $"https://mapy.com/cs/turisticka?x={lon:0.######}&y={lat:0.######}&z=15&source=coor&id={lon:0.######},{lat:0.######}")
             : null;
 
     internal static string FormatFileSize(long bytes) => bytes switch
@@ -343,6 +351,28 @@ public sealed class PhotoItemViewModel : ObservableObject
 
             _ = PersistMetadataAsync(
                 () => catalog.UpdateDescriptionAsync(Path, normalized));
+        }
+    }
+
+    /// <summary>
+    /// A second, English description kept only in the catalogue so search
+    /// works in both languages; it is never written into the photo file.
+    /// </summary>
+    public string? DescriptionEn
+    {
+        get => descriptionEn;
+        set
+        {
+            var normalized = string.IsNullOrWhiteSpace(value)
+                ? null
+                : value.Trim();
+            if (!SetProperty(ref descriptionEn, normalized))
+            {
+                return;
+            }
+
+            _ = PersistMetadataAsync(
+                () => catalog.UpdateDescriptionEnAsync(Path, normalized));
         }
     }
 

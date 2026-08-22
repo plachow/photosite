@@ -67,7 +67,11 @@ The model receives a downscaled preview and must answer a fixed JSON schema.
 Results flow through the same catalogue-and-outbox path as a manual edit;
 keywords merge into the existing list, and in fill-empty mode a photo already
 carrying both a title and a description is skipped, which is what makes an
-interrupted bulk run restartable. Rejected synonyms: *auto-tag*, *caption*.
+interrupted bulk run restartable. When the run's language is not English, the
+same call also returns an **English description**, stored in the catalogue
+only (`description_en`) so search works in both languages — the file always
+carries just the primary-language description, and a re-scan never touches
+the English one. Rejected synonyms: *auto-tag*, *caption*.
 
 **Surface** — a rendered bitmap the editor canvas paints: straightening,
 adjustments and filters applied, but crop, orientation and layers deliberately

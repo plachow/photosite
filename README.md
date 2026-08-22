@@ -80,7 +80,12 @@ a manual edit - into the database and into the photo files themselves.
 Keywords are merged with the ones already on the photo; by default only empty
 titles and descriptions are filled, and photos that already carry both are
 skipped, so an interrupted overnight run can simply be started again over the
-same selection. Nothing ever leaves the machine.
+same selection. When the language is not English, the same call also returns
+an English description that is kept in the catalogue only, so search finds
+photos in either language while the file carries just the primary one. During
+a run the dialog shows the average pace and the projected finish time, and it
+ends with a summary of how many photos were described, how fast, and when.
+Nothing ever leaves the machine.
 
 ## Editor
 

@@ -833,6 +833,7 @@ try
         "qwen3.8:27b",
         [1, 2, 3],
         "Czech",
+        includeEnglishDescription: true,
         disableThinking: true);
     using (var visionRequestDocument = JsonDocument.Parse(visionRequest))
     {
@@ -843,7 +844,9 @@ try
             && !visionRoot.GetProperty("stream").GetBoolean()
             && !visionRoot.GetProperty("think").GetBoolean()
             && visionRoot.GetProperty("format")
-                .GetProperty("required").GetArrayLength() == 3
+                .GetProperty("required").GetArrayLength() == 4
+            && visionRoot.GetProperty("format").GetProperty("properties")
+                .TryGetProperty("description_en", out _)
             && message.GetProperty("images")[0].GetString()
                 == Convert.ToBase64String(new byte[] { 1, 2, 3 })
             && message.GetProperty("content").GetString()!.Contains(
@@ -858,11 +861,16 @@ try
                    "qwen3.8:27b",
                    [1],
                    "English",
+                   includeEnglishDescription: false,
                    disableThinking: false)))
     {
+        var visionRoot = visionRequestDocument.RootElement;
         Assert(
-            !visionRequestDocument.RootElement.TryGetProperty("think", out _),
-            "The retry request must leave the thinking switch out entirely.");
+            !visionRoot.TryGetProperty("think", out _)
+            && visionRoot.GetProperty("format")
+                .GetProperty("required").GetArrayLength() == 3,
+            "An English-language retry request must leave out both the "
+            + "thinking switch and the second description.");
     }
 
     Assert(
@@ -872,11 +880,12 @@ try
 
     var visionInsights = OllamaVisionService.ParseInsights(
         """
-        {"message":{"role":"assistant","content":"{\"title\":\"  Západ slunce\\nnad Lipnem \",\"description\":\" Dva lidé sedí na molu.  \",\"keywords\":[\"#západ slunce\",\"molo; jezero\",\"Molo\",\"  \",\"voda\"]}"}}
+        {"message":{"role":"assistant","content":"{\"title\":\"  Západ slunce\\nnad Lipnem \",\"description\":\" Dva lidé sedí na molu.  \",\"description_en\":\" Two people sit on a pier. \",\"keywords\":[\"#západ slunce\",\"molo; jezero\",\"Molo\",\"  \",\"voda\"]}"}}
         """);
     Assert(
         visionInsights.Title == "Západ slunce nad Lipnem"
         && visionInsights.Description == "Dva lidé sedí na molu."
+        && visionInsights.DescriptionEn == "Two people sit on a pier."
         && visionInsights.Keywords.SequenceEqual(
             ["západ slunce", "molo jezero", "Molo", "voda"]),
         "AI insights should come back trimmed, without hashtag prefixes, and "
@@ -1030,6 +1039,9 @@ try
     await repository.UpdateDescriptionAsync(
         metadataTarget.Path,
         "Smoke description");
+    await repository.UpdateDescriptionEnAsync(
+        metadataTarget.Path,
+        "Smoke English description");
     await repository.UpdateLocationAsync(
         metadataTarget.Path,
         49.195061,
@@ -1041,6 +1053,7 @@ try
         {
             Title: "Smoke title",
             Description: "Smoke description",
+            DescriptionEn: "Smoke English description",
             Latitude: 49.195061,
             Longitude: 16.606836,
             Rating: 4
@@ -1060,7 +1073,8 @@ try
             .Distinct(StringComparer.Ordinal)
             .OrderBy(kind => kind, StringComparer.Ordinal)
             .SequenceEqual(["description", "location", "rating", "title"]),
-        "Each metadata update should enqueue an outbox entry of its kind.");
+        "Each metadata update should enqueue an outbox entry of its kind; "
+        + "the English description stays out of the outbox entirely.");
 
     await repository.IncrementMetadataOutboxAttemptsAsync(
         targetEntries.Select(entry => entry.Id).ToArray());

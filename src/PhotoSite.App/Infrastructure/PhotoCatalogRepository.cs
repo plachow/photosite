@@ -13,7 +13,8 @@ public sealed class PhotoCatalogRepository
         taken_at_ticks, taken_at_source, metadata_indexed,
         title, description, latitude, longitude,
         color_label, flag, keywords, pixel_width, pixel_height,
-        camera, lens, focal_length, aperture, exposure_seconds, iso
+        camera, lens, focal_length, aperture, exposure_seconds, iso,
+        description_en
         """;
 
     private readonly string connectionString;
@@ -156,7 +157,8 @@ public sealed class PhotoCatalogRepository
         ("focal_length", "REAL NULL"),
         ("aperture", "REAL NULL"),
         ("exposure_seconds", "REAL NULL"),
-        ("iso", "INTEGER NULL")
+        ("iso", "INTEGER NULL"),
+        ("description_en", "TEXT NULL")
     ];
 
     public async Task UpsertBatchAsync(
@@ -191,7 +193,8 @@ public sealed class PhotoCatalogRepository
                 $takenAt, $takenAtSource, $metadataIndexed,
                 $title, $description, $latitude, $longitude,
                 $colorLabel, $flag, $keywords, $pixelWidth, $pixelHeight,
-                $camera, $lens, $focalLength, $aperture, $exposureSeconds, $iso)
+                $camera, $lens, $focalLength, $aperture, $exposureSeconds, $iso,
+                $descriptionEn)
             ON CONFLICT(path) DO UPDATE SET
                 root_path = excluded.root_path,
                 file_name = excluded.file_name,
@@ -267,6 +270,12 @@ public sealed class PhotoCatalogRepository
             "$exposureSeconds",
             SqliteType.Real);
         var iso = command.Parameters.Add("$iso", SqliteType.Integer);
+        // The English description lives only in the catalogue - a scan never
+        // reads one from the file, so the upsert must never replace it either;
+        // like the flag, it is deliberately absent from the UPDATE clause.
+        var descriptionEn = command.Parameters.Add(
+            "$descriptionEn",
+            SqliteType.Text);
 
         foreach (var record in records)
         {
@@ -305,6 +314,7 @@ public sealed class PhotoCatalogRepository
                 ? es
                 : DBNull.Value;
             iso.Value = record.Iso is { } isoValue ? isoValue : DBNull.Value;
+            descriptionEn.Value = (object?)record.DescriptionEn ?? DBNull.Value;
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
 
@@ -451,7 +461,8 @@ public sealed class PhotoCatalogRepository
             reader.IsDBNull(22) ? null : reader.GetDouble(22),
             reader.IsDBNull(23) ? null : reader.GetDouble(23),
             reader.IsDBNull(24) ? null : reader.GetDouble(24),
-            reader.IsDBNull(25) ? null : reader.GetInt32(25));
+            reader.IsDBNull(25) ? null : reader.GetInt32(25),
+            reader.IsDBNull(26) ? null : reader.GetString(26));
 
     public event Action? MetadataOutboxChanged;
 
@@ -536,6 +547,27 @@ public sealed class PhotoCatalogRepository
             "description",
             JsonSerializer.Serialize(new { description }),
             cancellationToken);
+
+    /// <summary>
+    /// The English description lives only in the catalogue, as a second
+    /// searchable language; the file keeps the primary-language description,
+    /// so no outbox entry is queued.
+    /// </summary>
+    public async Task UpdateDescriptionEnAsync(
+        string path,
+        string? description,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            "UPDATE photos SET description_en = $value WHERE path = $path;";
+        command.Parameters.AddWithValue(
+            "$value",
+            (object?)description ?? DBNull.Value);
+        command.Parameters.AddWithValue("$path", path);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
 
     public async Task UpdateLocationAsync(
         string path,

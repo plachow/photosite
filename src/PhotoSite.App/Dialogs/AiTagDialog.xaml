@@ -79,7 +79,7 @@
         <TextBlock Margin="0,0,0,10"
                    FontSize="11"
                    Foreground="{StaticResource MutedTextBrush}"
-                   Text="The model fills the title, the description and the keywords. Keywords are always merged with the ones already on the photo. Everything is written into the catalogue and into the photo files."
+                   Text="The model fills the title, the description and the keywords, written into the catalogue and into the photo files. Keywords are always merged with the ones already on the photo. When the language is not English, an English description is stored in the catalogue as well, so search works in both languages."
                    TextWrapping="Wrap" />
 
         <Border Padding="12,10"

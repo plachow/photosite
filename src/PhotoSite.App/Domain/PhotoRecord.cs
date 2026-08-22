@@ -34,7 +34,8 @@ public sealed record PhotoRecord(
     double? FocalLength = null,
     double? Aperture = null,
     double? ExposureSeconds = null,
-    int? Iso = null)
+    int? Iso = null,
+    string? DescriptionEn = null)
 {
     public PhotoOrientation Orientation =>
         PixelWidth is not { } width || PixelHeight is not { } height

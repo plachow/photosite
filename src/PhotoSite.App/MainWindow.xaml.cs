@@ -2086,6 +2086,26 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void OnClosePreviewClick(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        if (viewModel.IsFullscreenMode)
+        {
+            if (viewModel.ToggleFullscreenCommand.CanExecute(null))
+            {
+                viewModel.ToggleFullscreenCommand.Execute(null);
+            }
+
+            return;
+        }
+
+        if (viewModel.IsEditorMode)
+        {
+            await LeaveEditorAsync();
+        }
+    }
+
     private async Task LeaveEditorAsync()
     {
         if (!await ConfirmEditorExitAsync())

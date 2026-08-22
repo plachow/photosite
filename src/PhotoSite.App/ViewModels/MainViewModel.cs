@@ -1336,6 +1336,7 @@ public sealed class MainViewModel : ObservableObject
         return photo.FileName.Contains(search, StringComparison.OrdinalIgnoreCase)
                || record.Title?.Contains(search, StringComparison.OrdinalIgnoreCase) == true
                || record.Description?.Contains(search, StringComparison.OrdinalIgnoreCase) == true
+               || record.DescriptionEn?.Contains(search, StringComparison.OrdinalIgnoreCase) == true
                || record.Keywords?.Contains(search, StringComparison.OrdinalIgnoreCase) == true;
     }
 

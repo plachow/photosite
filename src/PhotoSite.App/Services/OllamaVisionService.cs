@@ -10,7 +10,8 @@ namespace PhotoSite.Services;
 public sealed record AiPhotoInsights(
     string? Title,
     string? Description,
-    IReadOnlyList<string> Keywords);
+    IReadOnlyList<string> Keywords,
+    string? DescriptionEn = null);
 
 /// <summary>How AI results treat metadata that is already on a photograph.</summary>
 public enum AiApplyMode
@@ -67,12 +68,18 @@ public sealed class OllamaVisionService
         string model,
         byte[] jpegImage,
         string language,
+        bool includeEnglishDescription,
         CancellationToken cancellationToken)
     {
         var uri = BuildUri(endpoint, "api/chat");
         var response = await PostAsync(
             uri,
-            BuildRequestJson(model, jpegImage, language, disableThinking: true),
+            BuildRequestJson(
+                model,
+                jpegImage,
+                language,
+                includeEnglishDescription,
+                disableThinking: true),
             cancellationToken);
         if (response.StatusCode == HttpStatusCode.BadRequest)
         {
@@ -81,7 +88,12 @@ public sealed class OllamaVisionService
             response.Response.Dispose();
             response = await PostAsync(
                 uri,
-                BuildRequestJson(model, jpegImage, language, disableThinking: false),
+                BuildRequestJson(
+                    model,
+                    jpegImage,
+                    language,
+                    includeEnglishDescription,
+                    disableThinking: false),
                 cancellationToken);
         }
 
@@ -133,8 +145,27 @@ public sealed class OllamaVisionService
         string model,
         byte[] jpegImage,
         string language,
+        bool includeEnglishDescription,
         bool disableThinking)
     {
+        var properties = new Dictionary<string, object?>
+        {
+            ["title"] = new Dictionary<string, object?> { ["type"] = "string" },
+            ["description"] = new Dictionary<string, object?> { ["type"] = "string" },
+            ["keywords"] = new Dictionary<string, object?>
+            {
+                ["type"] = "array",
+                ["items"] = new Dictionary<string, object?> { ["type"] = "string" }
+            }
+        };
+        var required = new List<string> { "title", "description", "keywords" };
+        if (includeEnglishDescription)
+        {
+            properties["description_en"] =
+                new Dictionary<string, object?> { ["type"] = "string" };
+            required.Add("description_en");
+        }
+
         var request = new Dictionary<string, object?>
         {
             ["model"] = model,
@@ -144,7 +175,7 @@ public sealed class OllamaVisionService
                 new Dictionary<string, object?>
                 {
                     ["role"] = "user",
-                    ["content"] = BuildPrompt(language),
+                    ["content"] = BuildPrompt(language, includeEnglishDescription),
                     ["images"] = new[] { Convert.ToBase64String(jpegImage) }
                 }
             },
@@ -153,17 +184,8 @@ public sealed class OllamaVisionService
             ["format"] = new Dictionary<string, object?>
             {
                 ["type"] = "object",
-                ["properties"] = new Dictionary<string, object?>
-                {
-                    ["title"] = new Dictionary<string, object?> { ["type"] = "string" },
-                    ["description"] = new Dictionary<string, object?> { ["type"] = "string" },
-                    ["keywords"] = new Dictionary<string, object?>
-                    {
-                        ["type"] = "array",
-                        ["items"] = new Dictionary<string, object?> { ["type"] = "string" }
-                    }
-                },
-                ["required"] = new[] { "title", "description", "keywords" }
+                ["properties"] = properties,
+                ["required"] = required
             },
             ["options"] = new Dictionary<string, object?>
             {
@@ -178,7 +200,9 @@ public sealed class OllamaVisionService
         return JsonSerializer.Serialize(request, SerializerOptions);
     }
 
-    internal static string BuildPrompt(string language) =>
+    internal static string BuildPrompt(
+        string language,
+        bool includeEnglishDescription) =>
         "You are an expert photo librarian. Analyze this photograph and "
         + "extract as much information as you can.\n"
         + "Return:\n"
@@ -192,6 +216,9 @@ public sealed class OllamaVisionService
         + "plants, type of location, activities, events, season, time of day, "
         + "weather, dominant colours, mood, photographic style. Use single "
         + "words or short phrases.\n"
+        + (includeEnglishDescription
+            ? "- \"description_en\": the same description written in English.\n"
+            : string.Empty)
         + $"Write the title, the description and the keywords in {language}. "
         + "Do not guess names of people or exact places unless visible text "
         + "makes them certain.";
@@ -225,7 +252,8 @@ public sealed class OllamaVisionService
             return new AiPhotoInsights(
                 CleanLine(ReadString(root, "title"), maxLength: 200),
                 CleanText(ReadString(root, "description"), maxLength: 4000),
-                CleanKeywords(ReadStrings(root, "keywords")));
+                CleanKeywords(ReadStrings(root, "keywords")),
+                CleanText(ReadString(root, "description_en"), maxLength: 4000));
         }
         catch (JsonException)
         {
