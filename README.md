@@ -75,10 +75,16 @@ The **People** button scans the folder's photos with two small local models -
 YuNet face detection and SFace embeddings from the OpenCV Zoo, expected in
 `tools/models` next to the bundled exiftool - and groups similar unnamed
 faces. A whole group is named at once; the name becomes a person in the
-catalogue and a keyword on every photo they appear in, written into the files
-like any other keyword. Faces scanned later that clearly match an
-already-named person are assigned automatically, re-scans skip unchanged
-files, and nothing ever leaves the machine.
+catalogue, a keyword on every photo they appear in, and an **MWG face region**
+(XMP-mwg-rs) written into the file, so Lightroom, digiKam and Windows show
+the same framed faces. Faces scanned later that clearly match an
+already-named person are assigned automatically; borderline matches become
+**suggestions** with a plain yes/no, and only a yes writes the name anywhere.
+Re-scans skip unchanged files, and nothing ever leaves the machine.
+
+The gallery filter has a **Person** facet, and the **Faces** toggle in the
+editor toolbar frames the known faces over the photograph - blue for named
+people, amber for pending suggestions, grey for faces nobody has named yet.
 
 ### AI description
 

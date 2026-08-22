@@ -75,6 +75,13 @@ public static class FaceClusterer
     public const double AutoMatchThreshold = 0.5;
 
     /// <summary>
+    /// OpenCV's same-identity boundary for SFace. A match above it that does
+    /// not reach <see cref="AutoMatchThreshold"/> becomes a suggestion the
+    /// user confirms or rejects instead of a silent assignment.
+    /// </summary>
+    public const double SuggestThreshold = 0.363;
+
+    /// <summary>
     /// Greedy centroid clustering: every face joins the most similar
     /// existing group above the threshold, or founds a new one. Confident
     /// detections go first so the seeds are the sharpest faces.

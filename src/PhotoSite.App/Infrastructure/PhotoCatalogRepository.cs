@@ -149,16 +149,17 @@ public sealed partial class PhotoCatalogRepository
             );
 
             CREATE TABLE IF NOT EXISTS faces (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                path         TEXT NOT NULL COLLATE NOCASE,
-                x            REAL NOT NULL,
-                y            REAL NOT NULL,
-                w            REAL NOT NULL,
-                h            REAL NOT NULL,
-                confidence   REAL NOT NULL,
-                embedding    BLOB NOT NULL,
-                person_id    INTEGER NULL,
-                created_utc  TEXT NOT NULL
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                path                 TEXT NOT NULL COLLATE NOCASE,
+                x                    REAL NOT NULL,
+                y                    REAL NOT NULL,
+                w                    REAL NOT NULL,
+                h                    REAL NOT NULL,
+                confidence           REAL NOT NULL,
+                embedding            BLOB NOT NULL,
+                person_id            INTEGER NULL,
+                suggested_person_id  INTEGER NULL,
+                created_utc          TEXT NOT NULL
             );
 
             CREATE INDEX IF NOT EXISTS ix_faces_path ON faces(path);
@@ -172,6 +173,15 @@ public sealed partial class PhotoCatalogRepository
             );
             """;
         await indexCommand.ExecuteNonQueryAsync(cancellationToken);
+
+        // Face suggestions arrived after the first face-recognition release;
+        // an existing faces table is migrated in place.
+        await EnsureColumnAsync(
+            connection,
+            "faces",
+            "suggested_person_id",
+            "INTEGER NULL",
+            cancellationToken);
     }
 
     private static readonly (string Column, string Declaration)[] NewerColumns =
@@ -995,15 +1005,28 @@ public sealed partial class PhotoCatalogRepository
         return connection;
     }
 
+    private static Task EnsureColumnAsync(
+        SqliteConnection connection,
+        string columnName,
+        string declaration,
+        CancellationToken cancellationToken) =>
+        EnsureColumnAsync(
+            connection,
+            "photos",
+            columnName,
+            declaration,
+            cancellationToken);
+
     private static async Task EnsureColumnAsync(
         SqliteConnection connection,
+        string tableName,
         string columnName,
         string declaration,
         CancellationToken cancellationToken)
     {
         await using (var inspect = connection.CreateCommand())
         {
-            inspect.CommandText = "PRAGMA table_info(photos);";
+            inspect.CommandText = $"PRAGMA table_info({tableName});";
             await using var reader = await inspect.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
             {
@@ -1019,7 +1042,7 @@ public sealed partial class PhotoCatalogRepository
 
         await using var alter = connection.CreateCommand();
         alter.CommandText =
-            $"ALTER TABLE photos ADD COLUMN {columnName} {declaration};";
+            $"ALTER TABLE {tableName} ADD COLUMN {columnName} {declaration};";
         await alter.ExecuteNonQueryAsync(cancellationToken);
     }
 }

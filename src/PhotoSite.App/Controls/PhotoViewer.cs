@@ -21,6 +21,15 @@ public enum PreviewComparisonMode
     Split
 }
 
+/// <summary>A face frame to draw over the photograph, normalized 0..1.</summary>
+public sealed record FaceOverlay(
+    double X,
+    double Y,
+    double Width,
+    double Height,
+    string? Name,
+    bool IsSuggestion);
+
 public sealed partial class PhotoViewer : FrameworkElement
 {
     private const double TransitionDurationMilliseconds = 60;
@@ -39,6 +48,12 @@ public sealed partial class PhotoViewer : FrameworkElement
         CreateFrozenBrush(Color.FromRgb(242, 244, 248));
     private static readonly Pen SelectionBorderPen =
         CreateFrozenPen(Color.FromRgb(103, 183, 255), 1.5);
+    private static readonly Pen FaceNamedPen =
+        CreateFrozenPen(Color.FromRgb(103, 183, 255), 1.5);
+    private static readonly Pen FaceSuggestionPen =
+        CreateFrozenPen(Color.FromRgb(255, 211, 106), 1.5);
+    private static readonly Pen FaceUnnamedPen =
+        CreateFrozenPen(Color.FromRgb(150, 158, 170), 1.2);
 
     public static readonly DependencyProperty SourcePathProperty =
         DependencyProperty.Register(
@@ -132,6 +147,24 @@ public sealed partial class PhotoViewer : FrameworkElement
             typeof(double),
             typeof(PhotoViewer),
             new FrameworkPropertyMetadata(0d, OnSelectionAspectRatioChanged));
+
+    public static readonly DependencyProperty FaceOverlaysProperty =
+        DependencyProperty.Register(
+            nameof(FaceOverlays),
+            typeof(IReadOnlyList<FaceOverlay>),
+            typeof(PhotoViewer),
+            new FrameworkPropertyMetadata(
+                null,
+                FrameworkPropertyMetadataOptions.AffectsRender));
+
+    public static readonly DependencyProperty ShowFaceOverlaysProperty =
+        DependencyProperty.Register(
+            nameof(ShowFaceOverlays),
+            typeof(bool),
+            typeof(PhotoViewer),
+            new FrameworkPropertyMetadata(
+                false,
+                FrameworkPropertyMetadataOptions.AffectsRender));
 
     private static readonly DependencyPropertyKey HasSelectionPropertyKey =
         DependencyProperty.RegisterReadOnly(
@@ -244,6 +277,18 @@ public sealed partial class PhotoViewer : FrameworkElement
     {
         get => (bool)GetValue(IsEditorModeProperty);
         set => SetValue(IsEditorModeProperty, value);
+    }
+
+    public IReadOnlyList<FaceOverlay>? FaceOverlays
+    {
+        get => (IReadOnlyList<FaceOverlay>?)GetValue(FaceOverlaysProperty);
+        set => SetValue(FaceOverlaysProperty, value);
+    }
+
+    public bool ShowFaceOverlays
+    {
+        get => (bool)GetValue(ShowFaceOverlaysProperty);
+        set => SetValue(ShowFaceOverlaysProperty, value);
     }
 
     public bool IsFullscreenMode
@@ -458,7 +503,94 @@ public sealed partial class PhotoViewer : FrameworkElement
 
         DrawComparison(drawingContext);
         DrawLayers(drawingContext);
+        DrawFaceOverlays(drawingContext);
         DrawSelection(drawingContext);
+    }
+
+    /// <summary>
+    /// Frames every known face over the photograph: blue for a named
+    /// person, amber with a question mark for a suggestion awaiting its
+    /// yes-or-no, grey for a face nobody has named yet.
+    /// </summary>
+    private void DrawFaceOverlays(DrawingContext drawingContext)
+    {
+        if (!ShowFaceOverlays
+            || bitmap is null
+            || FaceOverlays is not { Count: > 0 } overlays)
+        {
+            return;
+        }
+
+        var dpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+        foreach (var overlay in overlays)
+        {
+            var bounds = GetScreenBounds(
+                bitmap,
+                EditRecipe,
+                new CropRegion(
+                    overlay.X,
+                    overlay.Y,
+                    overlay.Width,
+                    overlay.Height),
+                pan);
+            if (bounds.IsEmpty
+                || !bounds.IntersectsWith(new Rect(RenderSize)))
+            {
+                continue;
+            }
+
+            var pen = overlay.IsSuggestion
+                ? FaceSuggestionPen
+                : overlay.Name is null
+                    ? FaceUnnamedPen
+                    : FaceNamedPen;
+            drawingContext.DrawRoundedRectangle(
+                null,
+                pen,
+                bounds,
+                3,
+                3);
+
+            var label = overlay.Name is null
+                ? null
+                : overlay.IsSuggestion
+                    ? $"{overlay.Name}?"
+                    : overlay.Name;
+            if (label is null)
+            {
+                continue;
+            }
+
+            var formatted = new FormattedText(
+                label,
+                System.Globalization.CultureInfo.CurrentUICulture,
+                FlowDirection.LeftToRight,
+                new Typeface("Segoe UI"),
+                11,
+                SelectionHandleBrush,
+                dpi);
+            const double padding = 4;
+            var labelTop = bounds.Top - formatted.Height - (padding * 2) - 2;
+            if (labelTop < 0)
+            {
+                labelTop = bounds.Top + 2;
+            }
+
+            var background = new Rect(
+                bounds.Left,
+                labelTop,
+                formatted.Width + (padding * 2),
+                formatted.Height + (padding * 2));
+            drawingContext.DrawRoundedRectangle(
+                SelectionShadeBrush,
+                null,
+                background,
+                3,
+                3);
+            drawingContext.DrawText(
+                formatted,
+                new Point(bounds.Left + padding, labelTop + padding));
+        }
     }
 
     /// <summary>

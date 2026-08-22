@@ -195,6 +195,8 @@ public partial class MainWindow
             Formats = formats,
             Cameras = cameras,
             Lenses = lenses,
+            PersonId = (PersonFilterBox.SelectedItem as PersonRecord)?.Id,
+            PersonName = (PersonFilterBox.SelectedItem as PersonRecord)?.Name,
             Orientation = LandscapeOrientationBox.IsChecked == true
                 ? PhotoOrientation.Landscape
                 : PortraitOrientationBox.IsChecked == true
@@ -279,6 +281,7 @@ public partial class MainWindow
             AnyOrientationBox.IsChecked = true;
             CameraFilterBox.SelectedItem = null;
             LensFilterBox.SelectedItem = null;
+            PersonFilterBox.SelectedItem = null;
             DateFromBox.Text = string.Empty;
             DateToBox.Text = string.Empty;
             foreach (var format in FormatFilterItems.Items.OfType<string>())

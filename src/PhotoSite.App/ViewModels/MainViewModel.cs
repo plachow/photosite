@@ -278,8 +278,45 @@ public sealed class MainViewModel : ObservableObject
             OnPropertyChanged(nameof(FilterLabel));
             OnPropertyChanged(nameof(IsFilterActive));
             ClearFilterCommand.NotifyCanExecuteChanged();
+            if (updated.PersonId != personFilterId)
+            {
+                // The person's photo list comes from the catalogue; the
+                // gallery re-presents again once it has arrived.
+                _ = RefreshPersonFilterAsync(updated.PersonId);
+            }
+
             ApplyPhotoPresentation();
         }
+    }
+
+    private long? personFilterId;
+    private HashSet<string>? personFilterPaths;
+
+    private async Task RefreshPersonFilterAsync(long? personId)
+    {
+        personFilterId = personId;
+        HashSet<string>? paths = null;
+        if (personId is { } id)
+        {
+            try
+            {
+                paths = (await catalog.GetPersonPhotoPathsAsync(id))
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            }
+            catch (Exception)
+            {
+                paths = [];
+            }
+        }
+
+        if (personFilterId != personId)
+        {
+            // A newer filter change overtook this load.
+            return;
+        }
+
+        personFilterPaths = paths;
+        ApplyPhotoPresentation();
     }
 
     public string FilterLabel => Filter.IsActive ? Filter.Describe() : "Filter";
@@ -1323,7 +1360,8 @@ public sealed class MainViewModel : ObservableObject
             allPhotos,
             sortField,
             sortDescending,
-            filter);
+            filter,
+            personFilterPaths);
         // Granular updates keep the realized tiles - and the thumbnails they
         // already decoded - alive; a Reset would blank the whole viewport.
         Photos.SynchronizeTo(presented);
@@ -1359,9 +1397,11 @@ public sealed class MainViewModel : ObservableObject
         IEnumerable<PhotoItemViewModel> source,
         PhotoSortField sortField,
         bool descending,
-        PhotoFilterCriteria criteria)
+        PhotoFilterCriteria criteria,
+        IReadOnlySet<string>? personPhotoPaths = null)
     {
-        var filtered = source.Where(photo => Matches(photo, criteria));
+        var filtered = source.Where(photo =>
+            Matches(photo, criteria, personPhotoPaths));
 
         IOrderedEnumerable<PhotoItemViewModel> ordered = sortField switch
         {
@@ -1416,10 +1456,19 @@ public sealed class MainViewModel : ObservableObject
 
     internal static bool Matches(
         PhotoItemViewModel photo,
-        PhotoFilterCriteria criteria)
+        PhotoFilterCriteria criteria,
+        IReadOnlySet<string>? personPhotoPaths = null)
     {
         var record = photo.Record;
         if (photo.Rating < criteria.MinimumRating)
+        {
+            return false;
+        }
+
+        // The person facet works from the face catalogue's path list; until
+        // that list has loaded, nothing matches rather than everything.
+        if (criteria.PersonId is not null
+            && personPhotoPaths?.Contains(record.Path) != true)
         {
             return false;
         }

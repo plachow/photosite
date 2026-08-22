@@ -14,7 +14,8 @@ public sealed record FaceRecord(
     double Height,
     double Confidence,
     float[] Embedding,
-    long? PersonId = null);
+    long? PersonId = null,
+    long? SuggestedPersonId = null);
 
 /// <summary>A named person and how many faces the catalogue holds for them.</summary>
 public sealed record PersonRecord(

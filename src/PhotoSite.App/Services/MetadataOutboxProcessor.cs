@@ -220,6 +220,13 @@ internal sealed class MetadataOutboxProcessor : IDisposable
                         KeywordsChanged = true,
                         Keywords = ReadString(root, "keywords")
                     },
+                    // The payload is handed on whole; the writer knows how to
+                    // unfold it into MWG region tags.
+                    "regions" => payload with
+                    {
+                        RegionsChanged = true,
+                        RegionsJson = entry.PayloadJson
+                    },
                     _ => payload
                 };
             }

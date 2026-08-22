@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Text;
+using System.Text.Json;
 
 namespace PhotoSite.Services;
 
@@ -17,7 +18,9 @@ internal sealed record MetadataWritePayload(
     bool LabelChanged = false,
     string? Label = null,
     bool KeywordsChanged = false,
-    string? Keywords = null)
+    string? Keywords = null,
+    bool RegionsChanged = false,
+    string? RegionsJson = null)
 {
     public bool IsEmpty =>
         Rating is null
@@ -25,7 +28,8 @@ internal sealed record MetadataWritePayload(
         && !DescriptionChanged
         && !LocationChanged
         && !LabelChanged
-        && !KeywordsChanged;
+        && !KeywordsChanged
+        && !RegionsChanged;
 }
 
 internal readonly record struct ExifToolResult(
@@ -293,6 +297,11 @@ internal sealed class ExifToolMetadataWriter
             }
         }
 
+        if (payload.RegionsChanged)
+        {
+            AppendRegionArguments(arguments, payload.RegionsJson);
+        }
+
         if (payload.LocationChanged)
         {
             if (payload is { Latitude: { } latitude, Longitude: { } longitude })
@@ -335,6 +344,80 @@ internal sealed class ExifToolMetadataWriter
         arguments.Add(targetPath);
         return arguments;
     }
+
+    /// <summary>
+    /// Unfolds the queued face rectangles into MWG region tags - the format
+    /// Lightroom, digiKam and Windows read face frames from. The whole
+    /// struct is cleared first so removed or renamed people never linger,
+    /// then rebuilt from flattened list tags, one element per face; MWG
+    /// areas are centre-based, the queue stores top-left rectangles.
+    /// </summary>
+    internal static void AppendRegionArguments(
+        List<string> arguments,
+        string? regionsJson)
+    {
+        arguments.Add("-XMP-mwg-rs:RegionInfo=");
+        if (string.IsNullOrWhiteSpace(regionsJson))
+        {
+            return;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(regionsJson);
+            var root = document.RootElement;
+            if (!root.TryGetProperty("width", out var width)
+                || !root.TryGetProperty("height", out var height)
+                || width.GetInt32() <= 0
+                || height.GetInt32() <= 0
+                || !root.TryGetProperty("regions", out var regions)
+                || regions.ValueKind != JsonValueKind.Array
+                || regions.GetArrayLength() == 0)
+            {
+                return;
+            }
+
+            arguments.Add(
+                $"-XMP-mwg-rs:RegionAppliedToDimensionsW={width.GetInt32()}");
+            arguments.Add(
+                $"-XMP-mwg-rs:RegionAppliedToDimensionsH={height.GetInt32()}");
+            arguments.Add("-XMP-mwg-rs:RegionAppliedToDimensionsUnit=pixel");
+            foreach (var region in regions.EnumerateArray())
+            {
+                var name = region.GetProperty("name").GetString();
+                if (string.IsNullOrWhiteSpace(name))
+                {
+                    continue;
+                }
+
+                var x = region.GetProperty("x").GetDouble();
+                var y = region.GetProperty("y").GetDouble();
+                var w = region.GetProperty("w").GetDouble();
+                var h = region.GetProperty("h").GetDouble();
+                arguments.Add($"-XMP-mwg-rs:RegionName+={name}");
+                arguments.Add("-XMP-mwg-rs:RegionType+=Face");
+                arguments.Add(FormatRegionValue("RegionAreaX", x + (w / 2)));
+                arguments.Add(FormatRegionValue("RegionAreaY", y + (h / 2)));
+                arguments.Add(FormatRegionValue("RegionAreaW", w));
+                arguments.Add(FormatRegionValue("RegionAreaH", h));
+                arguments.Add("-XMP-mwg-rs:RegionAreaUnit+=normalized");
+            }
+        }
+        catch (Exception exception)
+            when (exception is JsonException
+                or KeyNotFoundException
+                or InvalidOperationException
+                or FormatException)
+        {
+            // A malformed queue entry degenerates to clearing the regions;
+            // the rest of the metadata write still goes through.
+        }
+    }
+
+    private static string FormatRegionValue(string tag, double value) =>
+        string.Create(
+            CultureInfo.InvariantCulture,
+            $"-XMP-mwg-rs:{tag}+={Math.Clamp(value, 0, 1):0.######}");
 
     internal static IReadOnlyList<string> SplitKeywords(string? keywords) =>
         string.IsNullOrWhiteSpace(keywords)

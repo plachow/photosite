@@ -43,11 +43,10 @@
         </Grid>
       </Border>
 
-      <!-- Scan + unnamed groups -->
+      <!-- Scan, suggestions and unnamed groups -->
       <Border Grid.Column="1" Style="{StaticResource DialogPanelStyle}">
         <Grid>
           <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
@@ -82,11 +81,74 @@
                        TextWrapping="Wrap" />
           </StackPanel>
 
-          <TextBlock Grid.Row="3"
-                     Style="{StaticResource SectionHeaderStyle}"
-                     Text="UNNAMED GROUPS" />
-          <ScrollViewer Grid.Row="4" VerticalScrollBarVisibility="Auto">
-            <ItemsControl x:Name="ClusterList">
+          <ScrollViewer Grid.Row="3" VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+              <TextBlock x:Name="SuggestionsHeader"
+                         Style="{StaticResource SectionHeaderStyle}"
+                         Text="IS THIS THEM?"
+                         Visibility="Collapsed" />
+              <ItemsControl x:Name="SuggestionList">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <Border Margin="0,0,6,8"
+                            Padding="10"
+                            Background="#2A2620"
+                            BorderBrush="#54492F"
+                            BorderThickness="1"
+                            CornerRadius="5">
+                      <Grid>
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="*" />
+                          <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel>
+                          <ItemsControl ItemsSource="{Binding Thumbnails}">
+                            <ItemsControl.ItemsPanel>
+                              <ItemsPanelTemplate>
+                                <StackPanel Orientation="Horizontal" />
+                              </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                              <DataTemplate>
+                                <Border Width="64"
+                                        Height="64"
+                                        Margin="0,0,6,0"
+                                        Background="#111318"
+                                        CornerRadius="4">
+                                  <Image Margin="2"
+                                         Source="{Binding}"
+                                         Stretch="UniformToFill" />
+                                </Border>
+                              </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                          </ItemsControl>
+                          <TextBlock Margin="0,6,0,0"
+                                     FontSize="12"
+                                     Foreground="{StaticResource PrimaryTextBrush}"
+                                     Text="{Binding QuestionText}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1"
+                                    Margin="12,0,0,0"
+                                    VerticalAlignment="Center">
+                          <Button MinWidth="130"
+                                  Content="Yes, it is"
+                                  Tag="{Binding}"
+                                  Click="OnConfirmSuggestionClick" />
+                          <Button MinWidth="130"
+                                  Margin="0,6,0,0"
+                                  Content="No, someone else"
+                                  Tag="{Binding}"
+                                  Click="OnRejectSuggestionClick" />
+                        </StackPanel>
+                      </Grid>
+                    </Border>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+
+              <TextBlock Style="{StaticResource SectionHeaderStyle}"
+                         Text="UNNAMED GROUPS" />
+              <ItemsControl x:Name="ClusterList">
               <ItemsControl.ItemTemplate>
                 <DataTemplate>
                   <Border Margin="0,0,6,8"
@@ -144,7 +206,8 @@
                   </Border>
                 </DataTemplate>
               </ItemsControl.ItemTemplate>
-            </ItemsControl>
+              </ItemsControl>
+            </StackPanel>
           </ScrollViewer>
         </Grid>
       </Border>

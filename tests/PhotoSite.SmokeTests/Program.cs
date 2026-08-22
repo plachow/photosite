@@ -967,8 +967,8 @@ try
         firstPhoto,
         111,
         [
-            (0.1, 0.2, 0.3, 0.4, 0.9, faceEmbedding, null),
-            (0.5, 0.5, 0.2, 0.2, 0.8, new float[] { 0f, 1f, 0f, 0f }, null)
+            (0.1, 0.2, 0.3, 0.4, 0.9, faceEmbedding, null, null),
+            (0.5, 0.5, 0.2, 0.2, 0.8, new float[] { 0f, 1f, 0f, 0f }, null, null)
         ]);
     Assert(
         (await repository.GetFaceScanStatesAsync())[firstPhoto] == 111,
@@ -1000,7 +1000,7 @@ try
     await repository.ReplaceFacesAsync(
         firstPhoto,
         222,
-        [(0.1, 0.1, 0.1, 0.1, 0.5, faceEmbedding, personId)]);
+        [(0.1, 0.1, 0.1, 0.1, 0.5, faceEmbedding, personId, null)]);
     Assert(
         (await repository.GetPeopleAsync())[0].Name == "Renamed Person"
         && (await repository.GetFaceScanStatesAsync())[firstPhoto] == 222
@@ -1015,11 +1015,121 @@ try
         && (await repository.GetUnassignedFacesAsync()).Count == 1,
         "Removing a person should return their faces to the unnamed pool.");
 
+    var suggestPersonId = await repository.GetOrCreatePersonAsync(
+        "Suggested Person");
+    await repository.ReplaceFacesAsync(
+        firstPhoto,
+        444,
+        [
+            (0.1, 0.1, 0.2, 0.2, 0.9, faceEmbedding, null, suggestPersonId),
+            (0.6, 0.6, 0.2, 0.2, 0.8, new float[] { 0f, 1f, 0f, 0f },
+                suggestPersonId, null)
+        ]);
+    var suggestedFaces = await repository.GetSuggestedFacesAsync();
+    Assert(
+        suggestedFaces.Count == 1
+        && suggestedFaces[0].SuggestedPersonId == suggestPersonId
+        && (await repository.GetUnassignedFacesAsync()).Count == 0
+        && (await repository.GetPersonPhotoPathsAsync(suggestPersonId))
+            .SequenceEqual([firstPhoto]),
+        "A suggested face waits apart from both the unnamed pool and the "
+        + "person.");
+
+    await repository.AssignFacesAsync([suggestedFaces[0].Id], suggestPersonId);
+    Assert(
+        (await repository.GetSuggestedFacesAsync()).Count == 0
+        && (await repository.GetFacesForPathAsync(firstPhoto)).Count == 2
+        && (await repository.GetFacesForPersonAsync(suggestPersonId)).Count == 2,
+        "Confirming a suggestion assigns the face and clears the suggestion.");
+
+    await repository.ReplaceFacesAsync(
+        firstPhoto,
+        555,
+        [(0.1, 0.1, 0.2, 0.2, 0.9, faceEmbedding, null, suggestPersonId)]);
+    await repository.ClearSuggestionsAsync(
+        [(await repository.GetSuggestedFacesAsync())[0].Id]);
+    Assert(
+        (await repository.GetSuggestedFacesAsync()).Count == 0
+        && (await repository.GetUnassignedFacesAsync()).Count == 1,
+        "Rejecting a suggestion returns the face to the unnamed pool.");
+    await repository.DeletePersonAsync(suggestPersonId);
+
+    var regionArguments = new List<string>();
+    ExifToolMetadataWriter.AppendRegionArguments(
+        regionArguments,
+        """{"width":4000,"height":3000,"regions":[{"name":"Jana Nováková","x":0.25,"y":0.2,"w":0.1,"h":0.15}]}""");
+    Assert(
+        regionArguments[0] == "-XMP-mwg-rs:RegionInfo="
+        && regionArguments.Contains("-XMP-mwg-rs:RegionAppliedToDimensionsW=4000")
+        && regionArguments.Contains("-XMP-mwg-rs:RegionAppliedToDimensionsH=3000")
+        && regionArguments.Contains("-XMP-mwg-rs:RegionAppliedToDimensionsUnit=pixel")
+        && regionArguments.Contains("-XMP-mwg-rs:RegionName+=Jana Nováková")
+        && regionArguments.Contains("-XMP-mwg-rs:RegionType+=Face")
+        && regionArguments.Contains("-XMP-mwg-rs:RegionAreaX+=0.3")
+        && regionArguments.Contains("-XMP-mwg-rs:RegionAreaY+=0.275")
+        && regionArguments.Contains("-XMP-mwg-rs:RegionAreaW+=0.1")
+        && regionArguments.Contains("-XMP-mwg-rs:RegionAreaH+=0.15")
+        && regionArguments.Contains("-XMP-mwg-rs:RegionAreaUnit+=normalized"),
+        "MWG regions should be cleared first, then rebuilt centre-based with "
+        + "the photo's pixel dimensions.");
+
+    var clearedRegionArguments = new List<string>();
+    ExifToolMetadataWriter.AppendRegionArguments(clearedRegionArguments, null);
+    Assert(
+        clearedRegionArguments.SequenceEqual(["-XMP-mwg-rs:RegionInfo="]),
+        "A missing region payload should only clear the region struct.");
+
+    var regionsPayload = MetadataOutboxProcessor.MergePayload(
+    [
+        new MetadataOutboxEntry(
+            11,
+            "p",
+            "regions",
+            """{"width":100,"height":50,"regions":[]}""",
+            0)
+    ]);
+    Assert(
+        regionsPayload.RegionsChanged
+        && regionsPayload.RegionsJson
+            == """{"width":100,"height":50,"regions":[]}""",
+        "A regions outbox entry should hand its payload to the writer whole.");
+
+    var personCriteria = PhotoFilterCriteria.None with
+    {
+        PersonId = 7,
+        PersonName = "Jana"
+    };
+    var personFilterViewModel = new PhotoItemViewModel(
+        new PhotoRecord(firstPhoto, photoRoot, "first.png", ".png", 1, 1, 0, 1),
+        EditRecipe.Empty,
+        repository);
+    Assert(
+        personCriteria.IsActive
+        && personCriteria.Describe().Contains("Jana", StringComparison.Ordinal)
+        && !personCriteria.Equals(PhotoFilterCriteria.None)
+        && !MainViewModel.Matches(personFilterViewModel, personCriteria)
+        && !MainViewModel.Matches(
+            personFilterViewModel,
+            personCriteria,
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "other.jpg"
+            })
+        && MainViewModel.Matches(
+            personFilterViewModel,
+            personCriteria,
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                firstPhoto
+            })
+        && MainViewModel.Matches(personFilterViewModel, PhotoFilterCriteria.None),
+        "The person facet should pass only photos on the person's path list.");
+
     const string vanishedPhoto = @"Z:\nowhere\gone.jpg";
     await repository.ReplaceFacesAsync(
         vanishedPhoto,
         333,
-        [(0.1, 0.1, 0.1, 0.1, 0.9, faceEmbedding, null)]);
+        [(0.1, 0.1, 0.1, 0.1, 0.9, faceEmbedding, null, null)]);
     await repository.DeleteByPathsAsync([vanishedPhoto], CancellationToken.None);
     Assert(
         !(await repository.GetFaceScanStatesAsync()).ContainsKey(vanishedPhoto)

@@ -35,6 +35,12 @@ public sealed record PhotoFilterCriteria
 
     public string? SearchText { get; init; }
 
+    /// <summary>The person whose photos to show, from the face catalogue.</summary>
+    public long? PersonId { get; init; }
+
+    /// <summary>Carried alongside the id so the filter label can name them.</summary>
+    public string? PersonName { get; init; }
+
     /// <summary>
     /// Excludes rejects unless the user asked to see them, so a culling pass
     /// visibly shrinks the gallery as it goes.
@@ -52,6 +58,7 @@ public sealed record PhotoFilterCriteria
         || TakenFrom is not null
         || TakenTo is not null
         || HideRejected
+        || PersonId is not null
         || !string.IsNullOrWhiteSpace(SearchText);
 
     /// <summary>
@@ -108,6 +115,11 @@ public sealed record PhotoFilterCriteria
             parts.Add("date");
         }
 
+        if (PersonId is not null)
+        {
+            parts.Add(PersonName ?? "person");
+        }
+
         if (HideRejected)
         {
             parts.Add("no rejects");
@@ -128,6 +140,7 @@ public sealed record PhotoFilterCriteria
         && Nullable.Equals(TakenFrom, other.TakenFrom)
         && Nullable.Equals(TakenTo, other.TakenTo)
         && HideRejected == other.HideRejected
+        && PersonId == other.PersonId
         && string.Equals(SearchText, other.SearchText, StringComparison.Ordinal);
 
     public override int GetHashCode() =>

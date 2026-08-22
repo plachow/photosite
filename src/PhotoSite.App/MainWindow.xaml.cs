@@ -155,6 +155,17 @@ public partial class MainWindow : Window
     {
         try
         {
+            if (bool.TryParse(
+                    await catalog.GetSettingAsync(ShowFacesSetting),
+                    out var showFaces)
+                && showFaces)
+            {
+                FacesOverlayButton.IsChecked = true;
+                PreviewViewer.ShowFaceOverlays = true;
+            }
+
+            await LoadPersonFilterChoicesAsync();
+
             var savedCopyDestination = await catalog.GetSettingAsync(
                 LastCopyDestinationSetting);
             if (!string.IsNullOrWhiteSpace(savedCopyDestination)
@@ -2124,6 +2135,106 @@ public partial class MainWindow : Window
         dialog.ShowDialog();
         // Keyword writes go through the outbox; exiftool's file rewrites come
         // back in through the folder watcher, so no manual refresh is needed.
+        // People and assignments may have changed, though.
+        peopleNames.Clear();
+        _ = LoadPersonFilterChoicesAsync();
+        _ = UpdateFaceOverlaysAsync();
+    }
+
+    private const string ShowFacesSetting = "show_faces";
+    private readonly Dictionary<long, string> peopleNames = new();
+
+    private async void OnFacesOverlayToggled(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        var show = FacesOverlayButton.IsChecked == true;
+        PreviewViewer.ShowFaceOverlays = show;
+        await PersistSettingAsync(ShowFacesSetting, show.ToString());
+        await UpdateFaceOverlaysAsync();
+    }
+
+    /// <summary>
+    /// Feeds the viewer the face frames of the photo on screen; names come
+    /// from a people cache invalidated when the People window closes.
+    /// </summary>
+    private async Task UpdateFaceOverlaysAsync()
+    {
+        if (FacesOverlayButton.IsChecked != true
+            || viewModel.SelectedPhoto is not { IsTransient: false } photo)
+        {
+            PreviewViewer.FaceOverlays = null;
+            return;
+        }
+
+        try
+        {
+            var path = photo.Path;
+            var faces = await catalog.GetFacesForPathAsync(path);
+            if (peopleNames.Count == 0)
+            {
+                foreach (var person in await catalog.GetPeopleAsync())
+                {
+                    peopleNames[person.Id] = person.Name;
+                }
+            }
+
+            if (!string.Equals(
+                    viewModel.SelectedPhoto?.Path,
+                    path,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                // The selection moved on while the query ran.
+                return;
+            }
+
+            PreviewViewer.FaceOverlays = faces
+                .Select(face => new Controls.FaceOverlay(
+                    face.X,
+                    face.Y,
+                    face.Width,
+                    face.Height,
+                    ResolveOverlayName(face),
+                    IsSuggestion: face.PersonId is null
+                                  && face.SuggestedPersonId is not null))
+                .ToArray();
+        }
+        catch (Exception)
+        {
+            PreviewViewer.FaceOverlays = null;
+        }
+    }
+
+    private string? ResolveOverlayName(Domain.FaceRecord face) =>
+        face.PersonId is { } personId
+        && peopleNames.TryGetValue(personId, out var name)
+            ? name
+            : face.SuggestedPersonId is { } suggestedId
+              && peopleNames.TryGetValue(suggestedId, out var suggested)
+                ? suggested
+                : null;
+
+    private async Task LoadPersonFilterChoicesAsync()
+    {
+        try
+        {
+            var people = await catalog.GetPeopleAsync();
+            var selectedId = (PersonFilterBox.SelectedItem as PersonRecord)?.Id;
+            isFilterUiUpdating = true;
+            PersonFilterBox.ItemsSource = people;
+            PersonFilterBox.SelectedItem = people.FirstOrDefault(
+                person => person.Id == selectedId);
+            isFilterUiUpdating = false;
+            if (selectedId is not null && PersonFilterBox.SelectedItem is null)
+            {
+                // The filtered person no longer exists.
+                ApplyFilterFromUi();
+            }
+        }
+        catch (Exception)
+        {
+            // The filter facet simply stays empty when the catalogue balks.
+        }
     }
 
     private void OnManagerTabClick(object sender, RoutedEventArgs eventArgs) =>
@@ -3002,6 +3113,7 @@ public partial class MainWindow : Window
         {
             copySelectionCancellation?.Cancel();
             AttachEditorTarget(viewModel.SelectedPhoto);
+            _ = UpdateFaceOverlaysAsync();
             return;
         }
 

@@ -41,7 +41,8 @@ public sealed partial class PhotoCatalogRepository
         string path,
         long modifiedUtcTicks,
         IReadOnlyList<(double X, double Y, double Width, double Height,
-            double Confidence, float[] Embedding, long? PersonId)> faces,
+            double Confidence, float[] Embedding, long? PersonId,
+            long? SuggestedPersonId)> faces,
         CancellationToken cancellationToken = default)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
@@ -64,10 +65,10 @@ public sealed partial class PhotoCatalogRepository
                 """
                 INSERT INTO faces (
                     path, x, y, w, h, confidence, embedding, person_id,
-                    created_utc)
+                    suggested_person_id, created_utc)
                 VALUES (
                     $path, $x, $y, $w, $h, $confidence, $embedding, $person,
-                    $created);
+                    $suggested, $created);
                 """;
             insert.Parameters.AddWithValue("$path", path);
             insert.Parameters.AddWithValue(
@@ -84,6 +85,9 @@ public sealed partial class PhotoCatalogRepository
                 "$embedding",
                 SqliteType.Blob);
             var person = insert.Parameters.Add("$person", SqliteType.Integer);
+            var suggested = insert.Parameters.Add(
+                "$suggested",
+                SqliteType.Integer);
 
             foreach (var face in faces)
             {
@@ -96,6 +100,9 @@ public sealed partial class PhotoCatalogRepository
                 embedding.Value = EmbeddingToBlob(face.Embedding);
                 person.Value = face.PersonId is { } personId
                     ? personId
+                    : DBNull.Value;
+                suggested.Value = face.SuggestedPersonId is { } suggestedId
+                    ? suggestedId
                     : DBNull.Value;
                 await insert.ExecuteNonQueryAsync(cancellationToken);
             }
@@ -126,10 +133,15 @@ public sealed partial class PhotoCatalogRepository
         await transaction.CommitAsync(cancellationToken);
     }
 
+    /// <summary>
+    /// Faces with neither a person nor a pending suggestion - the pool the
+    /// unnamed-group clustering works on.
+    /// </summary>
     public Task<IReadOnlyList<FaceRecord>> GetUnassignedFacesAsync(
         CancellationToken cancellationToken = default) =>
         QueryFacesAsync(
-            "WHERE person_id IS NULL",
+            "WHERE person_id IS NULL AND suggested_person_id IS NULL",
+            null,
             null,
             cancellationToken);
 
@@ -137,6 +149,16 @@ public sealed partial class PhotoCatalogRepository
         CancellationToken cancellationToken = default) =>
         QueryFacesAsync(
             "WHERE person_id IS NOT NULL",
+            null,
+            null,
+            cancellationToken);
+
+    /// <summary>Borderline matches waiting for a yes or no.</summary>
+    public Task<IReadOnlyList<FaceRecord>> GetSuggestedFacesAsync(
+        CancellationToken cancellationToken = default) =>
+        QueryFacesAsync(
+            "WHERE person_id IS NULL AND suggested_person_id IS NOT NULL",
+            null,
             null,
             cancellationToken);
 
@@ -146,18 +168,51 @@ public sealed partial class PhotoCatalogRepository
         QueryFacesAsync(
             "WHERE person_id = $person",
             personId,
+            null,
             cancellationToken);
+
+    public Task<IReadOnlyList<FaceRecord>> GetFacesForPathAsync(
+        string path,
+        CancellationToken cancellationToken = default) =>
+        QueryFacesAsync(
+            "WHERE path = $path",
+            null,
+            path,
+            cancellationToken);
+
+    /// <summary>The photos a person appears in, for the gallery filter.</summary>
+    public async Task<IReadOnlyList<string>> GetPersonPhotoPathsAsync(
+        long personId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            "SELECT DISTINCT path FROM faces WHERE person_id = $person;";
+        command.Parameters.AddWithValue("$person", personId);
+        var paths = new List<string>();
+        await using var reader = await command.ExecuteReaderAsync(
+            cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            paths.Add(reader.GetString(0));
+        }
+
+        return paths;
+    }
 
     private async Task<IReadOnlyList<FaceRecord>> QueryFacesAsync(
         string whereClause,
         long? personParameter,
+        string? pathParameter,
         CancellationToken cancellationToken)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText =
             $"""
-            SELECT id, path, x, y, w, h, confidence, embedding, person_id
+            SELECT id, path, x, y, w, h, confidence, embedding, person_id,
+                   suggested_person_id
             FROM faces
             {whereClause}
             ORDER BY confidence DESC;
@@ -165,6 +220,11 @@ public sealed partial class PhotoCatalogRepository
         if (personParameter is { } person)
         {
             command.Parameters.AddWithValue("$person", person);
+        }
+
+        if (pathParameter is { } pathValue)
+        {
+            command.Parameters.AddWithValue("$path", pathValue);
         }
 
         var faces = new List<FaceRecord>();
@@ -181,7 +241,8 @@ public sealed partial class PhotoCatalogRepository
                 reader.GetDouble(5),
                 reader.GetDouble(6),
                 BlobToEmbedding((byte[])reader.GetValue(7)),
-                reader.IsDBNull(8) ? null : reader.GetInt64(8)));
+                reader.IsDBNull(8) ? null : reader.GetInt64(8),
+                reader.IsDBNull(9) ? null : reader.GetInt64(9)));
         }
 
         return faces;
@@ -266,8 +327,14 @@ public sealed partial class PhotoCatalogRepository
             cancellationToken);
         await using var command = connection.CreateCommand();
         command.Transaction = (SqliteTransaction)transaction;
+        // Deciding on a face settles it either way, so any pending
+        // suggestion is cleared alongside the assignment.
         command.CommandText =
-            "UPDATE faces SET person_id = $person WHERE id = $id;";
+            """
+            UPDATE faces
+            SET person_id = $person, suggested_person_id = NULL
+            WHERE id = $id;
+            """;
         command.Parameters.AddWithValue(
             "$person",
             personId is { } person ? person : DBNull.Value);
@@ -280,6 +347,53 @@ public sealed partial class PhotoCatalogRepository
         }
 
         await transaction.CommitAsync(cancellationToken);
+    }
+
+    /// <summary>Rejects suggestions: the faces return to the unnamed pool.</summary>
+    public async Task ClearSuggestionsAsync(
+        IReadOnlyCollection<long> faceIds,
+        CancellationToken cancellationToken = default)
+    {
+        if (faceIds.Count == 0)
+        {
+            return;
+        }
+
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            "UPDATE faces SET suggested_person_id = NULL WHERE id = $id;";
+        var id = command.Parameters.Add("$id", SqliteType.Integer);
+        foreach (var faceId in faceIds)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            id.Value = faceId;
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// Queues the photograph's named face rectangles for exiftool to write
+    /// as MWG regions; the payload carries the pixel dimensions and the
+    /// normalized top-left rectangles with their names.
+    /// </summary>
+    public async Task EnqueueFaceRegionsAsync(
+        string path,
+        string payloadJson,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(
+            cancellationToken);
+        await EnqueueOutboxAsync(
+            connection,
+            (SqliteTransaction)transaction,
+            path,
+            "regions",
+            payloadJson,
+            cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        MetadataOutboxChanged?.Invoke();
     }
 
     public async Task RenamePersonAsync(
@@ -310,6 +424,8 @@ public sealed partial class PhotoCatalogRepository
         command.CommandText =
             """
             UPDATE faces SET person_id = NULL WHERE person_id = $id;
+            UPDATE faces SET suggested_person_id = NULL
+            WHERE suggested_person_id = $id;
             DELETE FROM people WHERE id = $id;
             """;
         command.Parameters.AddWithValue("$id", personId);

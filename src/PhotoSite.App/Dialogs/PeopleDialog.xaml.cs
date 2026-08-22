@@ -64,6 +64,21 @@ public partial class PeopleDialog : Window
             $"{Person.Name} · {Person.FaceCount:N0} faces";
     }
 
+    private sealed class SuggestionRow
+    {
+        public required IReadOnlyList<ImageSource> Thumbnails { get; init; }
+
+        public required string QuestionText { get; init; }
+
+        public required IReadOnlyList<long> FaceIds { get; init; }
+
+        public required IReadOnlyList<string> Paths { get; init; }
+
+        public required long PersonId { get; init; }
+
+        public required string PersonName { get; init; }
+    }
+
     private async Task RefreshAsync()
     {
         try
@@ -73,6 +88,46 @@ public partial class PeopleDialog : Window
                 .Select(person => new PersonRow(person))
                 .ToArray();
             var knownNames = people.Select(person => person.Name).ToArray();
+
+            var previewCache = new Dictionary<string, BitmapSource?>(
+                StringComparer.OrdinalIgnoreCase);
+
+            // Borderline matches first: each suggested person gets one card
+            // with a plain yes or no.
+            var suggested = await catalog.GetSuggestedFacesAsync();
+            var peopleById = people.ToDictionary(
+                person => person.Id,
+                person => person.Name);
+            var suggestionRows = new List<SuggestionRow>();
+            foreach (var group in suggested
+                         .Where(face => face.SuggestedPersonId is { } id
+                                        && peopleById.ContainsKey(id))
+                         .GroupBy(face => face.SuggestedPersonId!.Value))
+            {
+                var faces = group.ToArray();
+                var name = peopleById[group.Key];
+                suggestionRows.Add(new SuggestionRow
+                {
+                    Thumbnails = await LoadFaceThumbnailsAsync(
+                        faces,
+                        previewCache),
+                    QuestionText = faces.Length == 1
+                        ? $"Is this {name}?"
+                        : $"Are these {faces.Length:N0} faces {name}?",
+                    FaceIds = faces.Select(face => face.Id).ToArray(),
+                    Paths = faces
+                        .Select(face => face.Path)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToArray(),
+                    PersonId = group.Key,
+                    PersonName = name
+                });
+            }
+
+            SuggestionList.ItemsSource = suggestionRows;
+            SuggestionsHeader.Visibility = suggestionRows.Count > 0
+                ? Visibility.Visible
+                : Visibility.Collapsed;
 
             var unassigned = await catalog.GetUnassignedFacesAsync();
             var clusters = FaceClusterer.Cluster(unassigned);
@@ -84,8 +139,6 @@ public partial class PeopleDialog : Window
                           - groups.Sum(cluster => cluster.Faces.Count);
 
             var rows = new List<ClusterRow>(groups.Length);
-            var previewCache = new Dictionary<string, BitmapSource?>(
-                StringComparer.OrdinalIgnoreCase);
             foreach (var cluster in groups)
             {
                 rows.Add(new ClusterRow
@@ -143,12 +196,17 @@ public partial class PeopleDialog : Window
         }
     }
 
-    private async Task<IReadOnlyList<ImageSource>> LoadClusterThumbnailsAsync(
+    private Task<IReadOnlyList<ImageSource>> LoadClusterThumbnailsAsync(
         FaceCluster cluster,
+        Dictionary<string, BitmapSource?> previewCache) =>
+        LoadFaceThumbnailsAsync(cluster.Faces, previewCache);
+
+    private async Task<IReadOnlyList<ImageSource>> LoadFaceThumbnailsAsync(
+        IReadOnlyList<FaceRecord> faces,
         Dictionary<string, BitmapSource?> previewCache)
     {
         var thumbnails = new List<ImageSource>(ThumbnailsPerCluster);
-        foreach (var face in cluster.Faces.Take(ThumbnailsPerCluster))
+        foreach (var face in faces.Take(ThumbnailsPerCluster))
         {
             if (!previewCache.TryGetValue(face.Path, out var preview))
             {
@@ -204,6 +262,7 @@ public partial class PeopleDialog : Window
         var skipped = 0;
         var facesFound = 0;
         var autoAssigned = 0;
+        var suggestionsFound = 0;
         var failures = 0;
 
         try
@@ -244,15 +303,30 @@ public partial class PeopleDialog : Window
                         token);
 
                     var rows = new List<(double, double, double, double,
-                        double, float[], long?)>(detected.Count);
+                        double, float[], long?, long?)>(detected.Count);
                     var namesForPhoto = new List<string>();
                     foreach (var face in detected)
                     {
-                        var match = MatchPerson(face.Embedding, centroids);
+                        var (match, similarity) = FindBestPerson(
+                            face.Embedding,
+                            centroids);
+                        long? assignedId = null;
+                        long? suggestedId = null;
                         if (match is { } person)
                         {
-                            autoAssigned++;
-                            namesForPhoto.Add(person.Name);
+                            if (similarity >= FaceClusterer.AutoMatchThreshold)
+                            {
+                                assignedId = person.Id;
+                                autoAssigned++;
+                                namesForPhoto.Add(person.Name);
+                            }
+                            else
+                            {
+                                // Probably them, but not certainly enough to
+                                // write a name into a file unasked.
+                                suggestedId = person.Id;
+                                suggestionsFound++;
+                            }
                         }
 
                         rows.Add((
@@ -262,7 +336,8 @@ public partial class PeopleDialog : Window
                             face.Height,
                             face.Confidence,
                             face.Embedding,
-                            match?.Id));
+                            assignedId,
+                            suggestedId));
                     }
 
                     await catalog.ReplaceFacesAsync(
@@ -274,6 +349,11 @@ public partial class PeopleDialog : Window
                                  StringComparer.OrdinalIgnoreCase))
                     {
                         await WritePersonKeywordAsync(photo.Path, name);
+                    }
+
+                    if (namesForPhoto.Count > 0)
+                    {
+                        await WriteFaceRegionsAsync(photo.Path);
                     }
 
                     facesFound += detected.Count;
@@ -316,6 +396,11 @@ public partial class PeopleDialog : Window
             summary.Add($"{autoAssigned:N0} matched to known people");
         }
 
+        if (suggestionsFound > 0)
+        {
+            summary.Add($"{suggestionsFound:N0} to confirm below");
+        }
+
         if (skipped > 0)
         {
             summary.Add($"{skipped:N0} already scanned");
@@ -353,12 +438,12 @@ public partial class PeopleDialog : Window
             .ToArray();
     }
 
-    private static PersonCentroid? MatchPerson(
+    private static (PersonCentroid? Match, double Similarity) FindBestPerson(
         float[] embedding,
         IReadOnlyList<PersonCentroid> centroids)
     {
         PersonCentroid? best = null;
-        var bestSimilarity = FaceClusterer.AutoMatchThreshold;
+        var bestSimilarity = FaceClusterer.SuggestThreshold;
         foreach (var candidate in centroids)
         {
             var similarity = FaceMath.Cosine(embedding, candidate.Centroid);
@@ -369,7 +454,7 @@ public partial class PeopleDialog : Window
             }
         }
 
-        return best;
+        return (best, best is null ? 0 : bestSimilarity);
     }
 
     /// <summary>
@@ -390,6 +475,99 @@ public partial class PeopleDialog : Window
         {
             await catalog.UpdateKeywordsAsync(path, merged);
         }
+    }
+
+    /// <summary>
+    /// Queues the photograph's named face rectangles as MWG regions, the
+    /// face-frame format Lightroom, digiKam and Windows understand. Needs
+    /// the pixel dimensions from the catalogue; without them the write is
+    /// skipped rather than guessed.
+    /// </summary>
+    private async Task WriteFaceRegionsAsync(string path)
+    {
+        var record = await catalog.GetByPathAsync(path);
+        if (record is not
+            {
+                PixelWidth: > 0 and { } width,
+                PixelHeight: > 0 and { } height
+            })
+        {
+            return;
+        }
+
+        var faces = await catalog.GetFacesForPathAsync(path);
+        var names = (await catalog.GetPeopleAsync()).ToDictionary(
+            person => person.Id,
+            person => person.Name);
+        var regions = faces
+            .Where(face => face.PersonId is { } id && names.ContainsKey(id))
+            .Select(face => new
+            {
+                name = names[face.PersonId!.Value],
+                x = face.X,
+                y = face.Y,
+                w = face.Width,
+                h = face.Height
+            })
+            .ToArray();
+        await catalog.EnqueueFaceRegionsAsync(
+            path,
+            System.Text.Json.JsonSerializer.Serialize(
+                new { width, height, regions }));
+    }
+
+    private async void OnConfirmSuggestionClick(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        if (sender is not FrameworkElement { Tag: SuggestionRow row })
+        {
+            return;
+        }
+
+        try
+        {
+            await catalog.AssignFacesAsync(row.FaceIds, row.PersonId);
+            foreach (var path in row.Paths)
+            {
+                await WritePersonKeywordAsync(path, row.PersonName);
+                await WriteFaceRegionsAsync(path);
+            }
+
+            DetailText.Text =
+                $"Confirmed {row.FaceIds.Count:N0} face(s) as "
+                + $"“{row.PersonName}”.";
+        }
+        catch (Exception exception)
+        {
+            DetailText.Text = $"Confirming failed: {exception.Message}";
+        }
+
+        await RefreshAsync();
+    }
+
+    private async void OnRejectSuggestionClick(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        if (sender is not FrameworkElement { Tag: SuggestionRow row })
+        {
+            return;
+        }
+
+        try
+        {
+            await catalog.ClearSuggestionsAsync(row.FaceIds);
+            DetailText.Text =
+                $"{row.FaceIds.Count:N0} face(s) returned to the unnamed "
+                + "groups.";
+        }
+        catch (Exception exception)
+        {
+            DetailText.Text = $"Rejecting failed: {exception.Message}";
+        }
+
+        await RefreshAsync();
     }
 
     private async void OnAssignClusterClick(
@@ -415,6 +593,7 @@ public partial class PeopleDialog : Window
             foreach (var path in row.Paths)
             {
                 await WritePersonKeywordAsync(path, name);
+                await WriteFaceRegionsAsync(path);
             }
 
             DetailText.Text =
@@ -458,12 +637,14 @@ public partial class PeopleDialog : Window
             await catalog.RenamePersonAsync(row.Person.Id, name);
             // The new name joins the keywords of the person's photos; the
             // old keyword is left in place rather than silently rewritten.
+            // The face regions are rebuilt whole, so they carry the new name.
             var faces = await catalog.GetFacesForPersonAsync(row.Person.Id);
             foreach (var path in faces
                          .Select(face => face.Path)
                          .Distinct(StringComparer.OrdinalIgnoreCase))
             {
                 await WritePersonKeywordAsync(path, name);
+                await WriteFaceRegionsAsync(path);
             }
         }
         catch (Exception exception)

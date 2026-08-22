@@ -72,12 +72,28 @@ one transaction, so a crash cannot lose a rating.
 **Face scan** (`FaceEngine`, `PeopleDialog`) — finding the faces in a folder
 with the local YuNet detector and describing each with an SFace embedding
 (OpenCV Zoo models under `tools/models`; nothing leaves the machine). Faces
-live only in the catalogue (`faces`, `people`, `face_scans`); unnamed ones are
+live in the catalogue (`faces`, `people`, `face_scans`); unnamed ones are
 grouped by embedding similarity for bulk naming, and naming a group writes the
 person's name into each photograph's keywords through the outbox. During a
 scan, a face that clearly matches an already-named person (cosine ≥ 0.5) is
 assigned automatically; unchanged files are skipped, so the sweep is
 incremental. Rejected synonyms: *face tagging*, *people detection*.
+
+**Suggestion** — a face whose best match falls between SFace's same-identity
+boundary (cosine 0.363) and the auto-assign threshold (0.5). It waits in
+neither the person nor the unnamed pool until the user answers yes or no in
+the People window; only a yes writes the name anywhere. Deciding a face either
+way always clears its suggestion.
+
+**Region** — a named face rectangle written into the file as an MWG region
+(`XMP-mwg-rs`, centre-based normalized areas plus the pixel dimensions), the
+format Lightroom, digiKam and Windows read face frames from. Regions travel
+through the outbox as one whole payload per photograph and are rebuilt from
+the catalogue on every change, so a rename carries into the files while a
+removed person's frames follow the same leave-what-was-written policy as
+keywords only when nothing rewrites that photo again. The gallery can filter
+by person, and the viewer frames a photo's faces on demand (the Faces toggle):
+blue for named, amber for suggestions, grey for unnamed.
 
 **Describe** (`OllamaVisionService`, `AiTagDialog`) — asking a vision model on
 a local Ollama server to fill a photograph's title, description and keywords.

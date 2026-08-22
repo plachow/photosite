@@ -1308,6 +1308,12 @@
                 </ItemsControl.ItemTemplate>
               </ItemsControl>
 
+              <TextBlock Style="{StaticResource SectionHeaderStyle}" Text="PERSON" />
+              <ComboBox x:Name="PersonFilterBox"
+                        Margin="0,0,0,8"
+                        DisplayMemberPath="Name"
+                        SelectionChanged="OnFilterChanged" />
+
               <TextBlock Style="{StaticResource SectionHeaderStyle}" Text="CAMERA" />
               <ComboBox x:Name="CameraFilterBox"
                         Margin="0,0,0,8"
@@ -1577,6 +1583,13 @@
                                    Value="{Binding SelectedPhoto.Rating,
                                                    Mode=TwoWay}" />
             <Separator Margin="8,2" />
+            <ToggleButton x:Name="FacesOverlayButton"
+                          AutomationProperties.Name="Show face frames"
+                          Content="Faces"
+                          Style="{StaticResource EditorSelectToggleButtonStyle}"
+                          ToolTip="Frame the known faces on the photograph"
+                          Checked="OnFacesOverlayToggled"
+                          Unchecked="OnFacesOverlayToggled" />
             <ToggleButton x:Name="MetadataPanelButton"
                           AutomationProperties.Name="Edit photo metadata"
                           Content="Info"
