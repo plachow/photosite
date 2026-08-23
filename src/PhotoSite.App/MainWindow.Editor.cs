@@ -128,11 +128,17 @@ public partial class MainWindow
         histogramCancellation?.Cancel();
         histogramCancellation?.Dispose();
         histogramCancellation = new CancellationTokenSource();
-        await Histogram.UpdateAsync(
-                PreviewViewer.DisplayedBitmap,
-                histogramCancellation.Token)
-            .ConfigureAwait(false);
-        await Dispatcher.InvokeAsync(UpdateClippingText);
+        try
+        {
+            await Histogram.UpdateAsync(
+                    PreviewViewer.DisplayedBitmap,
+                    histogramCancellation.Token)
+                .ConfigureAwait(false);
+            await Dispatcher.InvokeAsync(UpdateClippingText);
+        }
+        catch (OperationCanceledException)
+        {
+        }
     }
 
     private void UpdateClippingText()
