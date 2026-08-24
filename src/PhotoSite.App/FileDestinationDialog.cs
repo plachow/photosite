@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using Microsoft.Win32;
+using PhotoSite.Infrastructure;
 using PhotoSite.Services;
 
 namespace PhotoSite;
@@ -27,6 +28,7 @@ internal sealed class FileDestinationDialog : Window
         ResizeMode = ResizeMode.NoResize;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         ShowInTaskbar = false;
+        DarkWindowChrome.Apply(this);
 
         var panel = new Grid
         {

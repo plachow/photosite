@@ -25,7 +25,17 @@ original file is only touched by an explicit save, export or batch run.
   all applied to the whole selection at once;
 - an information panel with capture date, camera, lens, the exposure triangle,
   dimensions, file size and GPS with an **open in map** action, and in-place
-  editing of title, description and keywords;
+  editing of title, description and keywords; a split bar with ˄/˅ steppers
+  resizes it against the preview (and against the editor's adjustment tabs),
+  and the description box grows with it;
+- a 📍≈ badge on photos whose position is probably approximate - the phone's
+  GPS reported a coarse error estimate, its fix was already minutes old when
+  the shutter fired, or the position came from cell towers or Wi-Fi instead
+  of satellites (GPSProcessingMethod) - with a Location filter to collect
+  them for review;
+  the Map button grades the verdict with a traffic-light dot (green precise,
+  amber approximate, red probably far off) and disables without coordinates;
+  typing corrected coordinates clears the mark;
 - Explorer-style file operations: copy, move, rename, duplicate, delete to the
   Recycle Bin, create folder, and reveal in File Explorer.
 
@@ -121,7 +131,18 @@ an English description that is kept in the catalogue only, so search finds
 photos in either language while the file carries just the primary one. During
 a run the dialog shows the average pace and the projected finish time, and it
 ends with a summary of how many photos were described, how fast, and when.
-Nothing ever leaves the machine.
+
+A photo with GPS coordinates is first reverse-geocoded offline through the
+geolocation database bundled with exiftool, and the model receives the
+verified place as text - "in or near Waikīkī (Honolulu County, Hawaii,
+United States)", or "about 39 km east of Vestmannaeyjar" when the nearest
+catalogued place is far away - so captions can name the real place instead of
+a generic "mountain landscape". The resolved names also lead the keyword list
+(neighbourhood, county, region, country), which makes every photo findable by
+place; the nearest place is left out of the keywords when it is over 10 km
+away, and a probably-approximate GPS fix softens the wording to "probably"
+rather than pretending precision. The model is told to never invent any other
+place names. Nothing ever leaves the machine.
 
 ## Editor
 
@@ -301,4 +322,9 @@ Work still planned:
 - rendering only the visible region while zoomed to 100 %, so adjusting a
   slider at full resolution costs no more than at fit-to-window;
 - an RGB curve editor on top of the curve model the pipeline already applies;
-- lens-profile database for automatic distortion and vignetting correction.
+- lens-profile database for automatic distortion and vignetting correction;
+- richer place context for the AI describer on top of the offline
+  geolocation it already has: opt-in OSM Overpass enrichment (named peaks,
+  lakes, waterfalls near the spot), cached per ~1 km grid cell in the
+  catalogue so a whole vacation costs a few dozen queries, with a fully
+  offline GeoNames natural-features extract as the no-network alternative.

@@ -3,6 +3,10 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <UseWPF>true</UseWPF>
+    <!-- The same camera as the AppIcon drawing in App.xaml, rasterized; it
+         gives the exe its Explorer icon and every window its title bar and
+         taskbar glyph. Regenerate when the drawing changes. -->
+    <ApplicationIcon>Assets\PhotoSite.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <RootNamespace>PhotoSite</RootNamespace>
     <AssemblyName>PhotoSite</AssemblyName>

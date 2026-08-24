@@ -26,7 +26,11 @@ internal readonly record struct PhotoFileMetadata(
     double? FocalLength = null,
     double? Aperture = null,
     double? ExposureSeconds = null,
-    int? Iso = null);
+    int? Iso = null,
+    double? GpsErrorMeters = null,
+    double? GpsFixAgeSeconds = null,
+    string? GpsProcessingMethod = null,
+    double? GpsAltitude = null);
 
 internal static class PhotoMetadataReader
 {
@@ -34,7 +38,7 @@ internal static class PhotoMetadataReader
     /// Bump whenever the reader learns to extract new fields so that
     /// records indexed by an older reader get re-read once.
     /// </summary>
-    internal const int CurrentVersion = 4;
+    internal const int CurrentVersion = 6;
 
     private static readonly string[] XmpCreateDateKeys =
     [
@@ -88,6 +92,11 @@ internal static class PhotoMetadataReader
         var fromFile = ReadDescriptive(metadata);
         var sidecar = ReadSidecar(path);
         var technical = ReadTechnical(metadata);
+        // Coordinates taken over from a sidecar are somebody's deliberate
+        // correction, so the file's own fix evidence no longer describes them.
+        var gps = sidecar?.Latitude is null
+            ? ReadGpsEvidence(metadata)
+            : default;
         return new PhotoFileMetadata(
             ReadTakenAt(metadata),
             sidecar?.Rating > 0 ? sidecar.Value.Rating : fromFile.Rating,
@@ -106,7 +115,110 @@ internal static class PhotoMetadataReader
             technical.FocalLength,
             technical.Aperture,
             technical.ExposureSeconds,
-            technical.Iso);
+            technical.Iso,
+            gps.ErrorMeters,
+            gps.FixAgeSeconds,
+            gps.ProcessingMethod,
+            gps.Altitude);
+    }
+
+    /// <summary>
+    /// The file's own testimony about how good its GPS fix was: the
+    /// receiver's horizontal error estimate, how stale the fix already was
+    /// when the shutter fired - a phone pulled out mid-walk stamps the
+    /// location it last knew, hundreds of metres back - and where the
+    /// position came from at all (GPSProcessingMethod: satellites, Wi-Fi or
+    /// a cell tower), together with the altitude, whose absence gives a pure
+    /// tower guess away. All feed
+    /// <see cref="PhotoRecord.LocationAccuracy"/>.
+    /// </summary>
+    internal static (double? ErrorMeters, double? FixAgeSeconds,
+        string? ProcessingMethod, double? Altitude) ReadGpsEvidence(
+        IReadOnlyCollection<MetadataExtractor.Directory> metadata)
+    {
+        var gps = metadata.OfType<GpsDirectory>()
+            .FirstOrDefault(directory =>
+                directory.GetGeoLocation() is { IsZero: false });
+        if (gps is null)
+        {
+            return default;
+        }
+
+        var error = TryGetDouble(gps, GpsDirectory.TagHPositioningError);
+        var method = Normalize(
+            gps.GetDescription(GpsDirectory.TagProcessingMethod));
+        var altitude = TryGetDouble(gps, GpsDirectory.TagAltitude);
+
+        double? age = null;
+        if (gps.TryGetGpsDate(out var fixUtc))
+        {
+            foreach (var directory in metadata.OfType<ExifSubIfdDirectory>())
+            {
+                if (directory.TryGetDateTime(
+                        ExifDirectoryBase.TagDateTimeOriginal,
+                        out var taken))
+                {
+                    age = ComputeGpsFixAgeSeconds(
+                        taken,
+                        fixUtc,
+                        ParseUtcOffset(directory.GetString(
+                            ExifDirectoryBase.TagTimeZoneOriginal)));
+                    break;
+                }
+            }
+        }
+
+        return (error, age, method, altitude);
+    }
+
+    /// <summary>
+    /// How old the GPS fix already was when the photo was taken. The photo
+    /// time is local wall time while the GPS stamp is UTC; when the file
+    /// carries no OffsetTimeOriginal, the unknown timezone is assumed to be
+    /// whatever multiple of a quarter hour lands closest, which measures
+    /// staleness up to ±7.5 minutes - plenty for a fix from minutes ago.
+    /// </summary>
+    internal static double? ComputeGpsFixAgeSeconds(
+        DateTime takenLocal,
+        DateTime fixUtc,
+        TimeSpan? utcOffset)
+    {
+        var difference = takenLocal - fixUtc;
+        if (utcOffset is { } offset)
+        {
+            // A stamp slightly ahead of the photo clock is just skew between
+            // the phone clock and GPS time, not a fix from the future.
+            return Math.Max(0, (difference - offset).TotalSeconds);
+        }
+
+        var quarterHours = Math.Round(difference.TotalMinutes / 15);
+        var residualMinutes = difference.TotalMinutes - (quarterHours * 15);
+        return Math.Max(0, residualMinutes * 60);
+    }
+
+    /// <summary>Parses an EXIF OffsetTime string such as "+02:00".</summary>
+    internal static TimeSpan? ParseUtcOffset(string? value)
+    {
+        var trimmed = value?.Trim();
+        if (string.IsNullOrEmpty(trimmed))
+        {
+            return null;
+        }
+
+        if (trimmed is "Z")
+        {
+            return TimeSpan.Zero;
+        }
+
+        var negative = trimmed[0] == '-';
+        var body = trimmed[0] is '+' or '-' ? trimmed[1..] : trimmed;
+        return TimeSpan.TryParseExact(
+            body,
+            @"hh\:mm",
+            CultureInfo.InvariantCulture,
+            out var parsed)
+            ? negative ? -parsed : parsed
+            : null;
     }
 
     private readonly record struct DescriptiveMetadata(

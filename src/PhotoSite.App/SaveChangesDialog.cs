@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using PhotoSite.Infrastructure;
 
 namespace PhotoSite;
 
@@ -29,6 +30,7 @@ public sealed class SaveChangesDialog : Window
         ResizeMode = ResizeMode.NoResize;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         ShowInTaskbar = false;
+        DarkWindowChrome.Apply(this);
 
         var panel = new Grid
         {

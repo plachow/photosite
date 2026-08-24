@@ -144,81 +144,6 @@
       <Setter Property="MinWidth" Value="56" />
     </Style>
 
-    <Style x:Key="EditorSelectToggleButtonStyle"
-           TargetType="ToggleButton">
-      <Setter Property="MinWidth" Value="62" />
-      <Setter Property="Height" Value="32" />
-      <Setter Property="Margin" Value="2" />
-      <Setter Property="Padding" Value="12,0" />
-      <Setter Property="Background" Value="#292D36" />
-      <Setter Property="BorderBrush" Value="#454B57" />
-      <Setter Property="BorderThickness" Value="1" />
-      <Setter Property="Foreground" Value="#F2F4F8" />
-      <Setter Property="Cursor" Value="Hand" />
-      <Setter Property="FocusVisualStyle" Value="{x:Null}" />
-      <Setter Property="Template">
-        <Setter.Value>
-          <ControlTemplate TargetType="ToggleButton">
-            <Border x:Name="ButtonChrome"
-                    Padding="{TemplateBinding Padding}"
-                    Background="{TemplateBinding Background}"
-                    BorderBrush="{TemplateBinding BorderBrush}"
-                    BorderThickness="{TemplateBinding BorderThickness}"
-                    CornerRadius="7"
-                    SnapsToDevicePixels="True">
-              <ContentPresenter HorizontalAlignment="Center"
-                                VerticalAlignment="Center"
-                                RecognizesAccessKey="True" />
-            </Border>
-            <ControlTemplate.Triggers>
-              <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="ButtonChrome"
-                        Property="Background"
-                        Value="#343A46" />
-                <Setter TargetName="ButtonChrome"
-                        Property="BorderBrush"
-                        Value="#5D6675" />
-              </Trigger>
-              <Trigger Property="IsChecked" Value="True">
-                <Setter TargetName="ButtonChrome"
-                        Property="Background"
-                        Value="#246A9B" />
-                <Setter TargetName="ButtonChrome"
-                        Property="BorderBrush"
-                        Value="#8BC8FF" />
-              </Trigger>
-              <MultiTrigger>
-                <MultiTrigger.Conditions>
-                  <Condition Property="IsChecked" Value="True" />
-                  <Condition Property="IsMouseOver" Value="True" />
-                </MultiTrigger.Conditions>
-                <Setter TargetName="ButtonChrome"
-                        Property="Background"
-                        Value="#2C78AC" />
-                <Setter TargetName="ButtonChrome"
-                        Property="BorderBrush"
-                        Value="#B4DCFF" />
-              </MultiTrigger>
-              <Trigger Property="IsPressed" Value="True">
-                <Setter TargetName="ButtonChrome"
-                        Property="Background"
-                        Value="#1D557D" />
-              </Trigger>
-              <Trigger Property="IsKeyboardFocused" Value="True">
-                <Setter TargetName="ButtonChrome"
-                        Property="BorderBrush"
-                        Value="{StaticResource AccentBrush}" />
-              </Trigger>
-              <Trigger Property="IsEnabled" Value="False">
-                <Setter Property="Opacity" Value="0.38" />
-                <Setter Property="Cursor" Value="Arrow" />
-              </Trigger>
-            </ControlTemplate.Triggers>
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
-    </Style>
-
     <Style x:Key="GalleryToolButtonStyle"
            TargetType="ToggleButton"
            BasedOn="{StaticResource EditorSelectToggleButtonStyle}">
@@ -227,6 +152,40 @@
       <Setter Property="Padding" Value="7,0" />
       <Setter Property="FontFamily" Value="Segoe UI Symbol" />
       <Setter Property="FontSize" Value="13" />
+    </Style>
+
+    <!-- The ˄ / ˅ steppers riding on the info-pane split bars. -->
+    <Style x:Key="SplitBarChevronButtonStyle" TargetType="Button">
+      <Setter Property="Width" Value="34" />
+      <Setter Property="Height" Value="13" />
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="FontSize" Value="9" />
+      <Setter Property="Foreground" Value="#9299A7" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="Focusable" Value="False" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border Background="{TemplateBinding Background}"
+                    CornerRadius="3"
+                    SnapsToDevicePixels="True">
+              <ContentPresenter Margin="0,-1,0,0"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center" />
+            </Border>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+      <Style.Triggers>
+        <Trigger Property="IsMouseOver" Value="True">
+          <Setter Property="Background" Value="#3E4656" />
+          <Setter Property="Foreground" Value="#F2F4F8" />
+        </Trigger>
+        <Trigger Property="IsEnabled" Value="False">
+          <Setter Property="Foreground" Value="#555B66" />
+        </Trigger>
+      </Style.Triggers>
     </Style>
 
     <Style x:Key="PhotoContextMenuStyle"
@@ -522,6 +481,29 @@
           </Viewbox>
         </MenuItem.Icon>
       </MenuItem>
+      <MenuItem Padding="10,6"
+                Style="{StaticResource PhotoContextMenuItemStyle}"
+                Header="Find people…"
+                Tag="FindPeople"
+                Click="OnPeopleContextClick">
+        <MenuItem.Icon>
+          <Viewbox Width="17" Height="17">
+            <Canvas Width="18" Height="18">
+              <Ellipse Canvas.Left="5.4"
+                       Canvas.Top="2"
+                       Width="7.2"
+                       Height="7.2"
+                       Stroke="#8BC8FF"
+                       StrokeThickness="1.4" />
+              <Path Data="M2.8,16 C3.3,12.4 5.7,10.8 9,10.8 C12.3,10.8 14.7,12.4 15.2,16"
+                    Stroke="#8BC8FF"
+                    StrokeThickness="1.4"
+                    StrokeStartLineCap="Round"
+                    StrokeEndLineCap="Round" />
+            </Canvas>
+          </Viewbox>
+        </MenuItem.Icon>
+      </MenuItem>
       <Separator Style="{StaticResource PhotoContextMenuSeparatorStyle}" />
       <MenuItem Padding="10,6"
                 Style="{StaticResource PhotoContextMenuItemStyle}"
@@ -718,21 +700,33 @@
                               Color="Black" />
           </TextBlock.Effect>
         </TextBlock>
-        <!-- The expression warning: someone blinked or is not smiling. A
-             photo whose faces all pass shows nothing. -->
-        <Border Margin="5,0,5,4"
-                Padding="4,1,4,2"
-                HorizontalAlignment="Right"
-                VerticalAlignment="Bottom"
-                Background="#CC14161C"
-                CornerRadius="8"
-                IsHitTestVisible="False"
-                Visibility="{Binding ExpressionGlyph,
-                                     Converter={StaticResource NullToCollapsed}}">
-          <TextBlock FontFamily="Segoe UI Emoji"
-                     FontSize="11"
-                     Text="{Binding ExpressionGlyph}" />
-        </Border>
+        <!-- The quiet warnings: a probably-approximate GPS fix; someone
+             blinked or is not smiling. A photo that passes shows nothing. -->
+        <StackPanel Margin="5,0,5,4"
+                    HorizontalAlignment="Right"
+                    VerticalAlignment="Bottom"
+                    IsHitTestVisible="False"
+                    Orientation="Horizontal">
+          <Border Padding="4,1,4,2"
+                  Background="#CC14161C"
+                  CornerRadius="8"
+                  Visibility="{Binding IsLocationApproximate,
+                                       Converter={StaticResource BoolToVisibility}}">
+            <TextBlock FontFamily="Segoe UI Emoji"
+                       FontSize="11"
+                       Text="📍≈" />
+          </Border>
+          <Border Margin="3,0,0,0"
+                  Padding="4,1,4,2"
+                  Background="#CC14161C"
+                  CornerRadius="8"
+                  Visibility="{Binding ExpressionGlyph,
+                                       Converter={StaticResource NullToCollapsed}}">
+            <TextBlock FontFamily="Segoe UI Emoji"
+                       FontSize="11"
+                       Text="{Binding ExpressionGlyph}" />
+          </Border>
+        </StackPanel>
         <!-- Who is on the photo, quietly in the corner of the thumbnail. -->
         <ItemsControl Margin="5,0,5,4"
                       HorizontalAlignment="Left"
@@ -1068,7 +1062,7 @@
                   AutomationProperties.Name="People"
                   Content="People"
                   Click="OnPeopleClick"
-                  ToolTip="Find faces in this folder and name the people on them" />
+                  ToolTip="Find faces in the selected photos and name the people on them; with nothing selected the whole folder is scanned" />
           <Button Margin="1,0"
                   Padding="10,4"
                   AutomationProperties.Name="Create folder"
@@ -1297,11 +1291,13 @@
           </Grid>
         </Border>
 
-        <Popup AllowsTransparency="True"
+        <Popup x:Name="FilterPopup"
+               AllowsTransparency="True"
                IsOpen="{Binding IsChecked, ElementName=FilterButton}"
                Placement="Bottom"
                PlacementTarget="{Binding ElementName=FilterButton}"
-               StaysOpen="False">
+               StaysOpen="False"
+               Closed="OnFilterPopupClosed">
           <Border Width="340"
                   Background="{StaticResource PanelBrush}"
                   BorderBrush="#4A5160"
@@ -1438,6 +1434,31 @@
                              Click="OnFilterChanged" />
               </StackPanel>
 
+              <TextBlock Style="{StaticResource SectionHeaderStyle}"
+                         Text="LOCATION" />
+              <!-- From the GPS evidence read out of the file: the receiver's
+                   own error estimate, or a fix already minutes stale when the
+                   shutter fired. -->
+              <StackPanel Margin="0,0,0,10" Orientation="Horizontal">
+                <RadioButton x:Name="AnyLocationBox"
+                             Content="Any"
+                             GroupName="LocationFilter"
+                             IsChecked="True"
+                             Click="OnFilterChanged" />
+                <RadioButton x:Name="PreciseLocationBox"
+                             Margin="10,0,0,0"
+                             Content="Precise"
+                             GroupName="LocationFilter"
+                             ToolTip="Has coordinates and nothing suggests they are off"
+                             Click="OnFilterChanged" />
+                <RadioButton x:Name="ApproximateLocationBox"
+                             Margin="10,0,0,0"
+                             Content="Approximate"
+                             GroupName="LocationFilter"
+                             ToolTip="The GPS fix was coarse or stale when the photo was taken"
+                             Click="OnFilterChanged" />
+              </StackPanel>
+
               <TextBlock Style="{StaticResource SectionHeaderStyle}" Text="CAMERA" />
               <ComboBox x:Name="CameraFilterBox"
                         Margin="0,0,0,8"
@@ -1457,8 +1478,15 @@
                   <ColumnDefinition Width="Auto" />
                   <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
+                <!-- Landing the caret in a box opens its calendar right
+                     underneath; typing a year or year-month keeps working
+                     and just pages the calendar along. -->
                 <TextBox x:Name="DateFromBox"
-                         TextChanged="OnFilterChanged"
+                         GotKeyboardFocus="OnDateBoxGotFocus"
+                         LostKeyboardFocus="OnDateBoxLostFocus"
+                         PreviewKeyDown="OnDateBoxPreviewKeyDown"
+                         PreviewMouseLeftButtonUp="OnDateBoxMouseUp"
+                         TextChanged="OnDateBoxTextChanged"
                          ToolTip="From, e.g. 2025, 2025-07 or 2025-07-04" />
                 <TextBlock Grid.Column="1"
                            Margin="8,0"
@@ -1467,8 +1495,28 @@
                            Text="—" />
                 <TextBox x:Name="DateToBox"
                          Grid.Column="2"
-                         TextChanged="OnFilterChanged"
+                         GotKeyboardFocus="OnDateBoxGotFocus"
+                         LostKeyboardFocus="OnDateBoxLostFocus"
+                         PreviewKeyDown="OnDateBoxPreviewKeyDown"
+                         PreviewMouseLeftButtonUp="OnDateBoxMouseUp"
+                         TextChanged="OnDateBoxTextChanged"
                          ToolTip="To, e.g. 2025, 2025-07 or 2025-07-04" />
+                <Popup x:Name="DateFromCalendarPopup"
+                       AllowsTransparency="True"
+                       Placement="Bottom"
+                       PlacementTarget="{Binding ElementName=DateFromBox}"
+                       StaysOpen="True">
+                  <Calendar x:Name="DateFromCalendar"
+                            SelectedDatesChanged="OnDateCalendarSelectionChanged" />
+                </Popup>
+                <Popup x:Name="DateToCalendarPopup"
+                       AllowsTransparency="True"
+                       Placement="Bottom"
+                       PlacementTarget="{Binding ElementName=DateToBox}"
+                       StaysOpen="True">
+                  <Calendar x:Name="DateToCalendar"
+                            SelectedDatesChanged="OnDateCalendarSelectionChanged" />
+                </Popup>
               </Grid>
               <TextBlock Margin="0,0,0,12"
                          FontSize="11"
@@ -1564,22 +1612,11 @@
               </Style>
             </RowDefinition.Style>
           </RowDefinition>
-          <RowDefinition Height="*" />
-          <RowDefinition>
-            <RowDefinition.Style>
-              <Style TargetType="RowDefinition">
-                <Setter Property="Height" Value="Auto" />
-                <Style.Triggers>
-                  <DataTrigger Binding="{Binding IsEditorMode}" Value="True">
-                    <Setter Property="Height" Value="0" />
-                  </DataTrigger>
-                  <DataTrigger Binding="{Binding IsFullscreenMode}" Value="True">
-                    <Setter Property="Height" Value="0" />
-                  </DataTrigger>
-                </Style.Triggers>
-              </Style>
-            </RowDefinition.Style>
-          </RowDefinition>
+          <RowDefinition x:Name="ManagerPreviewRow" Height="*" />
+          <!-- The split bar and the info pane; the SplitPaneController owns
+               these heights, and zeroes them for the editor and fullscreen. -->
+          <RowDefinition x:Name="ManagerInfoSplitterRow" Height="13" />
+          <RowDefinition x:Name="ManagerInfoRow" Height="*" />
         </Grid.RowDefinitions>
 
         <Border Grid.Row="0"
@@ -1695,18 +1732,6 @@
                     ToolTip="Upload current image to Imgur and copy URL (Ctrl+U)"
                     Click="OnUploadToImgurClick" />
             <Separator Margin="8,2" />
-            <TextBlock Margin="5,0"
-                       VerticalAlignment="Center"
-                       Foreground="#C8CDD8"
-                       Text="Rating" />
-            <controls:RatingPicker Margin="4,0,0,0"
-                                   AutomationProperties.Name="Photo rating"
-                                   RatingToolTipFormat="Set rating to {0}"
-                                   ShowUnrated="False"
-                                   UnratedToolTip="Clear rating"
-                                   Value="{Binding SelectedPhoto.Rating,
-                                                   Mode=TwoWay}" />
-            <Separator Margin="8,2" />
             <ToggleButton x:Name="FacesOverlayButton"
                           AutomationProperties.Name="Show face frames"
                           Content="Faces"
@@ -1769,6 +1794,14 @@
                                           Mode=TwoWay,
                                           UpdateSourceTrigger=LostFocus}"
                            ToolTip="Decimal degrees, e.g. 49.195061, 16.606836" />
+                  <TextBlock Margin="0,3,0,0"
+                             FontSize="11"
+                             Foreground="#FFD36A"
+                             Text="{Binding SelectedPhoto.LocationAccuracyText}"
+                             TextWrapping="Wrap"
+                             Visibility="{Binding SelectedPhoto.LocationAccuracyText,
+                                                  Converter={StaticResource NullToCollapsed},
+                                                  FallbackValue=Collapsed}" />
                   <TextBlock Margin="0,9,0,0"
                              FontSize="11"
                              Foreground="#79808D"
@@ -1780,8 +1813,39 @@
           </StackPanel>
         </Border>
 
-        <controls:PhotoViewer x:Name="PreviewViewer"
-                              Grid.Row="1"
+        <Grid Grid.Row="1">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto" />
+            <ColumnDefinition Width="*" />
+          </Grid.ColumnDefinitions>
+
+          <!-- The toolbox: one Photoshop-style column of drawing tools,
+               docked at the canvas edge so annotating never means opening
+               the Layers tab first. Buttons are built in code-behind. -->
+          <Border x:Name="EditorToolbox"
+                  Background="{StaticResource PanelBrush}"
+                  BorderBrush="#303541"
+                  BorderThickness="0,0,1,0"
+                  Padding="5,8">
+            <Border.Style>
+              <Style TargetType="Border">
+                <Setter Property="Visibility" Value="Collapsed" />
+                <Style.Triggers>
+                  <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                      <Condition Binding="{Binding IsEditorMode}" Value="True" />
+                      <Condition Binding="{Binding IsFullscreenMode}" Value="False" />
+                    </MultiDataTrigger.Conditions>
+                    <Setter Property="Visibility" Value="Visible" />
+                  </MultiDataTrigger>
+                </Style.Triggers>
+              </Style>
+            </Border.Style>
+            <StackPanel x:Name="AnnotationToolPanel" />
+          </Border>
+
+          <controls:PhotoViewer x:Name="PreviewViewer"
+                              Grid.Column="1"
                               SourcePath="{Binding SelectedPhoto.Path}"
                               SourceBitmap="{Binding SelectedPhoto.SourceBitmap}"
                               Tag="{Binding SelectedPhoto}"
@@ -1798,10 +1862,145 @@
                               DoubleClickCommand="{Binding GuardedToggleEditorCommand,
                                                           RelativeSource={RelativeSource AncestorType=Window}}" />
 
+          <!-- Parameters of the armed drawing tool, floating beside the
+               toolbox the way Photoshop keeps tool options near the canvas.
+               Shown from code-behind while a tool is armed or an object is
+               selected. -->
+          <Border x:Name="ToolOptionsPanel"
+                  Grid.Column="1"
+                  Width="252"
+                  Margin="10,10,0,0"
+                  Padding="12,10"
+                  HorizontalAlignment="Left"
+                  VerticalAlignment="Top"
+                  Panel.ZIndex="9"
+                  Background="#F0181C24"
+                  BorderBrush="#4A5160"
+                  BorderThickness="1"
+                  CornerRadius="8"
+                  Visibility="Collapsed">
+            <StackPanel>
+              <TextBlock x:Name="ToolOptionsHeader"
+                         Style="{StaticResource SectionHeaderStyle}"
+                         Text="TOOL" />
+              <StackPanel x:Name="AnnotationColorPanel"
+                          Margin="0,2,0,6"
+                          Orientation="Horizontal" />
+              <controls:AdjustmentSlider x:Name="StrokeWidthSlider"
+                                         Label="Stroke"
+                                         Minimum="1"
+                                         Maximum="30"
+                                         DefaultValue="4"
+                                         ValueFormat="0" />
+              <controls:AdjustmentSlider x:Name="LayerOpacitySlider"
+                                         Label="Opacity"
+                                         Minimum="5"
+                                         Maximum="100"
+                                         DefaultValue="100"
+                                         ValueFormat="0" />
+              <CheckBox x:Name="FillShapeBox"
+                        Margin="0,4,0,0"
+                        Content="Fill"
+                        Click="OnLayerAppearanceChanged" />
+              <StackPanel x:Name="TextOptionsPanel">
+                <controls:AdjustmentSlider x:Name="FontSizeSlider"
+                                           Label="Font size"
+                                           Minimum="1"
+                                           Maximum="25"
+                                           DefaultValue="5"
+                                           ValueFormat="0" />
+                <CheckBox x:Name="TextBackgroundBox"
+                          Margin="0,4,0,0"
+                          Content="Text plate"
+                          Click="OnLayerAppearanceChanged" />
+                <TextBox x:Name="LayerTextBox"
+                         Margin="0,6,0,0"
+                         AutomationProperties.Name="Text of the selected layer"
+                         TextChanged="OnLayerTextChanged"
+                         ToolTip="Text of the selected text layer" />
+              </StackPanel>
+            </StackPanel>
+          </Border>
+
+        <!-- Fullscreen has no info panel, so the culling verdicts already on
+             the photograph - rating, colour label, flag - sit quietly beside
+             the close button. A photo without them shows nothing. -->
+        <StackPanel x:Name="FullscreenBadges"
+                    Grid.Column="1"
+                    Margin="0,10,56,0"
+                    HorizontalAlignment="Right"
+                    VerticalAlignment="Top"
+                    Panel.ZIndex="10"
+                    DataContext="{Binding SelectedPhoto}"
+                    IsHitTestVisible="False"
+                    Orientation="Horizontal">
+          <StackPanel.Style>
+            <Style TargetType="StackPanel">
+              <Setter Property="Visibility" Value="Collapsed" />
+              <Style.Triggers>
+                <DataTrigger Binding="{Binding DataContext.IsFullscreenMode,
+                                               RelativeSource={RelativeSource
+                                                   AncestorType=Window}}"
+                             Value="True">
+                  <Setter Property="Visibility" Value="Visible" />
+                </DataTrigger>
+              </Style.Triggers>
+            </Style>
+          </StackPanel.Style>
+          <Border Height="34"
+                  Margin="0,0,8,0"
+                  Padding="12,0"
+                  Background="#B0151A22"
+                  BorderBrush="#4A5160"
+                  BorderThickness="1"
+                  CornerRadius="17"
+                  Visibility="{Binding RatingText,
+                                       Converter={StaticResource NullToCollapsed},
+                                       FallbackValue=Collapsed}">
+            <TextBlock VerticalAlignment="Center"
+                       FontSize="13"
+                       Foreground="#FFD36A"
+                       Text="{Binding RatingText}" />
+          </Border>
+          <Border Width="34"
+                  Height="34"
+                  Margin="0,0,8,0"
+                  Background="#B0151A22"
+                  BorderBrush="#4A5160"
+                  BorderThickness="1"
+                  CornerRadius="17"
+                  Visibility="{Binding HasColorLabel,
+                                       Converter={StaticResource BoolToVisibility},
+                                       FallbackValue=Collapsed}">
+            <Border Width="12"
+                    Height="12"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Background="{Binding ColorLabelBrush}"
+                    CornerRadius="6" />
+          </Border>
+          <Border Width="34"
+                  Height="34"
+                  Background="#B0151A22"
+                  BorderBrush="#4A5160"
+                  BorderThickness="1"
+                  CornerRadius="17"
+                  Visibility="{Binding FlagGlyph,
+                                       Converter={StaticResource NullToCollapsed},
+                                       FallbackValue=Collapsed}">
+            <TextBlock HorizontalAlignment="Center"
+                       VerticalAlignment="Center"
+                       FontFamily="Segoe UI Symbol"
+                       FontSize="14"
+                       Foreground="#F2F4F8"
+                       Text="{Binding FlagGlyph}" />
+          </Border>
+        </StackPanel>
+
         <!-- The mouse-only way out of the editor and the fullscreen preview;
              the keyboard equivalent is Esc. -->
         <Button x:Name="ClosePreviewButton"
-                Grid.Row="1"
+                Grid.Column="1"
                 Width="34"
                 Height="34"
                 Margin="0,10,14,0"
@@ -1850,17 +2049,66 @@
           </Button.Style>
         </Button>
 
+        <!-- Transient confirmation for keyboard culling in fullscreen and
+             the editor, where the info panel that would normally reflect
+             the change is hidden. Shown from code-behind, fades out. -->
+        <Border x:Name="ViewerOsd"
+                Grid.Column="1"
+                Margin="0,0,0,32"
+                Padding="20,10"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Bottom"
+                Panel.ZIndex="11"
+                Background="#C8151A22"
+                BorderBrush="#4A5160"
+                BorderThickness="1"
+                CornerRadius="8"
+                IsHitTestVisible="False"
+                Visibility="Collapsed">
+          <TextBlock x:Name="ViewerOsdText"
+                     FontSize="19"
+                     FontWeight="SemiBold"
+                     Foreground="#F2F4F8" />
+        </Border>
+        </Grid>
+
+        <!-- The split bar above the info panel: drag for any ratio, the
+             chevrons step the pane between folded, split and whole column. -->
+        <GridSplitter x:Name="ManagerInfoSplitter"
+                      Grid.Row="2"
+                      HorizontalAlignment="Stretch"
+                      VerticalAlignment="Stretch"
+                      AutomationProperties.Name="Resize the info panel"
+                      Background="#303541"
+                      ResizeBehavior="PreviousAndNext"
+                      ResizeDirection="Rows"
+                      ToolTip="Drag to resize the info panel" />
+        <StackPanel Grid.Row="2"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Orientation="Horizontal">
+          <Button x:Name="ManagerInfoExpandButton"
+                  AutomationProperties.Name="Expand the info panel"
+                  Content="˄"
+                  Style="{StaticResource SplitBarChevronButtonStyle}"
+                  ToolTip="Expand the info panel" />
+          <Button x:Name="ManagerInfoCollapseButton"
+                  Margin="4,0,0,0"
+                  AutomationProperties.Name="Shrink the info panel"
+                  Content="˅"
+                  Style="{StaticResource SplitBarChevronButtonStyle}"
+                  ToolTip="Shrink the info panel" />
+        </StackPanel>
+
         <!-- Info panel -->
         <Border x:Name="InfoPanel"
-                Grid.Row="2"
+                Grid.Row="3"
                 Background="{StaticResource PanelBrush}"
-                BorderBrush="#303541"
-                BorderThickness="0,1,0,0"
                 DataContext="{Binding SelectedPhoto}">
           <Grid>
             <Grid.RowDefinitions>
               <RowDefinition Height="Auto" />
-              <RowDefinition Height="Auto" />
+              <RowDefinition Height="*" />
             </Grid.RowDefinitions>
 
             <Border Padding="10,6" Background="#1F232B">
@@ -1895,8 +2143,28 @@
                     Visibility="{Binding IsChecked,
                                          ElementName=InfoPanelToggle,
                                          Converter={StaticResource BoolToVisibility}}">
-              <ScrollViewer MaxHeight="300" VerticalScrollBarVisibility="Auto">
-                <StackPanel Margin="0,0,8,0">
+              <ScrollViewer x:Name="ManagerInfoScroll"
+                            VerticalScrollBarVisibility="Auto">
+                <!-- Fills the pane, so the star-sized description row soaks
+                     up whatever height the splitter grants; scrolls only
+                     when even the minimum layout no longer fits. -->
+                <Grid Margin="0,0,8,0"
+                      MinHeight="{Binding ViewportHeight,
+                                          ElementName=ManagerInfoScroll}">
+                  <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" MinHeight="48" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                  </Grid.RowDefinitions>
                   <StackPanel Margin="0,0,0,8" Orientation="Horizontal">
                     <controls:RatingPicker AutomationProperties.Name="Rating"
                                            RatingToolTipFormat="Set rating to {0}"
@@ -1927,7 +2195,7 @@
                             ToolTip="Mark as rejected (X)" />
                   </StackPanel>
 
-                  <Grid>
+                  <Grid Grid.Row="1">
                     <Grid.ColumnDefinitions>
                       <ColumnDefinition Width="86" />
                       <ColumnDefinition Width="*" />
@@ -1998,25 +2266,42 @@
                       <Button Margin="8,0,0,0"
                               Padding="7,1"
                               AutomationProperties.Name="Open location in a map"
-                              Content="Map"
                               FontSize="11"
                               Click="OnOpenMapClick"
-                              ToolTip="Open these coordinates in a map"
-                              Visibility="{Binding HasLocation,
-                                                   Converter={StaticResource BoolToVisibility}}" />
+                              IsEnabled="{Binding HasLocation}"
+                              ToolTip="{Binding MapToolTip}"
+                              ToolTipService.ShowOnDisabled="True">
+                        <StackPanel Orientation="Horizontal">
+                          <!-- The verdict dot: green = nothing disputes the
+                               position, amber = probably approximate, red =
+                               probably far off. -->
+                          <Ellipse Width="7"
+                                   Height="7"
+                                   Margin="0,1,5,0"
+                                   VerticalAlignment="Center"
+                                   Fill="{Binding LocationAccuracyBrush}"
+                                   Visibility="{Binding HasLocation,
+                                                        Converter={StaticResource BoolToVisibility}}" />
+                          <TextBlock Text="Map" />
+                        </StackPanel>
+                      </Button>
                     </StackPanel>
                   </Grid>
 
-                  <TextBlock Margin="0,10,0,3"
+                  <TextBlock Grid.Row="2"
+                             Margin="0,10,0,3"
                              Style="{StaticResource InfoCaptionStyle}"
                              Text="Title" />
-                  <TextBox Text="{Binding Title,
+                  <TextBox Grid.Row="3"
+                           Text="{Binding Title,
                                           Mode=TwoWay,
                                           UpdateSourceTrigger=LostFocus}" />
-                  <TextBlock Margin="0,8,0,3"
+                  <TextBlock Grid.Row="4"
+                             Margin="0,8,0,3"
                              Style="{StaticResource InfoCaptionStyle}"
                              Text="Description" />
-                  <TextBox Height="48"
+                  <TextBox Grid.Row="5"
+                           MinHeight="48"
                            AcceptsReturn="True"
                            TextWrapping="Wrap"
                            VerticalContentAlignment="Top"
@@ -2024,18 +2309,28 @@
                            Text="{Binding Description,
                                           Mode=TwoWay,
                                           UpdateSourceTrigger=LostFocus}" />
-                  <TextBlock Margin="0,8,0,3"
+                  <TextBlock Grid.Row="6"
+                             Margin="0,8,0,3"
                              Style="{StaticResource InfoCaptionStyle}"
                              Text="Keywords (separate with ;)" />
-                  <TextBox Text="{Binding Keywords,
+                  <!-- Two lines minimum and wrapping, because AI keyword
+                       harvests routinely overflow a single line. -->
+                  <TextBox Grid.Row="7"
+                           MinHeight="48"
+                           TextWrapping="Wrap"
+                           VerticalContentAlignment="Top"
+                           VerticalScrollBarVisibility="Auto"
+                           Text="{Binding Keywords,
                                           Mode=TwoWay,
                                           UpdateSourceTrigger=LostFocus}" />
-                  <TextBlock Margin="0,8,0,3"
+                  <TextBlock Grid.Row="8"
+                             Margin="0,8,0,3"
                              Style="{StaticResource InfoCaptionStyle}"
                              Text="People"
                              Visibility="{Binding PeopleText,
                                                   Converter={StaticResource NullToCollapsed}}" />
-                  <ItemsControl ItemTemplate="{StaticResource PersonBadgeTemplate}"
+                  <ItemsControl Grid.Row="9"
+                                ItemTemplate="{StaticResource PersonBadgeTemplate}"
                                 ItemsSource="{Binding People}"
                                 Visibility="{Binding PeopleText,
                                                      Converter={StaticResource NullToCollapsed}}">
@@ -2045,18 +2340,20 @@
                       </ItemsPanelTemplate>
                     </ItemsControl.ItemsPanel>
                   </ItemsControl>
-                  <TextBlock Margin="0,8,0,3"
+                  <TextBlock Grid.Row="10"
+                             Margin="0,8,0,3"
                              Style="{StaticResource InfoCaptionStyle}"
                              Text="Expression"
                              Visibility="{Binding ExpressionText,
                                                   Converter={StaticResource NullToCollapsed}}" />
-                  <TextBlock FontSize="12"
+                  <TextBlock Grid.Row="11"
+                             FontSize="12"
                              Foreground="#C9CFDA"
                              Text="{Binding ExpressionText}"
                              TextWrapping="Wrap"
                              Visibility="{Binding ExpressionText,
                                                   Converter={StaticResource NullToCollapsed}}" />
-                </StackPanel>
+                </Grid>
               </ScrollViewer>
             </Border>
           </Grid>
@@ -2078,7 +2375,11 @@
         <Grid>
           <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
+            <!-- The tabs and the info pane split the rest; the
+                 SplitPaneController owns these heights. -->
+            <RowDefinition x:Name="EditorTabsRow" Height="*" />
+            <RowDefinition x:Name="EditorInfoSplitterRow" Height="13" />
+            <RowDefinition x:Name="EditorInfoRow" Height="*" />
           </Grid.RowDefinitions>
 
           <StackPanel Margin="10,10,10,6">
@@ -2293,59 +2594,11 @@
             <TabItem Header="Layers">
               <Grid Margin="8,8,8,10">
                 <Grid.RowDefinitions>
-                  <RowDefinition Height="Auto" />
-                  <RowDefinition Height="Auto" />
                   <RowDefinition Height="*" />
                   <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
-                <StackPanel>
-                  <TextBlock Style="{StaticResource SectionHeaderStyle}"
-                             Text="TOOLS" />
-                  <WrapPanel x:Name="AnnotationToolPanel" Margin="0,0,0,10" />
-                </StackPanel>
-
-                <StackPanel Grid.Row="1" Margin="0,0,0,10">
-                  <TextBlock Style="{StaticResource SectionHeaderStyle}"
-                             Text="APPEARANCE" />
-                  <StackPanel x:Name="AnnotationColorPanel"
-                              Margin="0,0,0,6"
-                              Orientation="Horizontal" />
-                  <controls:AdjustmentSlider x:Name="StrokeWidthSlider"
-                                             Label="Stroke"
-                                             Minimum="1"
-                                             Maximum="30"
-                                             DefaultValue="4"
-                                             ValueFormat="0" />
-                  <controls:AdjustmentSlider x:Name="LayerOpacitySlider"
-                                             Label="Opacity"
-                                             Minimum="5"
-                                             Maximum="100"
-                                             DefaultValue="100"
-                                             ValueFormat="0" />
-                  <controls:AdjustmentSlider x:Name="FontSizeSlider"
-                                             Label="Font size"
-                                             Minimum="1"
-                                             Maximum="25"
-                                             DefaultValue="5"
-                                             ValueFormat="0" />
-                  <StackPanel Margin="0,4,0,0" Orientation="Horizontal">
-                    <CheckBox x:Name="FillShapeBox"
-                              Content="Fill"
-                              Click="OnLayerAppearanceChanged" />
-                    <CheckBox x:Name="TextBackgroundBox"
-                              Margin="12,0,0,0"
-                              Content="Text plate"
-                              Click="OnLayerAppearanceChanged" />
-                  </StackPanel>
-                  <TextBox x:Name="LayerTextBox"
-                           Margin="0,6,0,0"
-                           AutomationProperties.Name="Text of the selected layer"
-                           TextChanged="OnLayerTextChanged"
-                           ToolTip="Text of the selected text layer" />
-                </StackPanel>
-
-                <Grid Grid.Row="2">
+                <Grid>
                   <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
@@ -2380,7 +2633,7 @@
                   </ListBox>
                 </Grid>
 
-                <WrapPanel Grid.Row="3" Margin="0,8,0,0">
+                <WrapPanel Grid.Row="1" Margin="0,8,0,0">
                   <Button Margin="0,0,4,0"
                           Padding="9,4"
                           Content="Up"
@@ -2402,6 +2655,276 @@
               </Grid>
             </TabItem>
           </TabControl>
+
+          <!-- The split bar above the editor's info pane, the same control
+               the Manager column carries. -->
+          <GridSplitter x:Name="EditorInfoSplitter"
+                        Grid.Row="2"
+                        HorizontalAlignment="Stretch"
+                        VerticalAlignment="Stretch"
+                        AutomationProperties.Name="Resize the info panel"
+                        Background="#303541"
+                        ResizeBehavior="PreviousAndNext"
+                        ResizeDirection="Rows"
+                        ToolTip="Drag to resize the info panel" />
+          <StackPanel Grid.Row="2"
+                      HorizontalAlignment="Center"
+                      VerticalAlignment="Center"
+                      Orientation="Horizontal">
+            <Button x:Name="EditorInfoExpandButton"
+                    AutomationProperties.Name="Expand the info panel"
+                    Content="˄"
+                    Style="{StaticResource SplitBarChevronButtonStyle}"
+                    ToolTip="Expand the info panel" />
+            <Button x:Name="EditorInfoCollapseButton"
+                    Margin="4,0,0,0"
+                    AutomationProperties.Name="Shrink the info panel"
+                    Content="˅"
+                    Style="{StaticResource SplitBarChevronButtonStyle}"
+                    ToolTip="Shrink the info panel" />
+          </StackPanel>
+
+          <!-- The same description-and-rating pane the Manager keeps at the
+               bottom right, so a photograph can be rated and captioned
+               without leaving the editor. -->
+          <Border Grid.Row="3">
+            <Grid>
+              <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+              </Grid.RowDefinitions>
+
+              <Border Padding="10,6" Background="#1F232B">
+                <Grid>
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                  </Grid.ColumnDefinitions>
+                  <TextBlock VerticalAlignment="Center"
+                             FontSize="12"
+                             FontWeight="SemiBold"
+                             Foreground="#F2F4F8"
+                             Text="{Binding FileName}"
+                             TextTrimming="CharacterEllipsis"
+                             ToolTip="{Binding Path}" />
+                  <ToggleButton x:Name="EditorInfoToggle"
+                                Grid.Column="1"
+                                MinWidth="26"
+                                Height="22"
+                                Margin="8,0,0,0"
+                                Padding="6,0"
+                                AutomationProperties.Name="Show photo information"
+                                Content="ⓘ"
+                                IsChecked="True"
+                                Style="{StaticResource EditorSelectToggleButtonStyle}"
+                                ToolTip="Show or hide the information panel" />
+                </Grid>
+              </Border>
+
+              <Border Grid.Row="1"
+                      Padding="10,8"
+                      Visibility="{Binding IsChecked,
+                                           ElementName=EditorInfoToggle,
+                                           Converter={StaticResource BoolToVisibility}}">
+                <ScrollViewer x:Name="EditorInfoScroll"
+                              VerticalScrollBarVisibility="Auto">
+                  <!-- Fills the pane, so the star-sized description row
+                       soaks up whatever height the splitter grants. -->
+                  <Grid Margin="0,0,8,0"
+                        MinHeight="{Binding ViewportHeight,
+                                            ElementName=EditorInfoScroll}">
+                    <Grid.RowDefinitions>
+                      <RowDefinition Height="Auto" />
+                      <RowDefinition Height="Auto" />
+                      <RowDefinition Height="Auto" />
+                      <RowDefinition Height="Auto" />
+                      <RowDefinition Height="Auto" />
+                      <RowDefinition Height="*" MinHeight="48" />
+                      <RowDefinition Height="Auto" />
+                      <RowDefinition Height="Auto" />
+                      <RowDefinition Height="Auto" />
+                      <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <StackPanel Margin="0,0,0,8" Orientation="Horizontal">
+                      <controls:RatingPicker AutomationProperties.Name="Rating"
+                                             RatingToolTipFormat="Set rating to {0}"
+                                             ShowUnrated="True"
+                                             UnratedToolTip="Clear rating"
+                                             Value="{Binding Rating, Mode=TwoWay}" />
+                      <StackPanel x:Name="EditorLabelPickerPanel"
+                                  Margin="14,0,0,0"
+                                  Orientation="Horizontal"
+                                  VerticalAlignment="Center" />
+                      <Button MinWidth="30"
+                              Height="24"
+                              Margin="12,0,0,0"
+                              Padding="6,0"
+                              AutomationProperties.Name="Mark as picked"
+                              Content="⚑"
+                              FontFamily="Segoe UI Symbol"
+                              Click="OnPickClick"
+                              ToolTip="Mark as picked (P)" />
+                      <Button MinWidth="30"
+                              Height="24"
+                              Margin="3,0,0,0"
+                              Padding="6,0"
+                              AutomationProperties.Name="Mark as rejected"
+                              Content="⛌"
+                              FontFamily="Segoe UI Symbol"
+                              Click="OnRejectClick"
+                              ToolTip="Mark as rejected (X)" />
+                    </StackPanel>
+
+                    <Grid Grid.Row="1">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="86" />
+                        <ColumnDefinition Width="*" />
+                      </Grid.ColumnDefinitions>
+                      <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                      </Grid.RowDefinitions>
+
+                      <TextBlock Style="{StaticResource InfoCaptionStyle}"
+                                 Text="Taken" />
+                      <TextBlock Grid.Column="1"
+                                 Style="{StaticResource InfoValueStyle}"
+                                 Text="{Binding TakenAtText, TargetNullValue=—}" />
+
+                      <TextBlock Grid.Row="1"
+                                 Style="{StaticResource InfoCaptionStyle}"
+                                 Text="Camera" />
+                      <TextBlock Grid.Row="1"
+                                 Grid.Column="1"
+                                 Style="{StaticResource InfoValueStyle}"
+                                 Text="{Binding CameraText, TargetNullValue=—}"
+                                 ToolTip="{Binding CameraText}" />
+
+                      <TextBlock Grid.Row="2"
+                                 Style="{StaticResource InfoCaptionStyle}"
+                                 Text="Lens" />
+                      <TextBlock Grid.Row="2"
+                                 Grid.Column="1"
+                                 Style="{StaticResource InfoValueStyle}"
+                                 Text="{Binding LensText, TargetNullValue=—}"
+                                 ToolTip="{Binding LensText}" />
+
+                      <TextBlock Grid.Row="3"
+                                 Style="{StaticResource InfoCaptionStyle}"
+                                 Text="Exposure" />
+                      <TextBlock Grid.Row="3"
+                                 Grid.Column="1"
+                                 Style="{StaticResource InfoValueStyle}"
+                                 Text="{Binding ExposureText, TargetNullValue=—}" />
+
+                      <TextBlock Grid.Row="4"
+                                 Style="{StaticResource InfoCaptionStyle}"
+                                 Text="Size" />
+                      <StackPanel Grid.Row="4"
+                                  Grid.Column="1"
+                                  Orientation="Horizontal">
+                        <TextBlock Style="{StaticResource InfoValueStyle}"
+                                   Text="{Binding DimensionsText, TargetNullValue=—}" />
+                        <TextBlock Margin="8,0,0,0"
+                                   Style="{StaticResource InfoValueStyle}"
+                                   Foreground="#9299A7"
+                                   Text="{Binding FileSizeText}" />
+                      </StackPanel>
+
+                      <TextBlock Grid.Row="5"
+                                 Style="{StaticResource InfoCaptionStyle}"
+                                 Text="GPS" />
+                      <StackPanel Grid.Row="5"
+                                  Grid.Column="1"
+                                  Orientation="Horizontal">
+                        <TextBlock Style="{StaticResource InfoValueStyle}"
+                                   Text="{Binding LocationText, TargetNullValue=—}" />
+                        <Button Margin="8,0,0,0"
+                                Padding="7,1"
+                                AutomationProperties.Name="Open location in a map"
+                                FontSize="11"
+                                Click="OnOpenMapClick"
+                                IsEnabled="{Binding HasLocation}"
+                                ToolTip="{Binding MapToolTip}"
+                                ToolTipService.ShowOnDisabled="True">
+                          <StackPanel Orientation="Horizontal">
+                            <!-- The verdict dot: green = nothing disputes the
+                                 position, amber = probably approximate, red =
+                                 probably far off. -->
+                            <Ellipse Width="7"
+                                     Height="7"
+                                     Margin="0,1,5,0"
+                                     VerticalAlignment="Center"
+                                     Fill="{Binding LocationAccuracyBrush}"
+                                     Visibility="{Binding HasLocation,
+                                                          Converter={StaticResource BoolToVisibility}}" />
+                            <TextBlock Text="Map" />
+                          </StackPanel>
+                        </Button>
+                      </StackPanel>
+                    </Grid>
+
+                    <TextBlock Grid.Row="2"
+                               Margin="0,10,0,3"
+                               Style="{StaticResource InfoCaptionStyle}"
+                               Text="Title" />
+                    <TextBox Grid.Row="3"
+                             Text="{Binding Title,
+                                            Mode=TwoWay,
+                                            UpdateSourceTrigger=LostFocus}" />
+                    <TextBlock Grid.Row="4"
+                               Margin="0,8,0,3"
+                               Style="{StaticResource InfoCaptionStyle}"
+                               Text="Description" />
+                    <TextBox Grid.Row="5"
+                             MinHeight="48"
+                             AcceptsReturn="True"
+                             TextWrapping="Wrap"
+                             VerticalContentAlignment="Top"
+                             VerticalScrollBarVisibility="Auto"
+                             Text="{Binding Description,
+                                            Mode=TwoWay,
+                                            UpdateSourceTrigger=LostFocus}" />
+                    <TextBlock Grid.Row="6"
+                               Margin="0,8,0,3"
+                               Style="{StaticResource InfoCaptionStyle}"
+                               Text="Keywords (separate with ;)" />
+                    <!-- Two lines minimum and wrapping, because AI keyword
+                         harvests routinely overflow a single line. -->
+                    <TextBox Grid.Row="7"
+                             MinHeight="48"
+                             TextWrapping="Wrap"
+                             VerticalContentAlignment="Top"
+                             VerticalScrollBarVisibility="Auto"
+                             Text="{Binding Keywords,
+                                            Mode=TwoWay,
+                                            UpdateSourceTrigger=LostFocus}" />
+                    <TextBlock Grid.Row="8"
+                               Margin="0,8,0,3"
+                               Style="{StaticResource InfoCaptionStyle}"
+                               Text="People"
+                               Visibility="{Binding PeopleText,
+                                                    Converter={StaticResource NullToCollapsed}}" />
+                    <ItemsControl Grid.Row="9"
+                                  ItemTemplate="{StaticResource PersonBadgeTemplate}"
+                                  ItemsSource="{Binding People}"
+                                  Visibility="{Binding PeopleText,
+                                                       Converter={StaticResource NullToCollapsed}}">
+                      <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                          <WrapPanel Orientation="Horizontal" />
+                        </ItemsPanelTemplate>
+                      </ItemsControl.ItemsPanel>
+                    </ItemsControl>
+                  </Grid>
+                </ScrollViewer>
+              </Border>
+            </Grid>
+          </Border>
         </Grid>
       </Border>
     </Grid>

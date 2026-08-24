@@ -198,7 +198,11 @@ internal sealed class ExifToolMetadataWriter
             arguments.Add("-all:all");
             // The pixels were already rotated on the way out; carrying the
             // source orientation over would rotate the output a second time.
-            arguments.Add("-Orientation=1");
+            // The '#' suffix forces the numeric value: without it exiftool
+            // matches "1" as an abbreviation of the printable conversions,
+            // where it uniquely hits "Rotate 180" and writes 3 instead.
+            arguments.Add("-Orientation#=1");
+            arguments.Add("-XMP-tiff:Orientation=");
             if (removeLocation)
             {
                 arguments.Add("-gps:all=");
@@ -333,6 +337,25 @@ internal sealed class ExifToolMetadataWriter
                     arguments.Add("-GPS:GPSLongitude=");
                     arguments.Add("-GPS:GPSLongitudeRef=");
                 }
+            }
+
+            // Whichever way the coordinates went, the old fix's error
+            // estimate, stamp, source and altitude described the position
+            // being replaced; left in place they would keep re-flagging the
+            // corrected photo as approximate on the next scan.
+            arguments.Add("-XMP:GPSHPositioningError=");
+            arguments.Add("-XMP:GPSDateTime=");
+            arguments.Add("-XMP:GPSProcessingMethod=");
+            arguments.Add("-XMP:GPSAltitude=");
+            arguments.Add("-XMP:GPSAltitudeRef=");
+            if (!sidecar)
+            {
+                arguments.Add("-GPS:GPSHPositioningError=");
+                arguments.Add("-GPS:GPSDateStamp=");
+                arguments.Add("-GPS:GPSTimeStamp=");
+                arguments.Add("-GPS:GPSProcessingMethod=");
+                arguments.Add("-GPS:GPSAltitude=");
+                arguments.Add("-GPS:GPSAltitudeRef=");
             }
         }
 

@@ -580,5 +580,9 @@ public partial class MainWindow
             BeforeAfterButton.IsChecked = false;
             SplitCompareButton.IsChecked = false;
         }
+
+        // Fullscreen keeps the editor session but is for looking, not
+        // annotating, so the tool options card follows the toolbox out.
+        UpdateToolOptionsPanel();
     }
 }

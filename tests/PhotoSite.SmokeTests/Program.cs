@@ -915,6 +915,115 @@ try
         "Fill-empty runs should skip only photos that already carry both a "
         + "title and a description.");
 
+    var waikikiPlace = ExifToolGeolocator.ParseGeoPlace(
+        """
+        [{"SourceFile":"x","GeolocationCity":"Waikīkī","GeolocationRegion":"Hawaii","GeolocationSubregion":"Honolulu County","GeolocationCountryCode":"US","GeolocationCountry":"United States","GeolocationDistance":0.96,"GeolocationBearing":313}]
+        """);
+    Assert(
+        waikikiPlace == new GeoPlace(
+            "Waikīkī",
+            "Honolulu County",
+            "Hawaii",
+            "United States",
+            0.96,
+            313),
+        "The geolocator should read the city, its parents, the distance and "
+        + "the bearing out of exiftool's JSON.");
+    Assert(
+        ExifToolGeolocator.ParseGeoPlace("[{}]") is null
+        && ExifToolGeolocator.ParseGeoPlace(string.Empty) is null
+        && ExifToolGeolocator.ParseGeoPlace("not json") is null,
+        "Geolocation output without a city should resolve to no place.");
+
+    Assert(
+        ExifToolGeolocator.PlaceKeywords(waikikiPlace!, includeCity: true)
+            .SequenceEqual(
+                ["Waikīkī", "Honolulu County", "Hawaii", "United States"])
+        && ExifToolGeolocator.PlaceKeywords(waikikiPlace!, includeCity: false)
+            .SequenceEqual(["Honolulu County", "Hawaii", "United States"])
+        && ExifToolGeolocator.PlaceKeywords(
+                waikikiPlace! with { DistanceKm = 39 },
+                includeCity: true)
+            .SequenceEqual(["Honolulu County", "Hawaii", "United States"]),
+        "Place keywords should run most specific first and leave out the "
+        + "town when it is distant or the fix is shaky.");
+
+    var vestmannaeyjarPlace = new GeoPlace(
+        "Vestmannaeyjar",
+        "Vestmannaeyjabær",
+        "South",
+        "Iceland",
+        39.05,
+        264);
+    Assert(
+        ExifToolGeolocator.CompassFromPlace(264) == "east"
+        && ExifToolGeolocator.CompassFromPlace(0) == "south"
+        && ExifToolGeolocator.CompassFromPlace(313) == "south-east",
+        "The compass names where the photo sits as seen from the place, the "
+        + "opposite of the database bearing.");
+
+    Assert(
+        OllamaVisionService.BuildPlaceContext(waikikiPlace, false)
+            == "in or near Waikīkī (Honolulu County, Hawaii, United States)"
+        && OllamaVisionService.BuildPlaceContext(vestmannaeyjarPlace, false)
+            == "about 39 km east of Vestmannaeyjar "
+            + "(Vestmannaeyjabær, South, Iceland)"
+        && OllamaVisionService.BuildPlaceContext(waikikiPlace, true)!
+            .StartsWith(
+                "probably in or near Waikīkī",
+                StringComparison.Ordinal)
+        && OllamaVisionService.BuildPlaceContext(null, false) is null,
+        "The place context reads \"in or near\" close by, becomes a distance "
+        + "and direction far away, and softens on an approximate fix.");
+
+    var augmentedInsights = OllamaVisionService.AugmentKeywords(
+        new AiPhotoInsights("t", "d", ["surf", "hawaii", "beach"]),
+        waikikiPlace,
+        approximateLocation: false);
+    Assert(
+        augmentedInsights.Keywords.SequenceEqual(
+            [
+                "Waikīkī", "Honolulu County", "Hawaii", "United States",
+                "surf", "beach"
+            ])
+        && OllamaVisionService.AugmentKeywords(
+                augmentedInsights,
+                null,
+                approximateLocation: false) == augmentedInsights,
+        "Place names should lead the keyword list, absorbing the model's "
+        + "duplicates, and no place should change nothing.");
+
+    var placedPrompt = OllamaVisionService.BuildPrompt(
+        "Czech",
+        includeEnglishDescription: false,
+        "in or near Waikīkī (Hawaii, United States)");
+    Assert(
+        placedPrompt.Contains(
+            "taken in or near Waikīkī",
+            StringComparison.Ordinal)
+        && placedPrompt.Contains(
+            "Beyond the verified place",
+            StringComparison.Ordinal)
+        && OllamaVisionService.BuildPrompt("Czech", false).Contains(
+            "Do not guess names of people or exact places",
+            StringComparison.Ordinal),
+        "The prompt should carry the verified place and relax the "
+        + "no-place-guessing rule only around it.");
+
+    var geolocator = new ExifToolGeolocator();
+    Assert(
+        geolocator.IsAvailable,
+        "The bundled exiftool should ship next to the test binary.");
+    var brnoPlace = await geolocator.ResolveAsync(
+        49.1951,
+        16.6068,
+        CancellationToken.None);
+    Assert(
+        brnoPlace is { City: "Brno", Country: "Czechia" }
+        && brnoPlace.DistanceKm < 5,
+        "Reverse geocoding Brno should resolve offline through the bundled "
+        + "database.");
+
     Assert(
         Math.Abs(FaceMath.Cosine([1f, 0f], [1f, 0f]) - 1) < 1e-9
         && Math.Abs(FaceMath.Cosine([1f, 0f], [0f, 1f])) < 1e-9
@@ -1104,7 +1213,21 @@ try
         (await repository.GetSuggestedFacesAsync()).Count == 0
         && (await repository.GetUnassignedFacesAsync()).Count == 1,
         "Rejecting a suggestion returns the face to the unnamed pool.");
+
+    var strangerFace = (await repository.GetUnassignedFacesAsync())[0];
+    await repository.IgnoreFacesAsync([strangerFace.Id]);
+    Assert(
+        (await repository.GetUnassignedFacesAsync()).Count == 0
+        && (await repository.GetFacesForPathAsync(firstPhoto)).Count == 1,
+        "An ignored stranger leaves the unnamed pool but keeps its row.");
+    await repository.AssignFacesAsync([strangerFace.Id], suggestPersonId);
+    Assert(
+        (await repository.GetFacesForPersonAsync(suggestPersonId)).Count == 1,
+        "Assigning a person to an ignored face brings it back.");
     await repository.DeletePersonAsync(suggestPersonId);
+    Assert(
+        (await repository.GetUnassignedFacesAsync()).Count == 1,
+        "Removing the person returns the once-ignored face to the pool.");
 
     var regionArguments = new List<string>();
     ExifToolMetadataWriter.AppendRegionArguments(
@@ -1222,6 +1345,57 @@ try
         "The expression facets pick everyone-passes on one side and "
         + "someone-fails on the other.");
 
+    var approximateCriteria = PhotoFilterCriteria.None with
+    {
+        ApproximateLocation = true
+    };
+    var preciseCriteria = PhotoFilterCriteria.None with
+    {
+        ApproximateLocation = false
+    };
+    var approximateViewModel = new PhotoItemViewModel(
+        new PhotoRecord(
+            firstPhoto,
+            photoRoot,
+            "first.png",
+            ".png",
+            1,
+            1,
+            0,
+            1,
+            Latitude: 49.2,
+            Longitude: 16.6,
+            GpsErrorMeters: 250.0),
+        EditRecipe.Empty,
+        repository);
+    var preciseViewModel = new PhotoItemViewModel(
+        new PhotoRecord(
+            firstPhoto,
+            photoRoot,
+            "first.png",
+            ".png",
+            1,
+            1,
+            0,
+            1,
+            Latitude: 49.2,
+            Longitude: 16.6),
+        EditRecipe.Empty,
+        repository);
+    Assert(
+        approximateCriteria.IsActive
+        && approximateCriteria.Describe().Contains(
+            "approximate GPS",
+            StringComparison.Ordinal)
+        && MainViewModel.Matches(approximateViewModel, approximateCriteria)
+        && !MainViewModel.Matches(approximateViewModel, preciseCriteria)
+        && MainViewModel.Matches(preciseViewModel, preciseCriteria)
+        && !MainViewModel.Matches(preciseViewModel, approximateCriteria)
+        && !MainViewModel.Matches(personFilterViewModel, approximateCriteria)
+        && !MainViewModel.Matches(personFilterViewModel, preciseCriteria),
+        "The location facet keeps approximate fixes on one side, precise "
+        + "ones on the other, and unlocated photos on neither.");
+
     const string vanishedPhoto = @"Z:\nowhere\gone.jpg";
     await repository.ReplaceFacesAsync(
         vanishedPhoto,
@@ -1297,6 +1471,15 @@ try
         && jpegArguments.Contains("-GPS:GPSLongitudeRef=W")
         && jpegArguments[^1] == @"C:\photos\a.jpg",
         "JPEG metadata arguments should cover XMP and Windows EXIF tags.");
+    Assert(
+        jpegArguments.Contains("-GPS:GPSHPositioningError=")
+        && jpegArguments.Contains("-GPS:GPSDateStamp=")
+        && jpegArguments.Contains("-GPS:GPSTimeStamp=")
+        && jpegArguments.Contains("-GPS:GPSProcessingMethod=")
+        && jpegArguments.Contains("-GPS:GPSAltitude=")
+        && jpegArguments.Contains("-XMP:GPSDateTime="),
+        "Writing coordinates should retire the replaced fix's error "
+        + "estimate, stamp, source and altitude.");
 
     var sidecarArguments = ExifToolMetadataWriter.BuildArguments(
         @"C:\photos\a.xmp",
@@ -1357,7 +1540,178 @@ try
         && PhotoMetadataReader.ParseXmpGpsCoordinate("-50.087") == -50.087,
         "XMP GPS coordinates should parse both DM and signed decimal formats.");
 
+    Assert(
+        PhotoMetadataReader.ParseUtcOffset("+02:00") == TimeSpan.FromHours(2)
+        && PhotoMetadataReader.ParseUtcOffset("-05:30")
+            == TimeSpan.FromMinutes(-330)
+        && PhotoMetadataReader.ParseUtcOffset("Z") == TimeSpan.Zero
+        && PhotoMetadataReader.ParseUtcOffset("  ") is null
+        && PhotoMetadataReader.ParseUtcOffset("garbage") is null,
+        "EXIF OffsetTime strings should parse with their sign.");
+
+    Assert(
+        PhotoMetadataReader.ComputeGpsFixAgeSeconds(
+            new DateTime(2026, 8, 22, 12, 10, 0),
+            new DateTime(2026, 8, 22, 10, 6, 0),
+            TimeSpan.FromHours(2)) == 240
+        && PhotoMetadataReader.ComputeGpsFixAgeSeconds(
+            new DateTime(2026, 8, 22, 12, 3, 0),
+            new DateTime(2026, 8, 22, 10, 0, 0),
+            utcOffset: null) == 180
+        && PhotoMetadataReader.ComputeGpsFixAgeSeconds(
+            new DateTime(2026, 8, 22, 12, 0, 0),
+            new DateTime(2026, 8, 22, 12, 0, 30),
+            TimeSpan.Zero) == 0,
+        "The GPS fix age should use the written offset when there is one, "
+        + "fall back to the nearest quarter-hour timezone, and read clock "
+        + "skew as fresh.");
+
+    var gpsEvidenceDirectory = new GpsDirectory();
+    gpsEvidenceDirectory.Set(
+        GpsDirectory.TagLatitudeRef,
+        "N");
+    gpsEvidenceDirectory.Set(
+        GpsDirectory.TagLatitude,
+        new[]
+        {
+            new MetadataExtractor.Rational(49, 1),
+            new MetadataExtractor.Rational(12, 1),
+            new MetadataExtractor.Rational(0, 1)
+        });
+    gpsEvidenceDirectory.Set(
+        GpsDirectory.TagLongitudeRef,
+        "E");
+    gpsEvidenceDirectory.Set(
+        GpsDirectory.TagLongitude,
+        new[]
+        {
+            new MetadataExtractor.Rational(16, 1),
+            new MetadataExtractor.Rational(36, 1),
+            new MetadataExtractor.Rational(0, 1)
+        });
+    gpsEvidenceDirectory.Set(
+        GpsDirectory.TagHPositioningError,
+        new MetadataExtractor.Rational(250, 1));
+    gpsEvidenceDirectory.Set(
+        GpsDirectory.TagProcessingMethod,
+        new MetadataExtractor.StringValue(
+            System.Text.Encoding.ASCII.GetBytes("ASCII\0\0\0CELLID")));
+    gpsEvidenceDirectory.Set(
+        GpsDirectory.TagAltitude,
+        new MetadataExtractor.Rational(0, 1));
+    gpsEvidenceDirectory.Set(GpsDirectory.TagDateStamp, "2026:08:22");
+    gpsEvidenceDirectory.Set(
+        GpsDirectory.TagTimeStamp,
+        new[]
+        {
+            new MetadataExtractor.Rational(10, 1),
+            new MetadataExtractor.Rational(0, 1),
+            new MetadataExtractor.Rational(0, 1)
+        });
+    var gpsEvidenceSubIfd = new ExifSubIfdDirectory();
+    gpsEvidenceSubIfd.Set(
+        ExifDirectoryBase.TagDateTimeOriginal,
+        "2026:08:22 12:04:00");
+    gpsEvidenceSubIfd.Set(ExifDirectoryBase.TagTimeZoneOriginal, "+02:00");
+    var gpsEvidence = PhotoMetadataReader.ReadGpsEvidence(
+        [gpsEvidenceDirectory, gpsEvidenceSubIfd]);
+    Assert(
+        gpsEvidence.ErrorMeters == 250
+        && gpsEvidence.FixAgeSeconds == 240
+        && gpsEvidence.ProcessingMethod == "CELLID"
+        && gpsEvidence.Altitude == 0,
+        "The GPS evidence should surface the error estimate, fix age, "
+        + "positioning method and altitude of a positioned photo.");
+    Assert(
+        PhotoMetadataReader.ReadGpsEvidence([gpsEvidenceSubIfd]) == default,
+        "A photo without coordinates should carry no GPS evidence.");
+
+    var locatedRecord = new PhotoRecord(
+        firstPhoto,
+        photoRoot,
+        "first.png",
+        ".png",
+        1,
+        1,
+        0,
+        1,
+        Latitude: 49.2,
+        Longitude: 16.6);
+    Assert(
+        (locatedRecord with { GpsErrorMeters = 250.0 }).HasApproximateLocation
+        && (locatedRecord with { GpsFixAgeSeconds = 300.0 }).HasApproximateLocation
+        && !(locatedRecord with
+        {
+            GpsErrorMeters = 30.0,
+            GpsFixAgeSeconds = 30.0
+        }).HasApproximateLocation
+        && !locatedRecord.HasApproximateLocation
+        && !(locatedRecord with
+        {
+            Latitude = null,
+            GpsErrorMeters = 250.0
+        }).HasApproximateLocation,
+        "A location is approximate on a coarse error estimate or a stale "
+        + "fix, and only when there are coordinates at all.");
+
+    Assert(
+        locatedRecord.LocationAccuracy == LocationAccuracy.Precise
+        && (locatedRecord with { GpsErrorMeters = 250.0 }).LocationAccuracy
+            == LocationAccuracy.Approximate
+        && (locatedRecord with { GpsErrorMeters = 800.0 }).LocationAccuracy
+            == LocationAccuracy.Poor
+        && (locatedRecord with { GpsFixAgeSeconds = 700.0 }).LocationAccuracy
+            == LocationAccuracy.Poor
+        && (locatedRecord with { Latitude = null }).LocationAccuracy
+            == LocationAccuracy.None
+        && (locatedRecord with { GpsErrorMeters = 800.0 }).HasApproximateLocation,
+        "The GPS verdict grades none, precise, approximate and far-off, and "
+        + "the far-off tier still counts as approximate for badge and filter.");
+
+    Assert(
+        (locatedRecord with { GpsProcessingMethod = "CELLID" }).LocationAccuracy
+            == LocationAccuracy.Poor
+        && (locatedRecord with
+        {
+            GpsProcessingMethod = "CELLID",
+            GpsAltitude = 0.0
+        }).LocationAccuracy == LocationAccuracy.Poor
+        && (locatedRecord with
+        {
+            GpsProcessingMethod = "CELLID",
+            GpsAltitude = 332.5
+        }).LocationAccuracy == LocationAccuracy.Approximate
+        && (locatedRecord with
+        {
+            GpsProcessingMethod = "WLAN",
+            GpsAltitude = 50.0
+        }).LocationAccuracy == LocationAccuracy.Approximate
+        && (locatedRecord with { GpsProcessingMethod = "GPS" }).LocationAccuracy
+            == LocationAccuracy.Precise,
+        "A pure cell-tower fix without altitude grades far off, any network "
+        + "position grades approximate, a satellite fix stays precise.");
+
     var metadataTarget = afterCleanup[0];
+    await repository.UpsertBatchAsync(
+        [metadataTarget with
+        {
+            GpsErrorMeters = 250.0,
+            GpsFixAgeSeconds = 300.0,
+            GpsProcessingMethod = "CELLID",
+            GpsAltitude = 0.0
+        }],
+        CancellationToken.None);
+    var evidenceReloaded = await repository.GetByPathAsync(metadataTarget.Path);
+    Assert(
+        evidenceReloaded is
+        {
+            GpsErrorMeters: 250.0,
+            GpsFixAgeSeconds: 300.0,
+            GpsProcessingMethod: "CELLID",
+            GpsAltitude: 0.0
+        },
+        "GPS evidence should round-trip through the catalogue.");
+
     await repository.UpdateTitleAsync(metadataTarget.Path, "Smoke title");
     await repository.UpdateDescriptionAsync(
         metadataTarget.Path,
@@ -1379,9 +1733,14 @@ try
             DescriptionEn: "Smoke English description",
             Latitude: 49.195061,
             Longitude: 16.606836,
+            GpsErrorMeters: null,
+            GpsFixAgeSeconds: null,
+            GpsProcessingMethod: null,
+            GpsAltitude: null,
             Rating: 4
         },
-        "Metadata updates should round-trip through the catalogue.");
+        "Metadata updates should round-trip through the catalogue, and a "
+        + "typed location should retire the fix evidence.");
 
     var pendingMetadata = await repository.GetPendingMetadataAsync(8);
     var targetEntries = pendingMetadata
@@ -1803,6 +2162,65 @@ static async Task AssertBatchProcessingAsync(
         && System.Text.Encoding.ASCII.GetString(webpBytes, 8, 4) == "WEBP",
         "The WebP encoder should write a real RIFF/WEBP container.");
 
+    // A JPEG stored upside down: Orientation 3 tells the viewer to turn it
+    // 180°. The pipeline bakes that turn into the pixels, so the metadata
+    // copied onto the output must say "normal" - any surviving rotation tag
+    // flips every export on display.
+    var rotated = Path.Combine(batchRoot, "rotated.jpg");
+    SaveOrientedJpeg(rotated, 64, 48, orientation: 3);
+    var orientedPreset = new BatchPreset
+    {
+        Name = "Smoke oriented export",
+        OutputDirectory = batchOutput,
+        Format = ImageOutputFormat.Jpeg,
+        Quality = 95,
+        MetadataPolicy = BatchMetadataPolicy.Preserve,
+        Prefix = "oriented_"
+    };
+    var orientedOutcome = await processor.RunAsync(
+        BatchPlanner.Plan(
+            [new BatchSource(rotated, EditRecipe.Empty, null, 64, 48)],
+            orientedPreset),
+        orientedPreset);
+    var orientedOutput = Path.Combine(batchOutput, "oriented_rotated.jpg");
+    Assert(
+        orientedOutcome is { Written: 1, Failed: 0 } && File.Exists(orientedOutput),
+        "The oriented JPEG should convert: "
+        + string.Join(" | ", orientedOutcome.Errors));
+
+    var orientationTag = MetadataExtractor.ImageMetadataReader
+        .ReadMetadata(orientedOutput)
+        .OfType<ExifIfd0Directory>()
+        .Select(directory =>
+            MetadataExtractor.DirectoryExtensions.TryGetInt32(
+                directory,
+                ExifDirectoryBase.TagOrientation,
+                out var value)
+                ? value
+                : 1)
+        .FirstOrDefault(1);
+    Assert(
+        orientationTag == 1,
+        "An export bakes the rotation into the pixels, so its EXIF "
+        + $"orientation must be normal; the tag says {orientationTag}.");
+
+    var orientedResult = await previews.LoadAsync(
+        orientedOutput,
+        0,
+        CancellationToken.None);
+    var orientedBgra = new FormatConvertedBitmap(
+        orientedResult,
+        PixelFormats.Bgra32,
+        null,
+        0);
+    var corner = new byte[4];
+    orientedBgra.CopyPixels(new Int32Rect(2, 2, 1, 1), corner, 4, 0);
+    Assert(
+        corner[0] > 200 && corner[1] > 200,
+        "A 180° source orientation should leave the export upright on "
+        + $"display; the top-left corner reads ({corner[2]},{corner[1]},{corner[0]}) "
+        + "instead of the source's bottom-right gradient corner.");
+
     Assert(
         reports.Count > 0 && reports[^1].Completed == reports[^1].Total,
         "Batch progress should be reported and end at 100 %.");
@@ -1908,6 +2326,45 @@ static void AssertRawPreviewExtraction()
         RawImageDecoder.ExtractLargestJpeg(
             Enumerable.Repeat((byte)0x11, 4096).ToArray()) is null,
         "A file with no embedded JPEG should report none rather than throw.");
+}
+
+static void SaveOrientedJpeg(
+    string path,
+    int width,
+    int height,
+    ushort orientation)
+{
+    // The same gradient as SaveTestPng, so every corner is identifiable:
+    // blue follows the column, green follows the row.
+    var pixels = new byte[width * height * 4];
+    for (var row = 0; row < height; row++)
+    {
+        for (var column = 0; column < width; column++)
+        {
+            var index = ((row * width) + column) * 4;
+            pixels[index] = (byte)(column * 255 / Math.Max(1, width - 1));
+            pixels[index + 1] = (byte)(row * 255 / Math.Max(1, height - 1));
+            pixels[index + 2] = 140;
+            pixels[index + 3] = 255;
+        }
+    }
+
+    var bitmap = BitmapSource.Create(
+        width,
+        height,
+        96,
+        96,
+        PixelFormats.Bgra32,
+        null,
+        pixels,
+        width * 4);
+    bitmap.Freeze();
+    var metadata = new BitmapMetadata("jpg");
+    metadata.SetQuery("/app1/ifd/{ushort=274}", orientation);
+    var encoder = new JpegBitmapEncoder { QualityLevel = 95 };
+    encoder.Frames.Add(BitmapFrame.Create(bitmap, null, metadata, null));
+    using var stream = File.Create(path);
+    encoder.Save(stream);
 }
 
 static byte[] CreateJpegBytes(int width, int height)
@@ -2622,6 +3079,21 @@ static async Task AssertWindowClosesCleanlyAsync(
                         + "PART_EditableTextBox when IsEditable is set; "
                         + "without it typed text goes nowhere.");
                 }
+
+                // The filter dialog opens as its own window, so every
+                // StaticResource it names must resolve from application
+                // scope alone; a key that only exists in MainWindow's
+                // dictionary crashes the app on the Filters… click.
+                var filterDialog = new PhotoSite.Dialogs.FilterDialog(
+                    pastedBitmap);
+                if (filterDialog.FilterList.Items.Count
+                    != Enum.GetValues<PhotoFilterKind>().Length)
+                {
+                    throw new InvalidOperationException(
+                        "The filter dialog must list every filter kind.");
+                }
+
+                filterDialog.Close();
                 application.DispatcherUnhandledException += (_, eventArgs) =>
                 {
                     dispatcherException = eventArgs.Exception;
@@ -2646,6 +3118,7 @@ static async Task AssertWindowClosesCleanlyAsync(
                     cataloguePhoto.FileName);
                 window.ValidateCatalogScrollResetForSmokeTest();
                 window.ValidateManagerChromeForSmokeTest();
+                window.ValidateDateFilterCalendarForSmokeTest();
                 window.ValidateEditorPanelForSmokeTest();
                 window.ValidateEditorTabsForSmokeTest();
                 window.ValidatePreviewWheelNavigationForSmokeTest();

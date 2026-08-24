@@ -14,7 +14,8 @@ public sealed partial class PhotoCatalogRepository
         title, description, latitude, longitude,
         color_label, flag, keywords, pixel_width, pixel_height,
         camera, lens, focal_length, aperture, exposure_seconds, iso,
-        description_en
+        description_en, gps_error_meters, gps_fix_age_seconds,
+        gps_processing_method, gps_altitude
         """;
 
     private readonly string connectionString;
@@ -197,6 +198,15 @@ public sealed partial class PhotoCatalogRepository
             "eyes_open",
             "REAL NULL",
             cancellationToken);
+
+        // A stranger's face can be waved away; the row stays so the photo's
+        // scan stamp keeps holding, but the unnamed groups skip it.
+        await EnsureColumnAsync(
+            connection,
+            "faces",
+            "ignored",
+            "INTEGER NOT NULL DEFAULT 0",
+            cancellationToken);
     }
 
     private static readonly (string Column, string Declaration)[] NewerColumns =
@@ -212,7 +222,11 @@ public sealed partial class PhotoCatalogRepository
         ("aperture", "REAL NULL"),
         ("exposure_seconds", "REAL NULL"),
         ("iso", "INTEGER NULL"),
-        ("description_en", "TEXT NULL")
+        ("description_en", "TEXT NULL"),
+        ("gps_error_meters", "REAL NULL"),
+        ("gps_fix_age_seconds", "REAL NULL"),
+        ("gps_processing_method", "TEXT NULL"),
+        ("gps_altitude", "REAL NULL")
     ];
 
     public async Task UpsertBatchAsync(
@@ -248,7 +262,8 @@ public sealed partial class PhotoCatalogRepository
                 $title, $description, $latitude, $longitude,
                 $colorLabel, $flag, $keywords, $pixelWidth, $pixelHeight,
                 $camera, $lens, $focalLength, $aperture, $exposureSeconds, $iso,
-                $descriptionEn)
+                $descriptionEn, $gpsError, $gpsFixAge,
+                $gpsMethod, $gpsAltitude)
             ON CONFLICT(path) DO UPDATE SET
                 root_path = excluded.root_path,
                 file_name = excluded.file_name,
@@ -267,6 +282,10 @@ public sealed partial class PhotoCatalogRepository
                 aperture = excluded.aperture,
                 exposure_seconds = excluded.exposure_seconds,
                 iso = excluded.iso,
+                gps_error_meters = excluded.gps_error_meters,
+                gps_fix_age_seconds = excluded.gps_fix_age_seconds,
+                gps_processing_method = excluded.gps_processing_method,
+                gps_altitude = excluded.gps_altitude,
                 rating = CASE
                     WHEN {acceptFromFile}
                     THEN excluded.rating ELSE photos.rating END,
@@ -330,6 +349,12 @@ public sealed partial class PhotoCatalogRepository
         var descriptionEn = command.Parameters.Add(
             "$descriptionEn",
             SqliteType.Text);
+        var gpsError = command.Parameters.Add("$gpsError", SqliteType.Real);
+        var gpsFixAge = command.Parameters.Add("$gpsFixAge", SqliteType.Real);
+        var gpsMethod = command.Parameters.Add("$gpsMethod", SqliteType.Text);
+        var gpsAltitude = command.Parameters.Add(
+            "$gpsAltitude",
+            SqliteType.Real);
 
         foreach (var record in records)
         {
@@ -369,6 +394,17 @@ public sealed partial class PhotoCatalogRepository
                 : DBNull.Value;
             iso.Value = record.Iso is { } isoValue ? isoValue : DBNull.Value;
             descriptionEn.Value = (object?)record.DescriptionEn ?? DBNull.Value;
+            gpsError.Value = record.GpsErrorMeters is { } gpsErr
+                ? gpsErr
+                : DBNull.Value;
+            gpsFixAge.Value = record.GpsFixAgeSeconds is { } gpsAge
+                ? gpsAge
+                : DBNull.Value;
+            gpsMethod.Value = (object?)record.GpsProcessingMethod
+                ?? DBNull.Value;
+            gpsAltitude.Value = record.GpsAltitude is { } gpsAlt
+                ? gpsAlt
+                : DBNull.Value;
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
 
@@ -521,7 +557,11 @@ public sealed partial class PhotoCatalogRepository
             reader.IsDBNull(23) ? null : reader.GetDouble(23),
             reader.IsDBNull(24) ? null : reader.GetDouble(24),
             reader.IsDBNull(25) ? null : reader.GetInt32(25),
-            reader.IsDBNull(26) ? null : reader.GetString(26));
+            reader.IsDBNull(26) ? null : reader.GetString(26),
+            reader.IsDBNull(27) ? null : reader.GetDouble(27),
+            reader.IsDBNull(28) ? null : reader.GetDouble(28),
+            reader.IsDBNull(29) ? null : reader.GetString(29),
+            reader.IsDBNull(30) ? null : reader.GetDouble(30));
 
     public event Action? MetadataOutboxChanged;
 
@@ -641,10 +681,15 @@ public sealed partial class PhotoCatalogRepository
         await using (var update = connection.CreateCommand())
         {
             update.Transaction = (SqliteTransaction)transaction;
+            // Hand-typed coordinates retire the camera fix's testimony: the
+            // error estimate and stamp described the old position, and would
+            // otherwise keep flagging the corrected one as approximate.
             update.CommandText =
                 """
                 UPDATE photos
-                SET latitude = $latitude, longitude = $longitude
+                SET latitude = $latitude, longitude = $longitude,
+                    gps_error_meters = NULL, gps_fix_age_seconds = NULL,
+                    gps_processing_method = NULL, gps_altitude = NULL
                 WHERE path = $path;
                 """;
             update.Parameters.AddWithValue(

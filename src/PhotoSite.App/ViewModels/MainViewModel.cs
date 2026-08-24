@@ -1527,6 +1527,15 @@ public sealed class MainViewModel : ObservableObject
             }
         }
 
+        // The location facet only speaks about photos with coordinates;
+        // either side leaves the unlocated ones out.
+        if (criteria.ApproximateLocation is { } approximate
+            && (record.Latitude is null
+                || record.HasApproximateLocation != approximate))
+        {
+            return false;
+        }
+
         if (criteria.HideRejected && photo.Flag == PhotoFlag.Rejected)
         {
             return false;

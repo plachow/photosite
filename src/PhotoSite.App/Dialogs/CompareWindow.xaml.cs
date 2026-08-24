@@ -4,6 +4,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using PhotoSite.Controls;
 using PhotoSite.Domain;
+using PhotoSite.Infrastructure;
 using PhotoSite.ViewModels;
 
 namespace PhotoSite.Dialogs;
@@ -26,6 +27,7 @@ public partial class CompareWindow : Window
     {
         photos = selection.Take(MaximumPhotos).ToList();
         InitializeComponent();
+        DarkWindowChrome.Apply(this);
         BuildPanes();
         Loaded += (_, _) => UpdateStatus();
     }

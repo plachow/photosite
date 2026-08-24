@@ -78,6 +78,8 @@ public sealed class PhotoItemViewModel : ObservableObject
     {
         var affectsPresentation = Record.TakenAtTicks != updated.TakenAtTicks
                                   || Record.Rating != updated.Rating
+                                  || Record.HasApproximateLocation
+                                  != updated.HasApproximateLocation
                                   || !string.Equals(
                                       Record.FileName,
                                       updated.FileName,
@@ -125,6 +127,10 @@ public sealed class PhotoItemViewModel : ObservableObject
         OnPropertyChanged(nameof(FileSizeText));
         OnPropertyChanged(nameof(TakenAtText));
         OnPropertyChanged(nameof(HasLocation));
+        OnPropertyChanged(nameof(IsLocationApproximate));
+        OnPropertyChanged(nameof(LocationAccuracyText));
+        OnPropertyChanged(nameof(LocationAccuracyBrush));
+        OnPropertyChanged(nameof(MapToolTip));
     }
 
     public string Path => savedPath ?? Record.Path;
@@ -464,7 +470,24 @@ public sealed class PhotoItemViewModel : ObservableObject
 
             latitude = parsed?.Latitude;
             longitude = parsed?.Longitude;
+            // The hand-typed coordinates replace the camera's fix, so its
+            // error estimate and stamp no longer describe them; the catalogue
+            // row is cleared the same way inside UpdateLocationAsync.
+            Record = Record with
+            {
+                Latitude = latitude,
+                Longitude = longitude,
+                GpsErrorMeters = null,
+                GpsFixAgeSeconds = null,
+                GpsProcessingMethod = null,
+                GpsAltitude = null
+            };
             OnPropertyChanged();
+            OnPropertyChanged(nameof(HasLocation));
+            OnPropertyChanged(nameof(IsLocationApproximate));
+            OnPropertyChanged(nameof(LocationAccuracyText));
+            OnPropertyChanged(nameof(LocationAccuracyBrush));
+            OnPropertyChanged(nameof(MapToolTip));
             _ = PersistMetadataAsync(
                 () => catalog.UpdateLocationAsync(
                     Path,
@@ -472,6 +495,68 @@ public sealed class PhotoItemViewModel : ObservableObject
                     longitude));
         }
     }
+
+    /// <summary>
+    /// The file's own GPS evidence says these coordinates are probably
+    /// approximate: the receiver owned up to a coarse error estimate, or its
+    /// fix was already minutes old when the shutter fired. Drives the 📍≈
+    /// tile badge, the Map button's verdict dot and the Location filter.
+    /// </summary>
+    public bool IsLocationApproximate => Record.HasApproximateLocation;
+
+    public string? LocationAccuracyText
+    {
+        get
+        {
+            if (!Record.HasApproximateLocation)
+            {
+                return null;
+            }
+
+            var parts = new List<string>(3);
+            if (Record.GpsErrorMeters is { } error
+                && error >= PhotoRecord.ApproximateGpsErrorMeters)
+            {
+                parts.Add($"the camera reported ±{error:0} m");
+            }
+
+            if (Record.GpsFixAgeSeconds is { } age
+                && age >= PhotoRecord.ApproximateGpsFixAgeSeconds)
+            {
+                parts.Add($"the GPS fix was {age / 60:0} min old");
+            }
+
+            if (Record.IsCellTowerFix)
+            {
+                parts.Add("the position came from a cell tower, not satellites");
+            }
+            else if (Record.IsNetworkPositioned)
+            {
+                parts.Add("the position came from network positioning, "
+                          + "not satellites");
+            }
+
+            var verdict = Record.LocationAccuracy == LocationAccuracy.Poor
+                ? "Position is probably far off"
+                : "Position is probably approximate";
+            return $"{verdict}: {string.Join(", ", parts)}";
+        }
+    }
+
+    /// <summary>
+    /// The verdict dot inside the Map button: green when nothing disputes
+    /// the position, amber when the fix evidence grades it approximate, red
+    /// when it is probably a different place altogether.
+    /// </summary>
+    public System.Windows.Media.Brush LocationAccuracyBrush =>
+        LocationAccuracyBrushes.Get(Record.LocationAccuracy);
+
+    public string MapToolTip =>
+        !HasLocation
+            ? "No GPS coordinates"
+            : LocationAccuracyText is { } warning
+                ? $"{warning}\nOpen these coordinates in a map"
+                : "Open these coordinates in a map";
 
     internal static bool TryParseLocation(
         string? text,

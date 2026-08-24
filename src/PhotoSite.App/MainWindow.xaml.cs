@@ -7,8 +7,8 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
-using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.Input;
@@ -26,11 +26,6 @@ namespace PhotoSite;
 
 public partial class MainWindow : Window
 {
-    private const int DwmUseImmersiveDarkMode = 20;
-    private const int DwmUseImmersiveDarkModeLegacy = 19;
-    private const int DwmBorderColor = 34;
-    private const int DwmCaptionColor = 35;
-    private const int DwmTextColor = 36;
     private const string WindowLayoutSetting = "window_layout_v1";
     private const string LastCopyDestinationSetting = "last_copy_destination";
     private const string LastMoveDestinationSetting = "last_move_destination";
@@ -46,6 +41,8 @@ public partial class MainWindow : Window
     private const double VisibleTitleBarHeight = 48;
     private readonly MainViewModel viewModel;
     private readonly PhotoCatalogRepository catalog;
+    private readonly SplitPaneController managerInfoSplit;
+    private readonly SplitPaneController editorInfoSplit;
     private readonly DispatcherTimer layoutSaveTimer;
     private readonly SemaphoreSlim layoutSaveGate = new(1, 1);
     private CancellationTokenSource? copySelectionCancellation;
@@ -78,6 +75,24 @@ public partial class MainWindow : Window
         GuardedToggleEditorCommand = new AsyncRelayCommand(
             ToggleEditorWithGuardAsync);
         InitializeComponent();
+        managerInfoSplit = new SplitPaneController(
+            ManagerPreviewRow,
+            ManagerInfoSplitterRow,
+            ManagerInfoRow,
+            ManagerInfoSplitter,
+            InfoPanelToggle,
+            ManagerInfoExpandButton,
+            ManagerInfoCollapseButton);
+        managerInfoSplit.RatioChanged += ScheduleLayoutSave;
+        editorInfoSplit = new SplitPaneController(
+            EditorTabsRow,
+            EditorInfoSplitterRow,
+            EditorInfoRow,
+            EditorInfoSplitter,
+            EditorInfoToggle,
+            EditorInfoExpandButton,
+            EditorInfoCollapseButton);
+        editorInfoSplit.RatioChanged += ScheduleLayoutSave;
         BuildLabelFilters();
         BuildLabelPicker();
         InitializeEditorPanel();
@@ -88,7 +103,7 @@ public partial class MainWindow : Window
         };
         layoutSaveTimer.Tick += OnLayoutSaveTimerTick;
         DataContext = viewModel;
-        SourceInitialized += OnSourceInitialized;
+        DarkWindowChrome.Apply(this);
         LocationChanged += (_, _) => ScheduleLayoutSave();
         SizeChanged += (_, _) => ScheduleLayoutSave();
         StateChanged += (_, _) => ScheduleLayoutSave();
@@ -281,7 +296,7 @@ public partial class MainWindow : Window
 
         var items = contextMenu.Items.OfType<MenuItem>().ToArray();
         var separators = contextMenu.Items.OfType<Separator>().ToArray();
-        if (items.Length != 15
+        if (items.Length != 16
             || items.Any(item => item.Icon is null
                                  || !ReferenceEquals(item.Style, itemStyle))
             || separators.Length != 6
@@ -925,6 +940,12 @@ public partial class MainWindow : Window
             selectedCount == 1
                 ? "Describe with AI…"
                 : $"Describe {selectedCount:N0} photos with AI…");
+        SetMenuHeader(
+            items,
+            "FindPeople",
+            selectedCount == 1
+                ? "Find people…"
+                : $"Find people in {selectedCount:N0} photos…");
         // Renaming is a one-file operation; a bulk rename is what the batch
         // dialog is for, and it does it far better than a prompt could.
         items.Single(item => Equals(item.Tag, "RenameFile")).IsEnabled =
@@ -1036,7 +1057,8 @@ public partial class MainWindow : Window
             targets,
             App.Services.OllamaVision,
             catalog,
-            App.Services.Previews)
+            App.Services.Previews,
+            App.Services.Geolocator)
         {
             Owner = this
         };
@@ -2121,17 +2143,28 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnPeopleClick(object sender, RoutedEventArgs eventArgs)
+    private void OnPeopleClick(object sender, RoutedEventArgs eventArgs) =>
+        ShowPeopleDialog(GetSelectedManagerPhotos());
+
+    private void OnPeopleContextClick(object sender, RoutedEventArgs eventArgs) =>
+        ShowPeopleDialog(GetContextPhotos(sender));
+
+    private void ShowPeopleDialog(IReadOnlyList<PhotoItemViewModel> selected)
     {
-        var records = viewModel.AllPhotos
-            .Where(photo => !photo.IsTransient)
+        // Like AI tagging, the scan covers the selection; the whole folder
+        // is only swept when nothing is selected.
+        var scope = selected.Count > 0
+            ? selected
+            : viewModel.AllPhotos.Where(photo => !photo.IsTransient).ToArray();
+        var records = scope
             .Select(photo => photo.Record)
             .ToArray();
         var dialog = new PeopleDialog(
             records,
             App.Services.Faces,
             catalog,
-            App.Services.Previews)
+            App.Services.Previews,
+            scanningSelection: selected.Count > 0)
         {
             Owner = this
         };
@@ -2898,6 +2931,7 @@ public partial class MainWindow : Window
             && TryGetRatingShortcut(eventArgs.Key, out var rating))
         {
             ApplyToSelection(photo => photo.Rating = rating);
+            ShowRatingFeedback(rating);
             eventArgs.Handled = true;
             return;
         }
@@ -2991,6 +3025,40 @@ public partial class MainWindow : Window
             default:
                 return false;
         }
+    }
+
+    /// <summary>
+    /// Confirms a rating keystroke where the tiles and the info panel cannot:
+    /// in fullscreen and the editor only the photograph is on screen, so the
+    /// keystroke would otherwise land without any visible acknowledgement.
+    /// </summary>
+    private void ShowRatingFeedback(int rating)
+    {
+        if (!viewModel.IsFullscreenMode && !viewModel.IsEditorMode)
+        {
+            return;
+        }
+
+        if (viewModel.SelectedPhoto is not { IsTransient: false })
+        {
+            return;
+        }
+
+        ShowViewerOsd(rating > 0
+            ? string.Concat(new string('★', rating), new string('☆', 5 - rating))
+            : "Rating cleared");
+    }
+
+    private void ShowViewerOsd(string text)
+    {
+        ViewerOsdText.Text = text;
+        ViewerOsd.Visibility = Visibility.Visible;
+        var fade = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(450))
+        {
+            BeginTime = TimeSpan.FromMilliseconds(900)
+        };
+        fade.Completed += (_, _) => ViewerOsd.Visibility = Visibility.Collapsed;
+        ViewerOsd.BeginAnimation(OpacityProperty, fade);
     }
 
     internal static bool TryGetRatingShortcut(Key key, out int rating)
@@ -3166,6 +3234,7 @@ public partial class MainWindow : Window
         ApplyModeLayout();
         OnEditorModeChanged();
         Dispatcher.BeginInvoke(
+            DispatcherPriority.Loaded,
             () =>
             {
                 if (viewModel.IsEditorMode || viewModel.IsFullscreenMode)
@@ -3174,13 +3243,39 @@ public partial class MainWindow : Window
                 }
                 else
                 {
-                    PhotoList.Focus();
-                    if (viewModel.SelectedPhoto is not null)
-                    {
-                        PhotoList.ScrollIntoView(viewModel.SelectedPhoto);
-                    }
+                    FocusSelectedPhotoInCatalog();
                 }
             });
+    }
+
+    /// <summary>
+    /// Brings the manager back to the photo the user was looking at: the
+    /// selected tile is scrolled into view and takes keyboard focus, so
+    /// culling continues right where fullscreen or the editor left off.
+    /// </summary>
+    private void FocusSelectedPhotoInCatalog()
+    {
+        if (viewModel.SelectedPhoto is not { } photo)
+        {
+            PhotoList.Focus();
+            return;
+        }
+
+        // The catalog column was collapsed a moment ago; the tile panel must
+        // re-measure at its restored width before the scroll target and the
+        // item container exist.
+        PhotoList.UpdateLayout();
+        PhotoList.ScrollIntoView(photo);
+        PhotoList.UpdateLayout();
+        if (PhotoList.ItemContainerGenerator.ContainerFromItem(photo)
+            is ListBoxItem container)
+        {
+            container.Focus();
+        }
+        else
+        {
+            PhotoList.Focus();
+        }
     }
 
     private async Task RefreshCatalogAfterEditorExitAsync()
@@ -3216,6 +3311,15 @@ public partial class MainWindow : Window
             layoutBeforeFullscreen = CaptureWindowLayout(forcePaneCapture: true);
             windowStyleBeforeFullscreen = WindowStyle;
             resizeModeBeforeFullscreen = ResizeMode;
+
+            // An already-maximized window keeps its taskbar-respecting bounds
+            // when the chrome is removed, so drop to Normal first and let the
+            // borderless maximize below claim the whole screen.
+            if (WindowState == WindowState.Maximized)
+            {
+                WindowState = WindowState.Normal;
+            }
+
             WindowStyle = WindowStyle.None;
             ResizeMode = ResizeMode.NoResize;
             WindowState = WindowState.Maximized;
@@ -3227,11 +3331,26 @@ public partial class MainWindow : Window
             return;
         }
 
+        layoutBeforeFullscreen = null;
+
+        // Normal first, so the restored chrome gets fresh maximized bounds
+        // that respect the taskbar again.
         WindowState = WindowState.Normal;
         WindowStyle = windowStyleBeforeFullscreen;
         ResizeMode = resizeModeBeforeFullscreen;
-        layoutBeforeFullscreen = null;
-        ApplyWindowLayout(layout);
+
+        // Fullscreen never moved the window, so only the pane widths need to
+        // come back; re-deriving them through ApplyWindowLayout would clamp
+        // them against the restore bounds even when the window returns
+        // maximized, squeezing the catalog pane.
+        navigatorPaneWidth = layout.NavigatorPaneWidth;
+        catalogPaneWidth = layout.CatalogPaneWidth;
+        ApplyModeLayout();
+
+        if (layout.State == WindowState.Maximized)
+        {
+            WindowState = WindowState.Maximized;
+        }
     }
 
     private void OnPaneSplitterDragCompleted(
@@ -3269,9 +3388,16 @@ public partial class MainWindow : Window
         Top = top;
         WindowStartupLocation = WindowStartupLocation.Manual;
 
+        // A window that comes back maximized is wider than its restore
+        // bounds, so the panes must be clamped against the screen it will
+        // actually occupy, not the normal-state width.
+        var paneClampWidth = state.State == WindowState.Maximized
+            ? Math.Max(width, SystemParameters.WorkArea.Width)
+            : width;
         var maximumNavigatorWidth = Math.Max(
             NavigatorMinWidth,
-            width - CatalogMinWidth - ViewerMinWidth - (2 * SplitterWidth));
+            paneClampWidth - CatalogMinWidth - ViewerMinWidth
+            - (2 * SplitterWidth));
         navigatorPaneWidth = ClampFinite(
             state.NavigatorPaneWidth,
             NavigatorMinWidth,
@@ -3279,12 +3405,15 @@ public partial class MainWindow : Window
             DefaultNavigatorWidth);
         var maximumCatalogWidth = Math.Max(
             CatalogMinWidth,
-            width - navigatorPaneWidth - ViewerMinWidth - (2 * SplitterWidth));
+            paneClampWidth - navigatorPaneWidth - ViewerMinWidth
+            - (2 * SplitterWidth));
         catalogPaneWidth = ClampFinite(
             state.CatalogPaneWidth,
             CatalogMinWidth,
             maximumCatalogWidth,
             DefaultCatalogWidth);
+        managerInfoSplit.Ratio = state.ManagerInfoPaneRatio;
+        editorInfoSplit.Ratio = state.EditorInfoPaneRatio;
         ApplyModeLayout();
 
         WindowState = state.State == WindowState.Maximized
@@ -3314,6 +3443,10 @@ public partial class MainWindow : Window
             EditorSplitterColumn.Width = showsEditorPanel
                 ? new GridLength(SplitterWidth)
                 : new GridLength(0);
+
+            // Both viewer modes want the whole column for the photograph;
+            // the Manager's info split waits underneath for the way back.
+            managerInfoSplit.Suspend();
             PreviewViewer.FitToViewport();
             return;
         }
@@ -3326,6 +3459,7 @@ public partial class MainWindow : Window
         CatalogSplitterColumn.Width = new GridLength(SplitterWidth);
         EditorPanelColumn.Width = new GridLength(0);
         EditorSplitterColumn.Width = new GridLength(0);
+        managerInfoSplit.Resume();
     }
 
     private void CapturePaneWidths(bool force = false)
@@ -3419,7 +3553,9 @@ public partial class MainWindow : Window
                 ? WindowState.Maximized
                 : WindowState.Normal,
             navigatorPaneWidth,
-            catalogPaneWidth);
+            catalogPaneWidth,
+            managerInfoSplit.Ratio,
+            editorInfoSplit.Ratio);
     }
 
     private async void OnWindowClosing(
@@ -3491,39 +3627,6 @@ public partial class MainWindow : Window
         viewModel.PropertyChanged -= OnViewModelPropertyChanged;
         layoutSaveGate.Dispose();
     }
-
-    private void OnSourceInitialized(object? sender, EventArgs eventArgs)
-    {
-        if (SystemParameters.HighContrast)
-        {
-            return;
-        }
-
-        var handle = new WindowInteropHelper(this).Handle;
-        var enabled = 1;
-        if (DwmSetWindowAttribute(
-                handle,
-                DwmUseImmersiveDarkMode,
-                ref enabled,
-                sizeof(int)) != 0)
-        {
-            DwmSetWindowAttribute(
-                handle,
-                DwmUseImmersiveDarkModeLegacy,
-                ref enabled,
-                sizeof(int));
-        }
-
-        var caption = ToColorRef(0x11, 0x13, 0x18);
-        var text = ToColorRef(0xF2, 0xF4, 0xF8);
-        var border = ToColorRef(0x30, 0x35, 0x41);
-        DwmSetWindowAttribute(handle, DwmCaptionColor, ref caption, sizeof(int));
-        DwmSetWindowAttribute(handle, DwmTextColor, ref text, sizeof(int));
-        DwmSetWindowAttribute(handle, DwmBorderColor, ref border, sizeof(int));
-    }
-
-    private static int ToColorRef(byte red, byte green, byte blue) =>
-        red | (green << 8) | (blue << 16);
 
     private static double ClampFinite(
         double value,
@@ -3620,13 +3723,6 @@ public partial class MainWindow : Window
             $"A text block containing '{expectedText}' was not found.");
     }
 
-    [DllImport("dwmapi.dll")]
-    private static extern int DwmSetWindowAttribute(
-        nint windowHandle,
-        int attribute,
-        ref int attributeValue,
-        int attributeSize);
-
     private sealed record WindowLayoutState(
         double Left,
         double Top,
@@ -3634,7 +3730,9 @@ public partial class MainWindow : Window
         double Height,
         WindowState State,
         double NavigatorPaneWidth,
-        double CatalogPaneWidth);
+        double CatalogPaneWidth,
+        double ManagerInfoPaneRatio = 0.5,
+        double EditorInfoPaneRatio = 0.5);
 }
 
 internal enum DirectPhotoLaunchKeyAction

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -69,8 +70,11 @@ public sealed class OllamaVisionService
         byte[] jpegImage,
         string language,
         bool includeEnglishDescription,
+        GeoPlace? place,
+        bool approximateLocation,
         CancellationToken cancellationToken)
     {
+        var placeContext = BuildPlaceContext(place, approximateLocation);
         var uri = BuildUri(endpoint, "api/chat");
         var response = await PostAsync(
             uri,
@@ -79,7 +83,8 @@ public sealed class OllamaVisionService
                 jpegImage,
                 language,
                 includeEnglishDescription,
-                disableThinking: true),
+                disableThinking: true,
+                placeContext),
             cancellationToken);
         if (response.StatusCode == HttpStatusCode.BadRequest)
         {
@@ -93,7 +98,8 @@ public sealed class OllamaVisionService
                     jpegImage,
                     language,
                     includeEnglishDescription,
-                    disableThinking: false),
+                    disableThinking: false,
+                    placeContext),
                 cancellationToken);
         }
 
@@ -104,8 +110,75 @@ public sealed class OllamaVisionService
                 DescribeServerError(response.StatusCode, response.Body));
         }
 
-        return ParseInsights(response.Body);
+        return AugmentKeywords(
+            ParseInsights(response.Body),
+            place,
+            approximateLocation);
     }
+
+    /// <summary>
+    /// One sentence of verified place context for the prompt, or null when
+    /// there is nothing trustworthy to say. A nearby place reads "in or
+    /// near"; a distant one only as a reference point ("about 39 km east
+    /// of ..."), because claiming the photo was taken in a town two valleys
+    /// away would put a wrong name into the caption. An approximate GPS fix
+    /// softens the wording instead of pretending precision.
+    /// </summary>
+    internal static string? BuildPlaceContext(
+        GeoPlace? place,
+        bool approximateLocation)
+    {
+        if (place?.City is not { Length: > 0 } city)
+        {
+            return null;
+        }
+
+        var parents = new List<string>(3);
+        foreach (var name in new[] { place.Subregion, place.Region, place.Country })
+        {
+            if (name is { Length: > 0 }
+                && !string.Equals(name, city, StringComparison.OrdinalIgnoreCase)
+                && !parents.Contains(name, StringComparer.OrdinalIgnoreCase))
+            {
+                parents.Add(name);
+            }
+        }
+
+        var suffix = parents.Count == 0
+            ? string.Empty
+            : $" ({string.Join(", ", parents)})";
+        var location = place.DistanceKm <= GeoPlace.NearbyKm
+            ? $"in or near {city}{suffix}"
+            : string.Create(
+                CultureInfo.InvariantCulture,
+                $"about {place.DistanceKm:0} km "
+                + $"{ExifToolGeolocator.CompassFromPlace(place.BearingDegrees)} "
+                + $"of {city}{suffix}");
+        return approximateLocation
+            ? $"probably {location}; the GPS fix was imprecise, so treat "
+              + "the place as approximate"
+            : location;
+    }
+
+    /// <summary>
+    /// Puts the resolved place names into the keyword list ahead of the
+    /// model's own, so a search for the region or country always finds the
+    /// photo no matter how the model chose to phrase things.
+    /// </summary>
+    internal static AiPhotoInsights AugmentKeywords(
+        AiPhotoInsights insights,
+        GeoPlace? place,
+        bool approximateLocation) =>
+        place is null
+            ? insights
+            : insights with
+            {
+                Keywords = CleanKeywords(
+                    ExifToolGeolocator.PlaceKeywords(
+                        place,
+                        includeCity: !approximateLocation)
+                        .Concat(insights.Keywords))
+            };
 
     private async Task<(HttpResponseMessage Response, HttpStatusCode StatusCode, string Body)>
         PostAsync(
@@ -146,7 +219,8 @@ public sealed class OllamaVisionService
         byte[] jpegImage,
         string language,
         bool includeEnglishDescription,
-        bool disableThinking)
+        bool disableThinking,
+        string? placeContext = null)
     {
         var properties = new Dictionary<string, object?>
         {
@@ -175,7 +249,10 @@ public sealed class OllamaVisionService
                 new Dictionary<string, object?>
                 {
                     ["role"] = "user",
-                    ["content"] = BuildPrompt(language, includeEnglishDescription),
+                    ["content"] = BuildPrompt(
+                        language,
+                        includeEnglishDescription,
+                        placeContext),
                     ["images"] = new[] { Convert.ToBase64String(jpegImage) }
                 }
             },
@@ -202,9 +279,15 @@ public sealed class OllamaVisionService
 
     internal static string BuildPrompt(
         string language,
-        bool includeEnglishDescription) =>
+        bool includeEnglishDescription,
+        string? placeContext = null) =>
         "You are an expert photo librarian. Analyze this photograph and "
         + "extract as much information as you can.\n"
+        + (placeContext is null
+            ? string.Empty
+            : $"Verified place: the photograph was taken {placeContext}. "
+              + "Work this place into the description and the keywords, and "
+              + "into the title when it fits naturally.\n")
         + "Return:\n"
         + "- \"title\": a short factual title, at most 8 words.\n"
         + "- \"description\": 2 to 5 sentences covering the main subject, the "
@@ -220,8 +303,13 @@ public sealed class OllamaVisionService
             ? "- \"description_en\": the same description written in English.\n"
             : string.Empty)
         + $"Write the title, the description and the keywords in {language}. "
-        + "Do not guess names of people or exact places unless visible text "
-        + "makes them certain.";
+        + (placeContext is null
+            ? "Do not guess names of people or exact places unless visible "
+              + "text makes them certain."
+            : "Do not guess names of people. Beyond the verified place, name "
+              + "a more specific spot or landmark only if you clearly "
+              + "recognize it in the photograph or readable text makes it "
+              + "certain.");
 
     /// <summary>Reads the schema-constrained JSON out of a chat response.</summary>
     internal static AiPhotoInsights ParseInsights(string chatResponseJson)

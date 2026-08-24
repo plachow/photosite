@@ -52,6 +52,31 @@ rejected photo stays on disk; deleting is always a separate step.
 
 **Keywords** — a `;`-separated list, written to `dc:subject` and IPTC.
 
+**Approximate location** (`PhotoRecord.HasApproximateLocation`) — the file's
+own GPS evidence says the coordinates are probably off: the receiver wrote a
+horizontal error estimate of 100 m or more (`GPSHPositioningError`), its fix
+was already two minutes stale when the shutter fired — the "quickly pull the
+phone out" photo that stamps a location from hundreds of metres back along
+the walk — or `GPSProcessingMethod` admits the position never came from
+satellites at all (CELLID/WLAN/NETWORK; phones re-stamp such a cached
+network position for hours). The readings are taken at scan time
+(`gps_error_meters`, `gps_fix_age_seconds`, `gps_processing_method`,
+`gps_altitude`); the fix age compares `DateTimeOriginal` with the UTC GPS
+stamp, trusting `OffsetTimeOriginal` when present and otherwise assuming the
+nearest quarter-hour timezone. A cell fix with no real altitude (a receiver
+with an actual fix knows its height; a tower estimate writes zero) is a pure
+tower guess, typically kilometres off. A second threshold (500 m, a fix ten
+minutes stale, or a pure cell-tower fix) grades the position "probably far
+off", and any network-sourced position grades at least approximate; the
+info panel's Map button carries the verdict as a green/amber/red dot
+(`LocationAccuracy`) and disables without coordinates, while the 📍≈
+thumbnail badge and the filter's Location facet treat both graded tiers as
+approximate. Hand-typed
+coordinates clear the evidence in the catalogue and retire the file's error
+and stamp tags through the outbox, so a corrected photo stops reading as
+approximate; sidecar coordinates never carry evidence at all. Rejected
+synonyms: *bad GPS*, *GPS accuracy*.
+
 ## Processes
 
 **Scan** — indexing a folder into the catalogue. Incremental: an unchanged file
@@ -123,7 +148,16 @@ interrupted bulk run restartable. When the run's language is not English, the
 same call also returns an **English description**, stored in the catalogue
 only (`description_en`) so search works in both languages — the file always
 carries just the primary-language description, and a re-scan never touches
-the English one. Rejected synonyms: *auto-tag*, *caption*.
+the English one. A photo with coordinates is first reverse-geocoded offline
+through the geolocation database bundled with exiftool
+(`ExifToolGeolocator`, one exiftool run per ~100 m grid cell, cached) and
+the model receives the **verified place** as text — "in or near X", or
+"about N km east of X" when the nearest catalogued place is far — never raw
+coordinates, which a local model would confidently mis-geocode. The resolved
+names also lead the keyword list deterministically (most specific first);
+the nearest place drops out of the keywords beyond 10 km or on an
+approximate-location fix, which softens the prompt to "probably" instead.
+Rejected synonyms: *auto-tag*, *caption*.
 
 **Surface** — a rendered bitmap the editor canvas paints: straightening,
 adjustments and filters applied, but crop, orientation and layers deliberately

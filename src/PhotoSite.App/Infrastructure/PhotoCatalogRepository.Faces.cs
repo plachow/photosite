@@ -140,13 +140,14 @@ public sealed partial class PhotoCatalogRepository
     }
 
     /// <summary>
-    /// Faces with neither a person nor a pending suggestion - the pool the
-    /// unnamed-group clustering works on.
+    /// Faces with neither a person nor a pending suggestion, and not waved
+    /// away as strangers - the pool the unnamed-group clustering works on.
     /// </summary>
     public Task<IReadOnlyList<FaceRecord>> GetUnassignedFacesAsync(
         CancellationToken cancellationToken = default) =>
         QueryFacesAsync(
-            "WHERE person_id IS NULL AND suggested_person_id IS NULL",
+            "WHERE person_id IS NULL AND suggested_person_id IS NULL"
+            + " AND ignored = 0",
             null,
             null,
             cancellationToken);
@@ -479,11 +480,12 @@ public sealed partial class PhotoCatalogRepository
         await using var command = connection.CreateCommand();
         command.Transaction = (SqliteTransaction)transaction;
         // Deciding on a face settles it either way, so any pending
-        // suggestion is cleared alongside the assignment.
+        // suggestion is cleared alongside the assignment, and a face given
+        // a person is no stranger any more.
         command.CommandText =
             """
             UPDATE faces
-            SET person_id = $person, suggested_person_id = NULL
+            SET person_id = $person, suggested_person_id = NULL, ignored = 0
             WHERE id = $id;
             """;
         command.Parameters.AddWithValue(
@@ -498,6 +500,37 @@ public sealed partial class PhotoCatalogRepository
         }
 
         await transaction.CommitAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Waves a group of faces away as strangers: they leave the unnamed
+    /// groups for good, but their rows stay so the photographs still count
+    /// as scanned. Assigning a person later brings a face back.
+    /// </summary>
+    public async Task IgnoreFacesAsync(
+        IReadOnlyCollection<long> faceIds,
+        CancellationToken cancellationToken = default)
+    {
+        if (faceIds.Count == 0)
+        {
+            return;
+        }
+
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            UPDATE faces
+            SET ignored = 1, suggested_person_id = NULL
+            WHERE id = $id;
+            """;
+        var id = command.Parameters.Add("$id", SqliteType.Integer);
+        foreach (var faceId in faceIds)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            id.Value = faceId;
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
     }
 
     /// <summary>Rejects suggestions: the faces return to the unnamed pool.</summary>

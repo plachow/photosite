@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using Microsoft.Win32;
+using PhotoSite.Infrastructure;
 using PhotoSite.Services;
 using PhotoSite.ViewModels;
 
@@ -19,6 +20,7 @@ public partial class ImportDialog : Window
     {
         this.importer = importer;
         InitializeComponent();
+        DarkWindowChrome.Apply(this);
 
         DestinationBox.Text = initialDestination
             ?? Environment.GetFolderPath(Environment.SpecialFolder.MyPictures);

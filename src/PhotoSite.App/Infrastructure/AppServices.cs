@@ -31,6 +31,7 @@ public sealed class AppServices
         Faces = new Services.Faces.FaceEngine();
         Updates = new AppUpdateService();
         MetadataWriter = new ExifToolMetadataWriter();
+        Geolocator = new ExifToolGeolocator();
         MetadataOutbox = new MetadataOutboxProcessor(Catalog, MetadataWriter);
         BatchPresets = new BatchPresetStore(Catalog);
         Batch = new BatchProcessor(Previews, MetadataWriter);
@@ -58,6 +59,8 @@ public sealed class AppServices
     public AppUpdateService Updates { get; }
 
     internal ExifToolMetadataWriter MetadataWriter { get; }
+
+    public ExifToolGeolocator Geolocator { get; }
 
     internal MetadataOutboxProcessor MetadataOutbox { get; }
 

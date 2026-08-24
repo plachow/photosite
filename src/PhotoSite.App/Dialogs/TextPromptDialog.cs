@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using PhotoSite.Infrastructure;
 
 namespace PhotoSite.Dialogs;
 
@@ -24,6 +25,7 @@ internal sealed class TextPromptDialog : Window
         ResizeMode = ResizeMode.NoResize;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         ShowInTaskbar = false;
+        DarkWindowChrome.Apply(this);
         // Derived windows do not inherit the implicit Window style, so the
         // dark theme has to be stated here.
         SetResourceReference(BackgroundProperty, "WindowBrush");

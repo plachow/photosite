@@ -19,6 +19,7 @@ public partial class MainWindow
     private readonly List<System.Windows.Controls.Primitives.ToggleButton>
         personFilterChips = [];
     private bool isFilterUiUpdating;
+    private bool isCalendarUiUpdating;
 
     /// <summary>
     /// One toggle chip per named person; several checked chips mean "all of
@@ -129,10 +130,17 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// The five label swatches in the info panel. Clicking the label a photo
-    /// already carries clears it, so one row of buttons both sets and unsets.
+    /// The five label swatches in the info panels — the Manager's and the
+    /// editor's copy of it. Clicking the label a photo already carries
+    /// clears it, so one row of buttons both sets and unsets.
     /// </summary>
     private void BuildLabelPicker()
+    {
+        BuildLabelPickerButtons(LabelPickerPanel);
+        BuildLabelPickerButtons(EditorLabelPickerPanel);
+    }
+
+    private void BuildLabelPickerButtons(Panel panel)
     {
         foreach (var label in Enum.GetValues<ColorLabel>())
         {
@@ -156,7 +164,7 @@ public partial class MainWindow
                 button,
                 $"{label} colour label");
             button.Click += OnColorLabelClick;
-            LabelPickerPanel.Children.Add(button);
+            panel.Children.Add(button);
         }
     }
 
@@ -205,9 +213,6 @@ public partial class MainWindow
     private void OnFilterChanged(
         object sender,
         SelectionChangedEventArgs eventArgs) =>
-        ApplyFilterFromUi();
-
-    private void OnFilterChanged(object sender, TextChangedEventArgs eventArgs) =>
         ApplyFilterFromUi();
 
     private void ApplyFilterFromUi()
@@ -282,6 +287,11 @@ public partial class MainWindow
                 : EyesClosedBox.IsChecked == true
                     ? false
                     : null,
+            ApproximateLocation = ApproximateLocationBox.IsChecked == true
+                ? true
+                : PreciseLocationBox.IsChecked == true
+                    ? false
+                    : null,
             TakenFrom = ParseFilterDate(DateFromBox.Text, endOfPeriod: false),
             TakenTo = ParseFilterDate(DateToBox.Text, endOfPeriod: true),
             HideRejected = HideRejectedBox.IsChecked == true
@@ -345,6 +355,233 @@ public partial class MainWindow
         return null;
     }
 
+    private System.Windows.Controls.Primitives.Popup GetDateCalendarPopup(
+        TextBox box) =>
+        ReferenceEquals(box, DateFromBox)
+            ? DateFromCalendarPopup
+            : DateToCalendarPopup;
+
+    private System.Windows.Controls.Calendar GetDateCalendar(TextBox box) =>
+        ReferenceEquals(box, DateFromBox) ? DateFromCalendar : DateToCalendar;
+
+    /// <summary>
+    /// The calendar opens the moment the caret lands in a date box - there
+    /// is no separate button for it.
+    /// </summary>
+    private void OnDateBoxGotFocus(
+        object sender,
+        KeyboardFocusChangedEventArgs eventArgs)
+    {
+        if (!isCalendarUiUpdating && sender is TextBox box)
+        {
+            OpenDateCalendar(box);
+        }
+    }
+
+    private void OnDateBoxMouseUp(
+        object sender,
+        MouseButtonEventArgs eventArgs)
+    {
+        // Clicking a box that already holds the caret raises no focus event,
+        // so it reopens a dismissed calendar here instead.
+        if (sender is TextBox box && !GetDateCalendarPopup(box).IsOpen)
+        {
+            OpenDateCalendar(box);
+        }
+    }
+
+    private void OnDateBoxLostFocus(
+        object sender,
+        KeyboardFocusChangedEventArgs eventArgs)
+    {
+        if (sender is not TextBox box)
+        {
+            return;
+        }
+
+        // Focus wandering into the calendar itself - to page months or pick
+        // a day - must not close it.
+        var popup = GetDateCalendarPopup(box);
+        if (eventArgs.NewFocus is System.Windows.Media.Visual next
+            && popup.Child is System.Windows.Media.Visual child
+            && child.IsAncestorOf(next))
+        {
+            return;
+        }
+
+        popup.IsOpen = false;
+    }
+
+    private void OnDateBoxPreviewKeyDown(object sender, KeyEventArgs eventArgs)
+    {
+        if (eventArgs.Key != Key.Escape || sender is not TextBox box)
+        {
+            return;
+        }
+
+        // The first Esc dismisses the calendar and keeps typing; the next
+        // one falls through and closes the filter popup as before.
+        var popup = GetDateCalendarPopup(box);
+        if (popup.IsOpen)
+        {
+            popup.IsOpen = false;
+            eventArgs.Handled = true;
+        }
+    }
+
+    private void OnDateBoxTextChanged(
+        object sender,
+        TextChangedEventArgs eventArgs)
+    {
+        // Typing pages the open calendar along without touching its
+        // selection, so a hand-typed "2026" shows January 2026 instead of
+        // today.
+        if (!isCalendarUiUpdating
+            && sender is TextBox box
+            && GetDateCalendarPopup(box).IsOpen
+            && ParseFilterDate(box.Text, endOfPeriod: false) is { } typed)
+        {
+            GetDateCalendar(box).DisplayDate = typed;
+        }
+
+        ApplyFilterFromUi();
+    }
+
+    private void OpenDateCalendar(TextBox box)
+    {
+        InitializeDateCalendar(box);
+        GetDateCalendarPopup(box).IsOpen = true;
+    }
+
+    /// <summary>
+    /// Preloads a popup calendar from whatever is already typed: the box's
+    /// own value first, then the other bound, so picking the second date of
+    /// a range starts on the month the range already talks about instead of
+    /// today.
+    /// </summary>
+    private void InitializeDateCalendar(TextBox box)
+    {
+        var calendar = GetDateCalendar(box);
+        var otherText = ReferenceEquals(box, DateFromBox)
+            ? DateToBox.Text
+            : DateFromBox.Text;
+
+        isCalendarUiUpdating = true;
+        try
+        {
+            var own = ParseFilterDate(box.Text, endOfPeriod: false);
+            var other = ParseFilterDate(otherText, endOfPeriod: false);
+            calendar.SelectedDate = own;
+            calendar.DisplayDate = own ?? other ?? DateTime.Today;
+        }
+        finally
+        {
+            isCalendarUiUpdating = false;
+        }
+    }
+
+    private void OnDateCalendarSelectionChanged(
+        object sender,
+        SelectionChangedEventArgs eventArgs)
+    {
+        if (isCalendarUiUpdating
+            || sender is not System.Windows.Controls.Calendar
+            {
+                SelectedDate: { } date
+            } calendar)
+        {
+            return;
+        }
+
+        var box = ReferenceEquals(calendar, DateFromCalendar)
+            ? DateFromBox
+            : DateToBox;
+        box.Text = date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+
+        // A calendar inside a popup holds on to mouse capture after a click
+        // and would swallow the next click anywhere in the window.
+        Mouse.Capture(null);
+        GetDateCalendarPopup(box).IsOpen = false;
+
+        // Hand the caret back without the focus event reopening the popup.
+        isCalendarUiUpdating = true;
+        try
+        {
+            box.Focus();
+        }
+        finally
+        {
+            isCalendarUiUpdating = false;
+        }
+    }
+
+    private void OnFilterPopupClosed(object? sender, EventArgs eventArgs)
+    {
+        // The calendars are the filter popup's children only visually; they
+        // must not outlive it.
+        DateFromCalendarPopup.IsOpen = false;
+        DateToCalendarPopup.IsOpen = false;
+    }
+
+    internal void ValidateDateFilterCalendarForSmokeTest()
+    {
+        var originalFrom = DateFromBox.Text;
+        var originalTo = DateToBox.Text;
+        // The date range briefly filters the gallery, and the harness photos
+        // live only in the visible collection - refiltering forgets them. The
+        // gallery and its selection are put back for the remaining scenarios.
+        var originalPhotos = viewModel.Photos.ToArray();
+        var originalSelection = viewModel.SelectedPhoto;
+        try
+        {
+            DateFromBox.Text = "2025-07";
+            DateToBox.Text = string.Empty;
+
+            InitializeDateCalendar(DateFromBox);
+            if (DateFromCalendar.SelectedDate != new DateTime(2025, 7, 1)
+                || DateFromCalendar.DisplayDate != new DateTime(2025, 7, 1))
+            {
+                throw new InvalidOperationException(
+                    "The From calendar must open on the typed period.");
+            }
+
+            InitializeDateCalendar(DateToBox);
+            if (DateToCalendar.SelectedDate is not null
+                || DateToCalendar.DisplayDate != new DateTime(2025, 7, 1))
+            {
+                throw new InvalidOperationException(
+                    "An empty To calendar must borrow the From month.");
+            }
+
+            DateToCalendar.SelectedDate = new DateTime(2025, 7, 21);
+            if (DateToBox.Text != "2025-07-21"
+                || DateToCalendarPopup.IsOpen)
+            {
+                throw new InvalidOperationException(
+                    "Picking a date must fill the box and close the popup.");
+            }
+
+            var expectedEnd = new DateTime(2025, 7, 21)
+                .AddDays(1)
+                .AddTicks(-1);
+            if (viewModel.Filter.TakenFrom != new DateTime(2025, 7, 1)
+                || viewModel.Filter.TakenTo != expectedEnd)
+            {
+                throw new InvalidOperationException(
+                    "A picked date must reach the filter criteria.");
+            }
+        }
+        finally
+        {
+            DateFromCalendar.SelectedDate = null;
+            DateToCalendar.SelectedDate = null;
+            DateFromBox.Text = originalFrom;
+            DateToBox.Text = originalTo;
+            viewModel.Photos.ReplaceRange(originalPhotos);
+            viewModel.SelectedPhoto = originalSelection;
+        }
+    }
+
     private void OnClearFilterClick(object sender, RoutedEventArgs eventArgs)
     {
         isFilterUiUpdating = true;
@@ -361,6 +598,7 @@ public partial class MainWindow
             AnyOrientationBox.IsChecked = true;
             AnySmileBox.IsChecked = true;
             AnyEyesBox.IsChecked = true;
+            AnyLocationBox.IsChecked = true;
             CameraFilterBox.SelectedItem = null;
             LensFilterBox.SelectedItem = null;
             foreach (var chip in personFilterChips)

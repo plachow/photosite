@@ -322,6 +322,84 @@
     <Setter Property="Padding" Value="14" />
   </Style>
 
+  <!-- Lives here rather than in MainWindow's dictionary because dialogs
+       (the filter dialog's Before button) resolve their resources from
+       application scope, not from whichever window opened them. -->
+  <Style x:Key="EditorSelectToggleButtonStyle"
+         TargetType="ToggleButton">
+    <Setter Property="MinWidth" Value="62" />
+    <Setter Property="Height" Value="32" />
+    <Setter Property="Margin" Value="2" />
+    <Setter Property="Padding" Value="12,0" />
+    <Setter Property="Background" Value="#292D36" />
+    <Setter Property="BorderBrush" Value="#454B57" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="Foreground" Value="#F2F4F8" />
+    <Setter Property="Cursor" Value="Hand" />
+    <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="ToggleButton">
+          <Border x:Name="ButtonChrome"
+                  Padding="{TemplateBinding Padding}"
+                  Background="{TemplateBinding Background}"
+                  BorderBrush="{TemplateBinding BorderBrush}"
+                  BorderThickness="{TemplateBinding BorderThickness}"
+                  CornerRadius="7"
+                  SnapsToDevicePixels="True">
+            <ContentPresenter HorizontalAlignment="Center"
+                              VerticalAlignment="Center"
+                              RecognizesAccessKey="True" />
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="ButtonChrome"
+                      Property="Background"
+                      Value="#343A46" />
+              <Setter TargetName="ButtonChrome"
+                      Property="BorderBrush"
+                      Value="#5D6675" />
+            </Trigger>
+            <Trigger Property="IsChecked" Value="True">
+              <Setter TargetName="ButtonChrome"
+                      Property="Background"
+                      Value="#246A9B" />
+              <Setter TargetName="ButtonChrome"
+                      Property="BorderBrush"
+                      Value="#8BC8FF" />
+            </Trigger>
+            <MultiTrigger>
+              <MultiTrigger.Conditions>
+                <Condition Property="IsChecked" Value="True" />
+                <Condition Property="IsMouseOver" Value="True" />
+              </MultiTrigger.Conditions>
+              <Setter TargetName="ButtonChrome"
+                      Property="Background"
+                      Value="#2C78AC" />
+              <Setter TargetName="ButtonChrome"
+                      Property="BorderBrush"
+                      Value="#B4DCFF" />
+            </MultiTrigger>
+            <Trigger Property="IsPressed" Value="True">
+              <Setter TargetName="ButtonChrome"
+                      Property="Background"
+                      Value="#1D557D" />
+            </Trigger>
+            <Trigger Property="IsKeyboardFocused" Value="True">
+              <Setter TargetName="ButtonChrome"
+                      Property="BorderBrush"
+                      Value="{DynamicResource AccentBrush}" />
+            </Trigger>
+            <Trigger Property="IsEnabled" Value="False">
+              <Setter Property="Opacity" Value="0.38" />
+              <Setter Property="Cursor" Value="Arrow" />
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
   <!-- Person chips: a rounded pill with the person's colour dot. The toggle
        flavour filters the gallery, the button flavour tags a face group. -->
   <Style x:Key="PersonChipToggleStyle" TargetType="ToggleButton">
@@ -379,6 +457,272 @@
         <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
       </Trigger>
     </Style.Triggers>
+  </Style>
+
+  <!-- Dark calendar. WPF's Calendar ships with a hardcoded light chrome, so
+       every piece it is assembled from - the frame, the navigation header,
+       the day cells and the month/year cells - is redrawn in the panel
+       palette here. -->
+
+  <Style x:Key="CalendarNavigationButtonStyle" TargetType="Button">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="Foreground" Value="{StaticResource SecondaryTextBrush}" />
+    <Setter Property="FontFamily" Value="Segoe UI Symbol" />
+    <Setter Property="FontSize" Value="11" />
+    <Setter Property="Cursor" Value="Hand" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Button">
+          <Border x:Name="Chrome"
+                  Padding="9,5"
+                  Background="{TemplateBinding Background}"
+                  CornerRadius="3">
+            <ContentPresenter HorizontalAlignment="Center"
+                              VerticalAlignment="Center" />
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="Chrome"
+                      Property="Background"
+                      Value="#2C3140" />
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <Style x:Key="CalendarHeaderButtonStyle"
+         TargetType="Button"
+         BasedOn="{StaticResource CalendarNavigationButtonStyle}">
+    <Setter Property="FontFamily" Value="Segoe UI" />
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="Foreground" Value="{StaticResource PrimaryTextBrush}" />
+  </Style>
+
+  <Style x:Key="DarkCalendarDayButtonStyle" TargetType="CalendarDayButton">
+    <Setter Property="MinWidth" Value="30" />
+    <Setter Property="MinHeight" Value="26" />
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="Foreground" Value="#E4E7ED" />
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="CalendarDayButton">
+          <Border x:Name="Chrome"
+                  Background="Transparent"
+                  BorderBrush="Transparent"
+                  BorderThickness="1"
+                  CornerRadius="3">
+            <ContentPresenter x:Name="Content"
+                              Margin="{TemplateBinding Padding}"
+                              HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="Chrome"
+                      Property="Background"
+                      Value="#2C3140" />
+            </Trigger>
+            <Trigger Property="IsToday" Value="True">
+              <Setter TargetName="Chrome"
+                      Property="BorderBrush"
+                      Value="#8BC8FF" />
+            </Trigger>
+            <Trigger Property="IsSelected" Value="True">
+              <Setter TargetName="Chrome"
+                      Property="Background"
+                      Value="#284967" />
+              <Setter Property="Foreground" Value="White" />
+            </Trigger>
+            <Trigger Property="IsInactive" Value="True">
+              <Setter Property="Foreground" Value="#5D6675" />
+            </Trigger>
+            <Trigger Property="IsBlackedOut" Value="True">
+              <Setter TargetName="Content" Property="Opacity" Value="0.3" />
+            </Trigger>
+            <Trigger Property="IsEnabled" Value="False">
+              <Setter Property="Opacity" Value="0.4" />
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <Style x:Key="DarkCalendarButtonStyle" TargetType="CalendarButton">
+    <Setter Property="MinWidth" Value="52" />
+    <Setter Property="MinHeight" Value="34" />
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="Foreground" Value="#E4E7ED" />
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="CalendarButton">
+          <Border x:Name="Chrome"
+                  Background="Transparent"
+                  CornerRadius="3">
+            <ContentPresenter Margin="{TemplateBinding Padding}"
+                              HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="Chrome"
+                      Property="Background"
+                      Value="#2C3140" />
+            </Trigger>
+            <Trigger Property="HasSelectedDays" Value="True">
+              <Setter TargetName="Chrome"
+                      Property="Background"
+                      Value="#284967" />
+              <Setter Property="Foreground" Value="White" />
+            </Trigger>
+            <Trigger Property="IsInactive" Value="True">
+              <Setter Property="Foreground" Value="#5D6675" />
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <Style x:Key="DarkCalendarItemStyle" TargetType="CalendarItem">
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="CalendarItem">
+          <ControlTemplate.Resources>
+            <!-- The weekday header row picks its template up by this
+                 component key; without it the days would render in the
+                 theme's dark-on-dark default. -->
+            <DataTemplate x:Key="{x:Static CalendarItem.DayTitleTemplateResourceKey}">
+              <TextBlock Margin="0,6,0,3"
+                         HorizontalAlignment="Center"
+                         FontSize="10"
+                         FontWeight="SemiBold"
+                         Foreground="{StaticResource MutedTextBrush}"
+                         Text="{Binding}" />
+            </DataTemplate>
+          </ControlTemplate.Resources>
+          <Grid x:Name="PART_Root">
+            <Border Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}"
+                    CornerRadius="5"
+                    Padding="6">
+              <Grid>
+                <Grid.RowDefinitions>
+                  <RowDefinition Height="Auto" />
+                  <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <Grid>
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                  </Grid.ColumnDefinitions>
+                  <Button x:Name="PART_PreviousButton"
+                          AutomationProperties.Name="Previous"
+                          Content="◀"
+                          Style="{StaticResource CalendarNavigationButtonStyle}" />
+                  <Button x:Name="PART_HeaderButton"
+                          Grid.Column="1"
+                          AutomationProperties.Name="Displayed period"
+                          Style="{StaticResource CalendarHeaderButtonStyle}" />
+                  <Button x:Name="PART_NextButton"
+                          Grid.Column="2"
+                          AutomationProperties.Name="Next"
+                          Content="▶"
+                          Style="{StaticResource CalendarNavigationButtonStyle}" />
+                </Grid>
+                <Grid x:Name="PART_MonthView"
+                      Grid.Row="1"
+                      Margin="0,2,0,0"
+                      Visibility="Visible">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition />
+                    <ColumnDefinition />
+                    <ColumnDefinition />
+                    <ColumnDefinition />
+                    <ColumnDefinition />
+                    <ColumnDefinition />
+                    <ColumnDefinition />
+                  </Grid.ColumnDefinitions>
+                  <Grid.RowDefinitions>
+                    <RowDefinition />
+                    <RowDefinition />
+                    <RowDefinition />
+                    <RowDefinition />
+                    <RowDefinition />
+                    <RowDefinition />
+                    <RowDefinition />
+                  </Grid.RowDefinitions>
+                </Grid>
+                <Grid x:Name="PART_YearView"
+                      Grid.Row="1"
+                      Margin="0,2,0,0"
+                      Visibility="Hidden">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition />
+                    <ColumnDefinition />
+                    <ColumnDefinition />
+                    <ColumnDefinition />
+                  </Grid.ColumnDefinitions>
+                  <Grid.RowDefinitions>
+                    <RowDefinition />
+                    <RowDefinition />
+                    <RowDefinition />
+                  </Grid.RowDefinitions>
+                </Grid>
+              </Grid>
+            </Border>
+          </Grid>
+          <ControlTemplate.Triggers>
+            <DataTrigger Binding="{Binding DisplayMode,
+                                           RelativeSource={RelativeSource
+                                               FindAncestor,
+                                               AncestorType={x:Type Calendar}}}"
+                         Value="Year">
+              <Setter TargetName="PART_MonthView"
+                      Property="Visibility"
+                      Value="Hidden" />
+              <Setter TargetName="PART_YearView"
+                      Property="Visibility"
+                      Value="Visible" />
+            </DataTrigger>
+            <DataTrigger Binding="{Binding DisplayMode,
+                                           RelativeSource={RelativeSource
+                                               FindAncestor,
+                                               AncestorType={x:Type Calendar}}}"
+                         Value="Decade">
+              <Setter TargetName="PART_MonthView"
+                      Property="Visibility"
+                      Value="Hidden" />
+              <Setter TargetName="PART_YearView"
+                      Property="Visibility"
+                      Value="Visible" />
+            </DataTrigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <Style TargetType="Calendar">
+    <Setter Property="Background" Value="{DynamicResource PanelBrush}" />
+    <Setter Property="BorderBrush" Value="{StaticResource FieldBorderBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="Foreground" Value="{StaticResource PrimaryTextBrush}" />
+    <Setter Property="CalendarItemStyle"
+            Value="{StaticResource DarkCalendarItemStyle}" />
+    <Setter Property="CalendarDayButtonStyle"
+            Value="{StaticResource DarkCalendarDayButtonStyle}" />
+    <Setter Property="CalendarButtonStyle"
+            Value="{StaticResource DarkCalendarButtonStyle}" />
   </Style>
 
 </ResourceDictionary>

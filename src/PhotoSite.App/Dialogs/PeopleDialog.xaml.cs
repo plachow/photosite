@@ -9,11 +9,13 @@ using PhotoSite.Services.Faces;
 namespace PhotoSite.Dialogs;
 
 /// <summary>
-/// Stage one of face recognition: scans the current folder with the local
+/// Stage one of face recognition: scans the given photographs - the gallery
+/// selection, or the whole folder when nothing is selected - with the local
 /// YuNet + SFace models, groups the unnamed faces, and lets whole groups be
 /// named at once. A name becomes a person in the catalogue and a keyword on
 /// every photograph the person appears in; newly scanned faces that clearly
-/// match an already-named person are assigned automatically.
+/// match an already-named person are assigned automatically, and a group of
+/// strangers can be waved away for good.
 /// </summary>
 public partial class PeopleDialog : Window
 {
@@ -27,6 +29,7 @@ public partial class PeopleDialog : Window
     private readonly FaceEngine engine;
     private readonly PhotoCatalogRepository catalog;
     private readonly PreviewService previews;
+    private readonly bool scanningSelection;
     private CancellationTokenSource? scanCancellation;
     private bool isScanning;
 
@@ -34,15 +37,23 @@ public partial class PeopleDialog : Window
         IReadOnlyList<PhotoRecord> photos,
         FaceEngine engine,
         PhotoCatalogRepository catalog,
-        PreviewService previews)
+        PreviewService previews,
+        bool scanningSelection)
     {
         this.photos = photos;
         this.engine = engine;
         this.catalog = catalog;
         this.previews = previews;
+        this.scanningSelection = scanningSelection;
         InitializeComponent();
+        DarkWindowChrome.Apply(this);
+        ScanButton.Content = ScanButtonLabel;
         Loaded += async (_, _) => await RefreshAsync();
     }
+
+    private string ScanButtonLabel => scanningSelection
+        ? "Scan selection for faces"
+        : "Scan folder for faces";
 
     private sealed class ClusterRow
     {
@@ -191,7 +202,9 @@ public partial class PeopleDialog : Window
                 }
                 else
                 {
-                    parts.Add($"{photos.Count:N0} photos in this folder");
+                    parts.Add(scanningSelection
+                        ? $"{photos.Count:N0} selected photo(s)"
+                        : $"{photos.Count:N0} photos in this folder");
                 }
 
                 if (rows.Count > 0)
@@ -717,6 +730,30 @@ public partial class PeopleDialog : Window
         }
     }
 
+    private async void OnIgnoreClusterClick(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        if (sender is not FrameworkElement { Tag: ClusterRow row })
+        {
+            return;
+        }
+
+        try
+        {
+            await catalog.IgnoreFacesAsync(row.FaceIds);
+            DetailText.Text =
+                $"Ignored {row.FaceIds.Count:N0} face(s); the group will "
+                + "not be offered again.";
+        }
+        catch (Exception exception)
+        {
+            DetailText.Text = $"Ignoring the group failed: {exception.Message}";
+        }
+
+        await RefreshAsync();
+    }
+
     private async Task AssignClusterAsync(ClusterRow row, string name)
     {
         try
@@ -949,7 +986,7 @@ public partial class PeopleDialog : Window
             ? Visibility.Visible
             : Visibility.Collapsed;
         ScanProgress.Value = 0;
-        ScanButton.Content = scanning ? "Stop" : "Scan folder for faces";
+        ScanButton.Content = scanning ? "Stop" : ScanButtonLabel;
         CloseButton.IsEnabled = !scanning;
         if (!scanning)
         {

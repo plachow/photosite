@@ -30,6 +30,7 @@ public partial class AiTagDialog : Window
     private readonly OllamaVisionService service;
     private readonly PhotoCatalogRepository catalog;
     private readonly PreviewService previews;
+    private readonly ExifToolGeolocator geolocator;
     private CancellationTokenSource? runCancellation;
     private bool isLoading;
     private bool isRunning;
@@ -38,13 +39,16 @@ public partial class AiTagDialog : Window
         IReadOnlyList<PhotoItemViewModel> photos,
         OllamaVisionService service,
         PhotoCatalogRepository catalog,
-        PreviewService previews)
+        PreviewService previews,
+        ExifToolGeolocator geolocator)
     {
         this.photos = photos;
         this.service = service;
         this.catalog = catalog;
         this.previews = previews;
+        this.geolocator = geolocator;
         InitializeComponent();
+        DarkWindowChrome.Apply(this);
         PopulateChoices();
         Loaded += async (_, _) => await LoadSettingsAsync();
     }
@@ -271,12 +275,22 @@ public partial class AiTagDialog : Window
                 try
                 {
                     var jpeg = await LoadRequestImageAsync(photo, token);
+                    // The place resolves offline from the coordinates the
+                    // catalogue holds - which may be the user's correction,
+                    // not what the file says. A failed lookup just means the
+                    // model gets no place context.
+                    var place = photo.Record is
+                        { Latitude: { } latitude, Longitude: { } longitude }
+                        ? await geolocator.ResolveAsync(latitude, longitude, token)
+                        : null;
                     var insights = await service.DescribeAsync(
                         endpoint,
                         model,
                         jpeg,
                         language,
                         includeEnglish,
+                        place,
+                        photo.Record.HasApproximateLocation,
                         token);
                     Apply(photo, insights, mode, includeEnglish);
                     described++;

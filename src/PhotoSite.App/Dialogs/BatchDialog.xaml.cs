@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using Microsoft.Win32;
 using PhotoSite.Domain;
+using PhotoSite.Infrastructure;
 using PhotoSite.Services.Batch;
 
 namespace PhotoSite.Dialogs;
@@ -31,6 +32,7 @@ public partial class BatchDialog : Window
         this.processor = processor;
         this.presetKind = presetKind;
         InitializeComponent();
+        DarkWindowChrome.Apply(this);
 
         if (presetKind == BatchPresetStore.ExportKind)
         {

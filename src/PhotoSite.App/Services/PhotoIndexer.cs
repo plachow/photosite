@@ -146,7 +146,11 @@ public sealed class PhotoIndexer
             metadata.FocalLength,
             metadata.Aperture,
             metadata.ExposureSeconds,
-            metadata.Iso);
+            metadata.Iso,
+            GpsErrorMeters: metadata.GpsErrorMeters,
+            GpsFixAgeSeconds: metadata.GpsFixAgeSeconds,
+            GpsProcessingMethod: metadata.GpsProcessingMethod,
+            GpsAltitude: metadata.GpsAltitude);
     }
 
     internal static bool CanReuseMetadata(

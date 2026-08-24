@@ -265,10 +265,20 @@
                             </DataTemplate>
                           </ItemsControl.ItemTemplate>
                         </ItemsControl>
-                        <Button HorizontalAlignment="Left"
-                                Content="＋ New person…"
-                                Tag="{Binding}"
-                                Click="OnAssignNewPersonClick" />
+                        <StackPanel HorizontalAlignment="Left"
+                                    Orientation="Horizontal">
+                          <Button Content="＋ New person…"
+                                  Tag="{Binding}"
+                                  Click="OnAssignNewPersonClick" />
+                          <Button Margin="6,0,0,0"
+                                  Style="{StaticResource PersonChipButtonStyle}"
+                                  AutomationProperties.Name="Ignore this group"
+                                  Tag="{Binding}"
+                                  ToolTip="Strangers - hide this group and never offer these faces again"
+                                  Click="OnIgnoreClusterClick">
+                            <TextBlock FontSize="11" Text="🚫 Ignore" />
+                          </Button>
+                        </StackPanel>
                       </StackPanel>
                     </Grid>
                   </Border>

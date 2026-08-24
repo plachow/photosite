@@ -44,9 +44,9 @@ public partial class MainWindow
             {
                 Content = glyph,
                 Tag = tool,
-                MinWidth = 34,
-                Height = 28,
-                Margin = new Thickness(0, 0, 4, 4),
+                Width = 34,
+                Height = 30,
+                Margin = new Thickness(0, 0, 0, 3),
                 FontFamily = new FontFamily("Segoe UI Symbol"),
                 ToolTip = tip,
                 Style = (Style)FindResource("EditorSelectToggleButtonStyle")
@@ -144,6 +144,32 @@ public partial class MainWindow
             button.IsChecked = (AnnotationTool)button.Tag
                                == PreviewViewer.ActiveTool;
         }
+
+        UpdateToolOptionsPanel();
+    }
+
+    /// <summary>
+    /// The floating tool-options card beside the toolbox appears only while
+    /// it has something to configure: an armed drawing tool or a selected
+    /// object. Its text section shows up just for the text tool and text
+    /// layers.
+    /// </summary>
+    private void UpdateToolOptionsPanel()
+    {
+        var hasSubject = PreviewViewer.ActiveTool != AnnotationTool.None
+                         || PreviewViewer.SelectedLayerId is not null;
+        ToolOptionsPanel.Visibility =
+            viewModel.IsEditorMode && !viewModel.IsFullscreenMode && hasSubject
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+        ToolOptionsHeader.Text = PreviewViewer.ActiveTool != AnnotationTool.None
+            ? PreviewViewer.ActiveTool.ToString().ToUpperInvariant()
+            : "SELECTION";
+        TextOptionsPanel.Visibility =
+            PreviewViewer.ActiveTool == AnnotationTool.Text
+            || GetSelectedLayer() is TextLayer
+                ? Visibility.Visible
+                : Visibility.Collapsed;
     }
 
     private void OnAnnotationColorClick(object sender, RoutedEventArgs eventArgs)
@@ -329,6 +355,7 @@ public partial class MainWindow
                                      || PreviewViewer.ActiveTool
                                      == AnnotationTool.Text;
             FontSizeSlider.IsEnabled = LayerTextBox.IsEnabled;
+            UpdateToolOptionsPanel();
         }
         finally
         {

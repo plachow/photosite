@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using PhotoSite.Domain;
+using PhotoSite.Infrastructure;
 using PhotoSite.Services.Imaging;
 
 namespace PhotoSite.Dialogs;
@@ -23,6 +24,7 @@ public partial class FilterDialog : Window
     internal FilterDialog(BitmapSource source)
     {
         InitializeComponent();
+        DarkWindowChrome.Apply(this);
         previewSource = ImageRenderer.Resize(source, PreviewLongestSide);
 
         renderTimer = new DispatcherTimer

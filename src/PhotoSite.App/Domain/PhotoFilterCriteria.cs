@@ -63,6 +63,13 @@ public sealed record PhotoFilterCriteria
     /// </summary>
     public bool? EyesOpen { get; init; }
 
+    /// <summary>
+    /// From the GPS evidence read out of the file: true keeps photos whose
+    /// coordinates are probably approximate - the pile to review and fix -
+    /// false keeps the precisely located ones. Null does not filter.
+    /// </summary>
+    public bool? ApproximateLocation { get; init; }
+
     public bool IsActive =>
         MinimumRating > 0
         || ColorLabels.Count > 0
@@ -77,6 +84,7 @@ public sealed record PhotoFilterCriteria
         || PersonIds.Count > 0
         || Smiling is not null
         || EyesOpen is not null
+        || ApproximateLocation is not null
         || !string.IsNullOrWhiteSpace(SearchText);
 
     /// <summary>
@@ -150,6 +158,11 @@ public sealed record PhotoFilterCriteria
             parts.Add(eyesOpen ? "eyes open" : "closed eyes");
         }
 
+        if (ApproximateLocation is { } approximate)
+        {
+            parts.Add(approximate ? "approximate GPS" : "precise GPS");
+        }
+
         if (HideRejected)
         {
             parts.Add("no rejects");
@@ -173,6 +186,7 @@ public sealed record PhotoFilterCriteria
         && PersonIds.SetEquals(other.PersonIds)
         && Smiling == other.Smiling
         && EyesOpen == other.EyesOpen
+        && ApproximateLocation == other.ApproximateLocation
         && string.Equals(SearchText, other.SearchText, StringComparison.Ordinal);
 
     public override int GetHashCode() =>

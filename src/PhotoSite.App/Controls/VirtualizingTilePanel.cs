@@ -86,6 +86,29 @@ public sealed class VirtualizingTilePanel : VirtualizingPanel, IScrollInfo
         return availableSize;
     }
 
+    /// <summary>
+    /// ScrollIntoView lands here when the item is virtualized away and no
+    /// container exists to bring into view; the base implementation is a
+    /// silent no-op, which left the list sitting wherever it was.
+    /// </summary>
+    protected override void BringIndexIntoView(int index)
+    {
+        if (index < 0)
+        {
+            return;
+        }
+
+        var top = (index / itemsPerRow) * ItemHeight;
+        if (top < VerticalOffset)
+        {
+            SetVerticalOffset(top);
+        }
+        else if (top + ItemHeight > VerticalOffset + ViewportHeight)
+        {
+            SetVerticalOffset(top + ItemHeight - ViewportHeight);
+        }
+    }
+
     protected override Size ArrangeOverride(Size finalSize)
     {
         foreach (UIElement child in InternalChildren)
