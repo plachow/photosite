@@ -1,3 +1,4 @@
+using System.Collections.Specialized;
 using System.ComponentModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -49,6 +50,9 @@ public sealed class MainViewModel : ObservableObject
     private PhotoItemViewModel? selectionBeforeTransientDocument;
     private string? currentFolder;
     private string photoCountText = "0 photos";
+    private string galleryTotalsText = "0 files · 0 B";
+    private string selectionTotalsText = "none";
+    private long galleryTotalBytes;
     private string statusText = "Choose a folder to begin";
     private bool isBusy;
     private bool isEditorMode;
@@ -124,6 +128,9 @@ public sealed class MainViewModel : ObservableObject
         RefreshCommand = new AsyncRelayCommand(RefreshAsync);
         EditorTabs.CollectionChanged +=
             (_, _) => OnPropertyChanged(nameof(HasEditorTabs));
+        // The footer counts what the gallery presents, so it follows the
+        // presented collection rather than any single refresh path.
+        Photos.CollectionChanged += OnPhotosCollectionChanged;
     }
 
     public const double DefaultThumbnailSize = 204;
@@ -471,6 +478,26 @@ public sealed class MainViewModel : ObservableObject
     {
         get => photoCountText;
         private set => SetProperty(ref photoCountText, value);
+    }
+
+    /// <summary>
+    /// The footer tally of what the filters actually show - the file count and
+    /// the disk those files occupy.
+    /// </summary>
+    public string GalleryTotalsText
+    {
+        get => galleryTotalsText;
+        private set => SetProperty(ref galleryTotalsText, value);
+    }
+
+    /// <summary>
+    /// The footer tally of the gallery selection, kept in step with the
+    /// multi-select list by <see cref="UpdateSelectionTotals"/>.
+    /// </summary>
+    public string SelectionTotalsText
+    {
+        get => selectionTotalsText;
+        private set => SetProperty(ref selectionTotalsText, value);
     }
 
     public bool IsBusy
@@ -1645,6 +1672,12 @@ public sealed class MainViewModel : ObservableObject
             return;
         }
 
+        if (eventArgs.PropertyName == nameof(PhotoItemViewModel.FileSizeText))
+        {
+            // Saving an edit rewrites the file, so the tally has to be re-read.
+            RecomputeGalleryTotals();
+        }
+
         // Re-presenting on every keypress is pure churn: a value can only
         // move a photo when the gallery actually orders or filters by it.
         var affects = eventArgs.PropertyName switch
@@ -2419,6 +2452,80 @@ public sealed class MainViewModel : ObservableObject
     {
         PhotoCountText = $"{count:N0} photos";
         StatusText = activity ?? string.Empty;
+    }
+
+    /// <summary>
+    /// Reports how many photos the gallery selection holds and how much disk
+    /// they occupy; the multi-selection lives in the list, not the view model.
+    /// </summary>
+    public void UpdateSelectionTotals(
+        IReadOnlyCollection<PhotoItemViewModel> selection)
+    {
+        var bytes = 0L;
+        foreach (var photo in selection)
+        {
+            bytes += photo.Record.Length;
+        }
+
+        SelectionTotalsText = selection.Count == 0
+            ? "none"
+            : FormatFileTally(selection.Count, bytes);
+    }
+
+    private void OnPhotosCollectionChanged(
+        object? sender,
+        NotifyCollectionChangedEventArgs eventArgs)
+    {
+        switch (eventArgs.Action)
+        {
+            case NotifyCollectionChangedAction.Move:
+                // Reordering shows the same files; the totals cannot change.
+                return;
+            case NotifyCollectionChangedAction.Reset:
+                RecomputeGalleryTotals();
+                return;
+            default:
+                // Granular sync sends up to a hundred of these per refresh, so
+                // the running total is nudged rather than summed from scratch.
+                galleryTotalBytes += SumFileSizes(eventArgs.NewItems)
+                                     - SumFileSizes(eventArgs.OldItems);
+                PublishGalleryTotals();
+                return;
+        }
+    }
+
+    private void RecomputeGalleryTotals()
+    {
+        var bytes = 0L;
+        foreach (var photo in Photos)
+        {
+            bytes += photo.Record.Length;
+        }
+
+        galleryTotalBytes = bytes;
+        PublishGalleryTotals();
+    }
+
+    private void PublishGalleryTotals() =>
+        GalleryTotalsText = FormatFileTally(Photos.Count, galleryTotalBytes);
+
+    internal static string FormatFileTally(int count, long bytes) =>
+        count == 1
+            ? $"1 file · {PhotoItemViewModel.FormatFileSize(bytes)}"
+            : $"{count:N0} files · {PhotoItemViewModel.FormatFileSize(bytes)}";
+
+    private static long SumFileSizes(System.Collections.IList? items)
+    {
+        var bytes = 0L;
+        foreach (var item in items ?? Array.Empty<object>())
+        {
+            if (item is PhotoItemViewModel photo)
+            {
+                bytes += photo.Record.Length;
+            }
+        }
+
+        return bytes;
     }
 
     private void NotifyFolderScopeChanged()

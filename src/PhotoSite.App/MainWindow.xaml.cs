@@ -494,7 +494,9 @@ public partial class MainWindow : Window
             || FindName("StatusSeparator1") is not Border
             || FindName("StatusSeparator2") is not Border
             || FindName("StatusSeparator3") is not Border
-            || FindName("RatingFilterSection") is not FrameworkElement ratingSection)
+            || FindName("SelectionTotalsSection") is not FrameworkElement
+            || FindName("GalleryTotalsSection") is not FrameworkElement
+                totalsSection)
         {
             throw new InvalidOperationException(
                 "Status sections must use stable widths, visible vector icons, "
@@ -503,7 +505,7 @@ public partial class MainWindow : Window
 
         var originalFlatVisibility = FlatFolderIcon.Visibility;
         var originalRecursiveVisibility = RecursiveTreeIcon.Visibility;
-        var initialRatingPosition = ratingSection.TranslatePoint(
+        var initialTotalsPosition = totalsSection.TranslatePoint(
             new Point(),
             this).X;
         try
@@ -516,14 +518,14 @@ public partial class MainWindow : Window
                     ? Visibility.Collapsed
                     : Visibility.Visible;
             UpdateLayout();
-            var toggledRatingPosition = ratingSection.TranslatePoint(
+            var toggledTotalsPosition = totalsSection.TranslatePoint(
                 new Point(),
                 this).X;
-            if (Math.Abs(toggledRatingPosition - initialRatingPosition) > 0.1)
+            if (Math.Abs(toggledTotalsPosition - initialTotalsPosition) > 0.1)
             {
                 throw new InvalidOperationException(
                     "Switching between flat and recursive icons must not move "
-                    + "the rating or search filters.");
+                    + "the gallery and selection totals.");
             }
         }
         finally
@@ -779,6 +781,16 @@ public partial class MainWindow : Window
             throw new InvalidOperationException(
                 "The preview mouse wheel must navigate in combined view.");
         }
+    }
+
+    private void OnPhotoListSelectionChanged(
+        object sender,
+        SelectionChangedEventArgs eventArgs)
+    {
+        // The multi-selection belongs to the list, so the footer tally has to
+        // be pushed into the view model whenever it moves.
+        viewModel.UpdateSelectionTotals(
+            PhotoList.SelectedItems.OfType<PhotoItemViewModel>().ToArray());
     }
 
     private void OnPhotoListMouseDoubleClick(

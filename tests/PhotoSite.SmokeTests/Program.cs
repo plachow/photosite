@@ -259,6 +259,27 @@ try
 
     mainViewModel.Photos.Add(selectedViewModel);
     mainViewModel.Photos.Add(nextViewModel);
+    Assert(
+        mainViewModel.GalleryTotalsText
+        == MainViewModel.FormatFileTally(
+            2,
+            selectedViewModel.Record.Length + nextViewModel.Record.Length),
+        "The status bar should tally the presented files and their disk size.");
+    Assert(
+        mainViewModel.SelectionTotalsText == "none",
+        "The status bar should report an empty gallery selection as none.");
+    mainViewModel.UpdateSelectionTotals([nextViewModel]);
+    Assert(
+        mainViewModel.SelectionTotalsText
+        == MainViewModel.FormatFileTally(1, nextViewModel.Record.Length),
+        "The status bar should tally the selected files and their disk size.");
+    mainViewModel.Photos.Remove(nextViewModel);
+    Assert(
+        mainViewModel.GalleryTotalsText
+        == MainViewModel.FormatFileTally(1, selectedViewModel.Record.Length),
+        "Removing a photo should take its size out of the status bar tally.");
+    mainViewModel.Photos.Add(nextViewModel);
+    mainViewModel.UpdateSelectionTotals([]);
     mainViewModel.SelectedPhoto = selectedViewModel;
     mainViewModel.ToggleFullscreenCommand.Execute(null);
     Assert(

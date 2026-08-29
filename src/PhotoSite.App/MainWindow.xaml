@@ -1230,9 +1230,30 @@
               <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
 
+            <StackPanel VerticalAlignment="Center"
+                        Orientation="Horizontal">
+              <TextBlock Margin="0,0,5,0"
+                         VerticalAlignment="Center"
+                         Foreground="#9299A7"
+                         Text="Search" />
+              <TextBox x:Name="PhotoSearchBox"
+                       Width="180"
+                       Height="25"
+                       Margin="0,0,8,0"
+                       Padding="6,3"
+                       VerticalContentAlignment="Center"
+                       Background="#111318"
+                       BorderBrush="#4A5160"
+                       Foreground="#F2F4F8"
+                       SelectionBrush="{StaticResource AccentBrush}"
+                       ToolTip="Search the gallery by name, keyword or person"
+                       Text="{Binding SearchText,
+                                      UpdateSourceTrigger=PropertyChanged}" />
+            </StackPanel>
+
             <ComboBox x:Name="SortFieldBox"
+                      Grid.Column="1"
                       MinWidth="128"
-                      Margin="0,0,2,0"
                       AutomationProperties.Name="Sort by"
                       ItemsSource="{Binding SortOptions}"
                       SelectedItem="{Binding SortField, Mode=TwoWay}"
@@ -1243,13 +1264,6 @@
                 </DataTemplate>
               </ComboBox.ItemTemplate>
             </ComboBox>
-            <Button Grid.Column="1"
-                    Width="28"
-                    Padding="0"
-                    AutomationProperties.Name="Sort direction"
-                    Command="{Binding ToggleSortDirectionCommand}"
-                    Content="{Binding SortDirectionGlyph}"
-                    ToolTip="{Binding SortDirectionToolTip}" />
 
             <ToggleButton x:Name="FilterButton"
                           Grid.Column="2"
@@ -1271,6 +1285,14 @@
                       ToolTip="Thumbnail size (Ctrl+wheel over the gallery)"
                       Visibility="{Binding IsGridView,
                                            Converter={StaticResource BoolToVisibility}}" />
+              <Button Width="32"
+                      Height="26"
+                      Margin="0,0,6,0"
+                      Padding="0"
+                      AutomationProperties.Name="Sort direction"
+                      Command="{Binding ToggleSortDirectionCommand}"
+                      Content="{Binding SortDirectionGlyph}"
+                      ToolTip="{Binding SortDirectionToolTip}" />
               <ToggleButton AutomationProperties.Name="Grid view"
                             Content="▦"
                             IsChecked="{Binding ViewMode,
@@ -1539,6 +1561,7 @@
                  ItemsSource="{Binding Photos}"
                  SelectionMode="Extended"
                  SelectedItem="{Binding SelectedPhoto}"
+                 SelectionChanged="OnPhotoListSelectionChanged"
                  MouseDoubleClick="OnPhotoListMouseDoubleClick"
                  PreviewMouseDown="OnPhotoListPreviewMouseDown"
                  PreviewMouseWheel="OnPhotoListPreviewMouseWheel"
@@ -3017,18 +3040,18 @@
                 Margin="10,0"
                 Background="#3A3F4B" />
 
-        <StackPanel x:Name="RatingFilterSection"
+        <StackPanel x:Name="GalleryTotalsSection"
                     Grid.Column="2"
                     VerticalAlignment="Center"
                     Orientation="Horizontal">
           <TextBlock Margin="0,0,5,0"
                      VerticalAlignment="Center"
                      Foreground="#9299A7"
-                     Text="Rating" />
-          <controls:RatingPicker AutomationProperties.Name="Minimum rating filter"
-                                 RatingToolTipFormat="At least {0} stars"
-                                 UnratedToolTip="No rating filter"
-                                 Value="{Binding MinimumRating, Mode=TwoWay}" />
+                     Text="Shown" />
+          <TextBlock VerticalAlignment="Center"
+                     Foreground="#C8CDD8"
+                     Text="{Binding GalleryTotalsText}"
+                     ToolTip="Files the current filter shows, and the disk they occupy" />
         </StackPanel>
 
         <Border x:Name="StatusSeparator2"
@@ -3038,24 +3061,18 @@
                 Margin="10,0"
                 Background="#3A3F4B" />
 
-        <StackPanel Grid.Column="4"
+        <StackPanel x:Name="SelectionTotalsSection"
+                    Grid.Column="4"
                     VerticalAlignment="Center"
                     Orientation="Horizontal">
           <TextBlock Margin="0,0,5,0"
                      VerticalAlignment="Center"
                      Foreground="#9299A7"
-                     Text="Search" />
-          <TextBox x:Name="PhotoSearchBox"
-                   Width="180"
-                   Height="25"
-                   Padding="6,3"
-                   VerticalContentAlignment="Center"
-                   Background="#111318"
-                   BorderBrush="#4A5160"
-                   Foreground="#F2F4F8"
-                   SelectionBrush="{StaticResource AccentBrush}"
-                   Text="{Binding SearchText,
-                                  UpdateSourceTrigger=PropertyChanged}" />
+                     Text="Selected" />
+          <TextBlock VerticalAlignment="Center"
+                     Foreground="#C8CDD8"
+                     Text="{Binding SelectionTotalsText}"
+                     ToolTip="Files selected in the gallery, and the disk they occupy" />
         </StackPanel>
 
         <Border x:Name="StatusSeparator3"
