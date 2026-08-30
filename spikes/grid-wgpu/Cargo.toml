@@ -1,0 +1,25 @@
+[package]
+name = "grid-wgpu"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+bytemuck = { version = "1.25.2", features = ["derive"] }
+crossbeam-channel = "0.5.16"
+fast_image_resize = "6.1.0"
+jpeg-decoder = "0.3.2"
+jpeg-encoder = "0.7.1"
+memmap2 = "0.9.11"
+png = "0.18.1"
+pollster = "1.0.1"
+rayon = "1.12.0"
+walkdir = "2.5.0"
+wgpu = "30.0.1"
+winit = "0.30.13"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
