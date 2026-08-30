@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- Exe, ne WinExe: chceme konzoli s naměřenými čísly vedle okna. -->
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>PhotoSite.GridBench</AssemblyName>
+    <RootNamespace>PhotoSite.GridBench</RootNamespace>
+    <!-- Spike, ne produkce. -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/PhotoSite.App/PhotoSite.App.csproj" />
+  </ItemGroup>
+</Project>
