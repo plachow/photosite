@@ -93,6 +93,37 @@ pixel stínu dole a vpravo. Víc by z toho udělalo tlačítko.
 
 Název je jednořádkový s výpustkou, ne zalomený.
 
+## Multiplatformnost
+
+Ověřeno `cargo check` na tři cíle z jednoho stroje (typová kontrola linker
+nepotřebuje, takže cross-check jde odkudkoliv):
+
+```bash
+cargo check --target x86_64-unknown-linux-gnu
+cargo check --target aarch64-apple-darwin
+cargo check
+```
+
+Všechny tři projdou beze změny zdrojáku. Dvě věci to ale stálo:
+
+* **`eframe` s `default-features = false` vypne i `x11` a `wayland`** a Linux
+  pak skončí na `compile_error!("The platform you're compiling for is not
+  supported by winit")`. Musí se dopsat ručně.
+* **Kořeny stromu jsou jediné místo, kde na platformě záleží.** Windows mají
+  písmena disků, macOS `/Volumes`, Linux připojené svazky pod `/media`,
+  `/run/media/$USER` a `/mnt`.
+
+Co bude potřeba na cílovém stroji:
+
+| | |
+|---|---|
+| Linux | ovladač Vulkanu (mesa stačí) a X11 nebo Wayland; `libxkbcommon` |
+| macOS | nic, Metal je součástí systému — ale podepsat a notarizovat |
+| Windows | nic, Vulkan i DX12 jsou v ovladači |
+
+Fonty si egui nese vlastní, takže žádný fontconfig ani systémové písmo. Dialogy
+souborů zatím nejsou; až budou, `rfd` je nativní na všech třech.
+
 ## Co tu není
 
 Katalog, metadata, hvězdičky, štítky, vícenásobný výběr, klávesnice, editor,

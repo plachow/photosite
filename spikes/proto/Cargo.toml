@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.104"
 crossbeam-channel = "0.5.16"
-eframe = { version = "0.36.1", default-features = false, features = ["wgpu", "default_fonts"] }
+eframe = { version = "0.36.1", default-features = false, features = ["wgpu", "default_fonts", "x11", "wayland"] }
 egui = "0.36.1"
 fast_image_resize = "6.1.0"
 image = { version = "0.25.10", default-features = false, features = ["png", "webp", "bmp", "tiff", "gif"] }

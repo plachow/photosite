@@ -678,26 +678,51 @@ fn is_photo(path: &Path) -> bool {
     )
 }
 
-/// Kořeny stromu. Na Windows disky, jinde kořen a domovská složka.
+/// Kořeny stromu. Jediné místo v celém prototypu, kde na platformě záleží:
+/// Windows mají písmena disků, macOS `/Volumes`, Linux připojené svazky pod
+/// `/media`, `/run/media` a `/mnt`.
 fn roots() -> Vec<Node> {
     let mut found = Vec::new();
-    if cfg!(windows) {
-        for letter in 'A'..='Z' {
-            let path = PathBuf::from(format!("{letter}:\\"));
-            if path.exists() {
-                let mut node = Node::new(path.clone());
-                node.name = format!("{letter}:");
-                found.push(node);
-            }
-        }
-    } else {
-        found.push(Node::new(PathBuf::from("/")));
-    }
 
     if let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) {
         let path = PathBuf::from(home);
         if path.exists() {
-            found.insert(0, Node::new(path));
+            found.push(Node::new(path));
+        }
+    }
+
+    #[cfg(windows)]
+    for letter in 'A'..='Z' {
+        let path = PathBuf::from(format!("{letter}:\\"));
+        if path.exists() {
+            let mut node = Node::new(path);
+            node.name = format!("{letter}:");
+            found.push(node);
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        found.push(Node::new(PathBuf::from("/")));
+
+        let user = std::env::var("USER").unwrap_or_default();
+        let mounts = [
+            PathBuf::from("/Volumes"),
+            PathBuf::from("/media"),
+            PathBuf::from(format!("/media/{user}")),
+            PathBuf::from(format!("/run/media/{user}")),
+            PathBuf::from("/mnt"),
+        ];
+        for mount in mounts {
+            let Ok(entries) = std::fs::read_dir(&mount) else {
+                continue;
+            };
+
+            for entry in entries.flatten() {
+                if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                    found.push(Node::new(entry.path()));
+                }
+            }
         }
     }
 
