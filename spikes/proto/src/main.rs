@@ -19,12 +19,16 @@ const GAP: f32 = 10.0;
 /// Kolik dekódovaných obrázků se drží v paměti, než začnou vypadávat ty
 /// nejdéle nepoužité.
 const TEXTURE_BUDGET: usize = 900;
+/// Kolik hotových obrázků se za jeden snímek nahraje do GPU. Bez stropu by
+/// jedna dávka dokončených dekódů zasekla hlavní vlákno.
+const UPLOADS_PER_FRAME: usize = 32;
 
 struct Args {
     folder: Option<PathBuf>,
     shot: Option<PathBuf>,
     recursive: bool,
     theme: usize,
+    drag: bool,
 }
 
 fn args() -> Args {
@@ -39,6 +43,7 @@ fn args() -> Args {
         folder: value("--folder"),
         shot: value("--shot"),
         recursive: raw.iter().any(|a| a == "--recursive"),
+        drag: raw.iter().any(|a| a == "--drag"),
         theme: value("--theme")
             .and_then(|t| t.to_string_lossy().parse::<usize>().ok())
             .unwrap_or(0)
@@ -68,6 +73,7 @@ fn main() -> eframe::Result {
             }
 
             app.shot = args.shot;
+            app.drag = args.drag;
             Ok(Box::new(app))
         }),
     )
@@ -120,11 +126,28 @@ struct App {
     loader: Loader,
     textures: HashMap<(PathBuf, Kind), egui::TextureHandle>,
     order: Vec<(PathBuf, Kind)>,
+    /// Co je právě vidět. Skládá se při kreslení mřížky a na konci snímku se
+    /// tím přepíše seznam přání loaderu.
+    wanted_quick: Vec<PathBuf>,
+    wanted_sharp: Vec<PathBuf>,
+    wanted_full: Option<PathBuf>,
     status: String,
     /// Kam uložit snímek okna. Slouží jen k ověření, že to opravdu kreslí to,
     /// co si myslím — jinak by prototyp nešel zkontrolovat jinak než očima.
     shot: Option<PathBuf>,
     frames: u32,
+    /// Nasimuluje tažení scrollbarem do dvou třetin a změří, za jak dlouho po
+    /// zastavení jsou všechny viditelné dlaždice načtené. Bez tohohle bych
+    /// opravu fronty jen tvrdil.
+    drag: bool,
+    forced_scroll: Option<f32>,
+    settled_at: Option<std::time::Instant>,
+    blank_at: Option<f64>,
+    /// Viditelné dlaždice, které nemají vůbec nic, a ty, které nemají ostrou
+    /// verzi. Rozlišit se to musí, protože prázdná dlaždice je problém, kdežto
+    /// rozmazaná ne.
+    blank: usize,
+    unsharp: usize,
 }
 
 impl App {
@@ -140,9 +163,18 @@ impl App {
             loader: Loader::new(),
             textures: HashMap::new(),
             order: Vec::new(),
+            wanted_quick: Vec::new(),
+            wanted_sharp: Vec::new(),
+            wanted_full: None,
             status: "Vyber složku vlevo".to_owned(),
             shot: None,
             frames: 0,
+            drag: false,
+            forced_scroll: None,
+            settled_at: None,
+            blank_at: None,
+            blank: 0,
+            unsharp: 0,
         }
     }
 
@@ -173,7 +205,7 @@ impl App {
 
     /// Přijme, co dorazilo z dekódovacích vláken, a udělá z toho textury.
     fn collect(&mut self, ctx: &egui::Context) {
-        for done in self.loader.drain() {
+        for done in self.loader.drain(UPLOADS_PER_FRAME) {
             let image = egui::ColorImage::from_rgb(done.size, &done.rgb);
             let handle = ctx.load_texture(
                 done.path.to_string_lossy(),
@@ -189,6 +221,9 @@ impl App {
         while self.order.len() > TEXTURE_BUDGET {
             let oldest = self.order.remove(0);
             self.textures.remove(&oldest);
+            // Vyhozenou texturu bude potřeba vyrobit znovu, takže loader musí
+            // zapomenout, že ji už kdysi dekódoval.
+            self.loader.forget(&oldest);
         }
     }
 
@@ -283,14 +318,68 @@ impl eframe::App for App {
             .frame(egui::Frame::NONE.fill(palette.window))
             .show(ui, |ui| self.grid(ui, &palette));
 
-        // Dokud se něco dekóduje, chceme další snímek, ať dlaždice naskakují.
-        ctx.request_repaint_after(std::time::Duration::from_millis(60));
+        // Seznam přání se přepíše až tady, když je jasné, co je vidět a co je
+        // vybrané. Všechno, co v něm není, se přestane dekódovat.
+        self.loader.want(
+            std::mem::take(&mut self.wanted_quick),
+            std::mem::take(&mut self.wanted_sharp),
+            self.wanted_full.clone(),
+        );
+
+        // Dokud něco chybí, chceme další snímek hned. Čekat 60 ms znamená, že
+        // hotové dlaždice čekají na nahrání a mezitím se stihnou objednat
+        // podruhé.
+        if self.blank > 0 || self.unsharp > 0 || self.wanted_full.is_some() {
+            ctx.request_repaint();
+        } else {
+            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+        }
 
         self.frames += 1;
+
+        if self.drag {
+            if self.frames == 90 {
+                self.settled_at = Some(std::time::Instant::now());
+                println!("tažení skončilo, čekám na dlaždice…");
+            }
+
+            if let Some(started) = self.settled_at {
+                if self.blank == 0 && self.blank_at.is_none() && self.frames > 92 {
+                    self.blank_at = Some(started.elapsed().as_secs_f64() * 1000.0);
+                }
+
+                if self.blank == 0 && self.unsharp == 0 && self.frames > 92 {
+                    let (decodes, ms) = self.loader.stats();
+                    println!(
+                        "žádná prázdná dlaždice za {:.0} ms",
+                        self.blank_at.unwrap_or(0.0)
+                    );
+                    println!(
+                        "všechny ostré za {:.0} ms",
+                        started.elapsed().as_secs_f64() * 1000.0
+                    );
+                    println!(
+                        "dekódů celkem {decodes}, průměr {:.1} ms na obrázek",
+                        ms / decodes.max(1) as f64
+                    );
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                } else if started.elapsed().as_secs_f64() > 30.0 {
+                    println!(
+                        "po 30 s pořád {} prázdných a {} neostrých",
+                        self.blank, self.unsharp
+                    );
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
+        }
+
         if let Some(path) = self.shot.clone() {
             // Chvíli počkat, ať se náhledy stihnou dekódovat, pak vyfotit okno.
-            if self.frames == 90 {
-                if !self.photos.is_empty() {
+            // Při tažení chceme snímek z jeho průběhu, ne až po zastavení —
+            // právě tam si stěžuješ na prázdné boxy.
+            let at = if self.drag { 60 } else { 90 };
+            if self.frames == at {
+                if !self.photos.is_empty() && !self.drag {
                     self.selected = Some(0);
                 }
 
@@ -335,7 +424,12 @@ impl App {
         let tile_h = self.tile * 0.72 + theme::CAPTION + theme::PADDING;
         let count = self.photos.len();
 
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show_viewport(
+        let mut scroll = egui::ScrollArea::vertical().auto_shrink([false, false]);
+        if let Some(offset) = self.forced_scroll {
+            scroll = scroll.vertical_scroll_offset(offset);
+        }
+
+        scroll.show_viewport(
             ui,
             |ui, viewport| {
                 let width = ui.available_width();
@@ -350,7 +444,8 @@ impl App {
                 // Vidět je jen pár řádků; zbytek se nekreslí ani nepočítá.
                 let first = ((viewport.min.y - GAP) / pitch).floor().max(0.0) as usize;
                 let last = (((viewport.max.y) / pitch).ceil() as usize).min(rows);
-                let mut wanted: Vec<PathBuf> = Vec::new();
+                let mut wanted_quick: Vec<(usize, PathBuf)> = Vec::new();
+                let mut wanted_sharp: Vec<(usize, PathBuf)> = Vec::new();
                 let mut clicked = None;
 
                 for row in first..last {
@@ -388,8 +483,21 @@ impl App {
                             response.hovered(),
                         );
 
-                        let key = (path.clone(), Kind::Thumb);
-                        match self.textures.get(&key) {
+                        // Ostrá verze má přednost, ale dokud není, kreslí se
+                        // ta z EXIFu. Prázdná dlaždice je až třetí možnost.
+                        let sharp = (path.clone(), Kind::Thumb);
+                        let quick = (path.clone(), Kind::Quick);
+                        let has_sharp = self.textures.contains_key(&sharp);
+                        if !has_sharp {
+                            wanted_sharp.push((index, path.clone()));
+                        }
+
+                        let shown = if has_sharp {
+                            self.textures.get(&sharp)
+                        } else {
+                            self.textures.get(&quick)
+                        };
+                        match shown {
                             Some(texture) => {
                                 let size = texture.size();
                                 ui.painter().image(
@@ -402,14 +510,20 @@ impl App {
                                     egui::Color32::WHITE,
                                 );
                             }
-                            None => wanted.push(path.clone()),
+                            None => wanted_quick.push((index, path.clone())),
                         }
                     }
                 }
 
-                for path in &wanted {
-                    self.loader.request(path, Kind::Thumb);
-                }
+                // Od středu viewportu ven: doprostřed se člověk dívá.
+                let middle = (first + last) as f32 * 0.5 * cols as f32;
+                let order = |list: Vec<(usize, PathBuf)>| {
+                    let mut list = list;
+                    list.sort_by_key(|(index, _)| (*index as f32 - middle).abs() as i64);
+                    list.into_iter().map(|(_, path)| path).collect::<Vec<_>>()
+                };
+                self.wanted_quick = order(wanted_quick);
+                self.wanted_sharp = order(wanted_sharp);
 
                 // Dotknout se použitých až po kreslení, aby LRU nevyhodila
                 // zrovna to, co je na obrazovce.
@@ -424,11 +538,24 @@ impl App {
                 if let Some(index) = clicked {
                     self.selected = Some(index);
                 }
+
+                self.blank = self.wanted_quick.len();
+                self.unsharp = self.wanted_sharp.len();
+                if self.drag {
+                    // 90 snímků tažení do dvou třetin obsahu, pak stát.
+                    let total = rows as f32 * pitch;
+                    self.forced_scroll = Some(if self.frames < 90 {
+                        total * 0.66 * (self.frames as f32 / 90.0)
+                    } else {
+                        total * 0.66
+                    });
+                }
             },
         );
     }
 
     fn preview(&mut self, ui: &mut egui::Ui, palette: &Palette) {
+        self.wanted_full = None;
         let Some(index) = self.selected else {
             ui.centered_and_justified(|ui| {
                 ui.label(
@@ -446,7 +573,9 @@ impl App {
         let chosen = if self.textures.contains_key(&full) {
             Some(full.clone())
         } else {
-            self.loader.request(&path, Kind::Full);
+            self.wanted_full = Some(path.clone());
+            // Než se dekóduje plné rozlišení, ukáže se zvětšená dlaždice —
+            // panel tak nikdy neproblikne prázdnotou.
             let fallback = (path.clone(), Kind::Thumb);
             self.textures.contains_key(&fallback).then_some(fallback)
         };

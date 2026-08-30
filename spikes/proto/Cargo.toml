@@ -13,3 +13,4 @@ image = { version = "0.25.10", default-features = false, features = ["png", "web
 jpeg-decoder = "0.3.2"
 rayon = "1.12.0"
 walkdir = "2.5.0"
+zune-jpeg = "0.5.15"

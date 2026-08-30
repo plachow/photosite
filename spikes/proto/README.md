@@ -25,6 +25,54 @@ Přepínače jsou jen pro pohodlí při zkoušení: `--folder`, `--recursive`,
 * **Tři motivy** v jedné struktuře. Přepnutí je výměna palety, ne převazování
   stylů — barvy si odsud berou i posuvníky, combo a rámy dlaždic.
 
+## Načítání: dvě chyby a jedno měření
+
+První verze loaderu byla pomalá tak, že prototyp neobstál při běžném použití —
+vzít scrollbar, hodit ho do dolní třetiny a pustit znamenalo pět až sedm sekund
+prázdných dlaždic. Za to mohly dvě chyby a jedno špatné rozhodnutí:
+
+1. **Neomezená FIFO fronta bez rušení.** Při tažení projedou viewportem tisíce
+   fotek a každá se do fronty zařadí. Po puštění se těch patnáct viditelných
+   ocitne až za několika tisíci mrtvými požadavky. Stará WPF verze tohle nemá,
+   protože `ThumbnailPresenter` ruší práci v `Unloaded`.
+   Oprava: **místo fronty seznam přání, který se každý snímek přepíše** na to,
+   co je právě vidět. Co z něj vypadne, nikdo nedekóduje.
+2. **Zdvojené dekódování.** Vlákno dlaždici dokončí, hlavní vlákno ji ještě
+   nestihne převzít — a příští snímek ji napíše do přání znovu. Při třiceti
+   vláknech se práce znásobí. Oprava: množina `done` a překreslení hned, ne za
+   60 ms.
+3. **Škálování v DCT doméně skoro nic neušetří.** Měřeno na 60 fotkách:
+
+   | | |
+   |---|---|
+   | čtení souboru (3,8 MB) | 5,2 ms |
+   | `jpeg-decoder`, scale 640 | 31,9 ms → 851 kpx |
+   | `jpeg-decoder`, scale 320 | 30,6 ms → 213 kpx |
+   | `zune-jpeg`, **plný** dekód | 42,0 ms → **13 140 kpx** |
+
+   Čtyřikrát míň výstupních pixelů, ale jen o 4 % rychleji: entropické
+   dekódování všech koeficientů se udělá tak jako tak a to je ten čas. Stará
+   WPF verze je rychlá proto, že WIC to umí v SIMD.
+
+   Oprava, která zabrala nejvíc: **skoro každá fotka nese v EXIFu vlastní
+   náhled 160×120.** Přečíst prvních 128 kB souboru a dekódovat ho stojí
+   zlomek milisekundy místo pětatřiceti. Dlaždice se proto plní nejdřív tímhle
+   a teprve pak se doostřují.
+
+### Výsledek
+
+Nasimulované tažení do dvou třetin knihovny 57 606 fotek a puštění:
+
+| | před | po |
+|---|---:|---:|
+| žádná prázdná dlaždice | 5–7 s | **60 ms** |
+| všechny dlaždice ostré | 5–7 s | **156 ms** |
+| průměr na jeden dekód | 70,6 ms | 21,8 ms |
+
+**Během samotného tažení jsou dlaždice pořád prázdné** a to se bez
+předpočítaných dat obejít nedá — přesně na to je rezidentní 32px vrstva
+z [grid-wgpu](../grid-wgpu/README.md), která ale potřebuje připravený balík.
+
 ## Naměřeno mimochodem
 
 | | |

@@ -1,35 +1,42 @@
 //! Načítání obrázků na pozadí.
 //!
-//! Hlavní vlákno si řekne o cestu a velikost, dostane ji zpátky jako holé RGB.
-//! JPEG se dekóduje rovnou v DCT doméně na nejbližší 1/8, 1/4 nebo 1/2, takže
-//! plné rozlišení nikdy nevznikne — to je ten důvod, proč se náhledy stíhají
-//! vyrábět za běhu a nemusí se nic předpočítávat.
+//! Dvě věci, které se sem dostaly až po měření, a obě jsou důležitější než
+//! volba jazyka:
+//!
+//! **Není tu fronta.** Fronta byla první, co jsem zkusil, a byla to chyba: při
+//! tažení scrollbarem projedou viewportem tisíce fotek, každá se zařadí, a po
+//! puštění handle se těch patnáct viditelných dostane na řadu až za několika
+//! tisíci mrtvými požadavky. Čekání vyšlo na sedm sekund. Místo fronty je tu
+//! **seznam přání, který hlavní vlákno každý snímek přepíše** na to, co je
+//! právě vidět, seřazené od středu ven. Co ze seznamu vypadne, nikdo
+//! nedekóduje — zrušení je tím implicitní.
+//!
+//! **Rychlá dráha z EXIFu.** Změřeno: dekódovat JPEG z foťáku stojí ~36 ms a
+//! škálování v DCT doméně z toho ušetří jen 4 %, protože entropické
+//! dekódování všech koeficientů se udělá tak jako tak. Skoro každá fotka ale
+//! nese v EXIFu vlastní náhled 160×120 — přečíst hlavičku souboru a dekódovat
+//! ho stojí zlomek milisekundy. Dlaždice se proto nejdřív naplní tímhle a
+//! teprve pak se doostří.
 
 use crossbeam_channel::{Receiver, Sender};
 use fast_image_resize::images::Image;
 use fast_image_resize::{PixelType, Resizer};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Condvar, Mutex};
 
 /// Delší hrana náhledu v mřížce.
 pub const THUMB: u32 = 320;
-/// Delší hrana plného náhledu v pravém docku. Víc než tohle stejně žádný
-/// panel nezobrazí a dekódovat celých 45 Mpx by bylo plýtvání.
+/// Delší hrana plného náhledu v pravém docku.
 pub const FULL: u32 = 2560;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Kind {
+    /// Náhled uložený v EXIFu samotné fotky, obvykle 160×120. Rozmazaný, ale
+    /// je hned — a hned je tady víc než ostrý.
+    Quick,
     Thumb,
     Full,
-}
-
-impl Kind {
-    fn max_side(self) -> u32 {
-        match self {
-            Kind::Thumb => THUMB,
-            Kind::Full => FULL,
-        }
-    }
 }
 
 pub struct Loaded {
@@ -39,64 +46,200 @@ pub struct Loaded {
     pub rgb: Vec<u8>,
 }
 
+#[derive(Default)]
+struct Wishes {
+    /// Dlaždice, které nemají zatím vůbec nic. Jsou skoro zadarmo, takže jdou
+    /// první.
+    quick: Vec<PathBuf>,
+    /// Dlaždice, které mají dostat ostrou verzi. Pořadí je priorita.
+    thumbs: Vec<PathBuf>,
+    /// Plný náhled vybrané fotky. Ten se scrollem nezahazuje.
+    full: Option<PathBuf>,
+    /// Co právě drží nějaké vlákno.
+    running: HashSet<(PathBuf, Kind)>,
+    /// Co už bylo dekódováno a odesláno. Bez tohohle nastane tohle: vlákno
+    /// dokončí dlaždici, hlavní vlákno ji ještě nestihlo převzít, takže ji
+    /// příští snímek napíše do přání znovu — a jiné vlákno ji dekóduje podruhé.
+    /// Při třiceti vláknech se tím práce znásobí a čekání natáhne o vteřinu.
+    done: HashSet<(PathBuf, Kind)>,
+    decodes: u64,
+    decode_ms: f64,
+}
+
+impl Wishes {
+    fn free(&self, path: &Path, kind: Kind) -> bool {
+        let job = (path.to_path_buf(), kind);
+        !self.running.contains(&job) && !self.done.contains(&job)
+    }
+
+    /// Vybere další práci: plný náhled, pak rychlé náhledy, pak ostré. Nic
+    /// jiného neexistuje — mrtvé požadavky nemají kde přežít.
+    fn take(&mut self) -> Option<(PathBuf, Kind)> {
+        if let Some(path) = self.full.clone() {
+            if self.free(&path, Kind::Full) {
+                self.running.insert((path.clone(), Kind::Full));
+                return Some((path, Kind::Full));
+            }
+        }
+
+        let quick = self
+            .quick
+            .iter()
+            .find(|path| self.free(path, Kind::Quick))
+            .cloned();
+        if let Some(path) = quick {
+            self.running.insert((path.clone(), Kind::Quick));
+            return Some((path, Kind::Quick));
+        }
+
+        let sharp = self
+            .thumbs
+            .iter()
+            .find(|path| self.free(path, Kind::Thumb))
+            .cloned();
+        if let Some(path) = sharp {
+            self.running.insert((path.clone(), Kind::Thumb));
+            return Some((path, Kind::Thumb));
+        }
+
+        None
+    }
+}
+
+struct Shared {
+    wishes: Mutex<Wishes>,
+    wake: Condvar,
+}
+
 pub struct Loader {
-    tx: Sender<(PathBuf, Kind)>,
+    shared: Arc<Shared>,
     rx: Receiver<Loaded>,
-    pending: HashSet<(PathBuf, Kind)>,
 }
 
 impl Loader {
     pub fn new() -> Self {
-        let (tx, work) = crossbeam_channel::unbounded::<(PathBuf, Kind)>();
+        let shared = Arc::new(Shared {
+            wishes: Mutex::new(Wishes::default()),
+            wake: Condvar::new(),
+        });
         let (done, rx) = crossbeam_channel::unbounded::<Loaded>();
-        // O dvě vlákna míň než jader, ať zbyde na UI a na systém.
         let threads = std::thread::available_parallelism()
             .map(|n| n.get().saturating_sub(2).max(1))
             .unwrap_or(4);
         for _ in 0..threads {
-            let (work, done) = (work.clone(), done.clone());
-            std::thread::spawn(move || {
-                while let Ok((path, kind)) = work.recv() {
-                    if let Some((size, rgb)) = decode(&path, kind.max_side()) {
-                        if done.send(Loaded { path, kind, size, rgb }).is_err() {
-                            return;
-                        }
-                    }
-                }
-            });
+            spawn_worker(shared.clone(), done.clone());
         }
 
-        Self { tx, rx, pending: HashSet::new() }
+        Self { shared, rx }
     }
 
-    /// Požádá o obrázek. Opakovaná žádost o totéž se zahodí.
-    pub fn request(&mut self, path: &Path, kind: Kind) {
-        let key = (path.to_path_buf(), kind);
-        if self.pending.insert(key.clone()) {
-            let _ = self.tx.send(key);
+    /// Řekne, co je teď vidět. Volá se každý snímek a předchozí přání tím
+    /// zanikají — v tom je celé to zrušení.
+    pub fn want(&self, quick: Vec<PathBuf>, thumbs: Vec<PathBuf>, full: Option<PathBuf>) {
+        let mut wishes = self.shared.wishes.lock().unwrap();
+        let changed =
+            wishes.quick != quick || wishes.thumbs != thumbs || wishes.full != full;
+        wishes.quick = quick;
+        wishes.thumbs = thumbs;
+        wishes.full = full;
+        drop(wishes);
+        if changed {
+            self.shared.wake.notify_all();
         }
     }
 
-    pub fn drain(&mut self) -> Vec<Loaded> {
+    /// Zapomene, že se něco už dekódovalo — volá se, když textura vypadne
+    /// z cache a bude ji potřeba vyrobit znovu.
+    pub fn forget(&self, key: &(PathBuf, Kind)) {
+        self.shared.wishes.lock().unwrap().done.remove(key);
+    }
+
+    /// Kolik dekódů a kolik času celkem, po druzích.
+    pub fn stats(&self) -> (u64, f64) {
+        let wishes = self.shared.wishes.lock().unwrap();
+        (wishes.decodes, wishes.decode_ms)
+    }
+
+    pub fn drain(&self, limit: usize) -> Vec<Loaded> {
         let mut out = Vec::new();
-        while let Ok(loaded) = self.rx.try_recv() {
-            self.pending.remove(&(loaded.path.clone(), loaded.kind));
-            out.push(loaded);
+        while out.len() < limit {
+            match self.rx.try_recv() {
+                Ok(loaded) => out.push(loaded),
+                Err(_) => break,
+            }
         }
 
         out
     }
 }
 
+fn spawn_worker(shared: Arc<Shared>, done: Sender<Loaded>) {
+    std::thread::spawn(move || loop {
+        let job = {
+            let mut wishes = shared.wishes.lock().unwrap();
+            loop {
+                if let Some(job) = wishes.take() {
+                    break job;
+                }
+
+                wishes = shared.wake.wait(wishes).unwrap();
+            }
+        };
+
+        let started = std::time::Instant::now();
+        let decoded = match job.1 {
+            Kind::Quick => embedded(&job.0),
+            Kind::Thumb => decode(&job.0, THUMB),
+            Kind::Full => decode(&job.0, FULL),
+        };
+        let took = started.elapsed().as_secs_f64() * 1000.0;
+        {
+            let mut wishes = shared.wishes.lock().unwrap();
+            wishes.running.remove(&job);
+            wishes.done.insert(job.clone());
+            wishes.decodes += 1;
+            wishes.decode_ms += took;
+        }
+
+        if let Some((size, rgb)) = decoded {
+            if done.send(Loaded { path: job.0, kind: job.1, size, rgb }).is_err() {
+                return;
+            }
+        }
+    });
+}
+
+/// Vytáhne náhled uložený v EXIFu. Čte jen hlavičku souboru, ne celou fotku.
+fn embedded(path: &Path) -> Option<([usize; 2], Vec<u8>)> {
+    use std::io::Read;
+    let mut head = vec![0u8; 128 << 10];
+    let mut file = std::fs::File::open(path).ok()?;
+    let read = file.read(&mut head).ok()?;
+    head.truncate(read);
+
+    let (orientation, range) = exif(&head)?;
+    let (from, len) = range?;
+    let jpeg = head.get(from..from + len)?.to_vec();
+
+    let mut decoder = jpeg_decoder::Decoder::new(std::io::Cursor::new(&jpeg));
+    let pixels = decoder.decode().ok()?;
+    let info = decoder.info()?;
+    let (w, h) = (info.width as u32, info.height as u32);
+    let rgb = to_rgb(pixels, w, h, info.pixel_format)?;
+    let (out, w, h) = rotate(rgb, w, h, orientation);
+    Some(([w as usize, h as usize], out))
+}
+
 fn decode(path: &Path, max: u32) -> Option<([usize; 2], Vec<u8>)> {
     let raw = std::fs::read(path).ok()?;
-    let orientation = exif_orientation(&raw).unwrap_or(1);
+    let orientation = exif(&raw).map(|(o, _)| o).unwrap_or(1);
     let swapped = matches!(orientation, 5..=8);
 
     let (sw, sh, rgb) = if is_jpeg(&raw) {
         let mut decoder = jpeg_decoder::Decoder::new(std::io::Cursor::new(&raw));
-        // O stupeň víc, než potřebujeme, ať má Lanczos z čeho brát.
-        let want = (max * 2).min(u16::MAX as u32) as u16;
+        // Žádat víc, než je potřeba, nemá smysl: měřením vyšlo, že škálování
+        // v DCT doméně ušetří jen 4 % času. Ušetří ale práci Lanczosu.
+        let want = max.min(u16::MAX as u32) as u16;
         let (w, h) = decoder.scale(want, want).ok()?;
         let pixels = decoder.decode().ok()?;
         let format = decoder.info()?.pixel_format;
@@ -133,9 +276,9 @@ fn to_rgb(
     match format {
         F::RGB24 if pixels.len() >= n * 3 => Some(pixels),
         F::L8 if pixels.len() >= n => Some(pixels.iter().flat_map(|&v| [v, v, v]).collect()),
-        F::L16 if pixels.len() >= n * 2 => Some(
-            pixels.chunks_exact(2).flat_map(|c| [c[1], c[1], c[1]]).collect(),
-        ),
+        F::L16 if pixels.len() >= n * 2 => {
+            Some(pixels.chunks_exact(2).flat_map(|c| [c[1], c[1], c[1]]).collect())
+        }
         F::CMYK32 if pixels.len() >= n * 4 => Some(
             pixels
                 .chunks_exact(4)
@@ -192,9 +335,9 @@ fn rotate(src: Vec<u8>, w: u32, h: u32, orientation: u8) -> (Vec<u8>, u32, u32) 
     (out, dw, dh)
 }
 
-/// Minimální čtečka EXIF orientace: najde APP1, přečte TIFF hlavičku a v IFD0
-/// tag 0x0112. Nic víc z EXIFu tady nepotřebujeme.
-fn exif_orientation(raw: &[u8]) -> Option<u8> {
+/// Najde APP1 a vrátí orientaci z IFD0 a rozsah vloženého náhledu z IFD1.
+/// Rozsah je vztažený k celému vstupnímu bufferu, ne k TIFF bloku.
+fn exif(raw: &[u8]) -> Option<(u8, Option<(usize, usize)>)> {
     let limit = raw.len().min(128 << 10);
     let mut at = 2usize;
     while at + 4 < limit {
@@ -205,10 +348,20 @@ fn exif_orientation(raw: &[u8]) -> Option<u8> {
 
         let marker = raw[at + 1];
         let len = u16::from_be_bytes([raw[at + 2], raw[at + 3]]) as usize;
-        if marker == 0xE1 && at + 10 <= raw.len() && &raw[at + 4..at + 10] == b"Exif\x00\x00" {
-            return parse_tiff(&raw[at + 10..(at + 2 + len).min(raw.len())]);
+        let tiff_at = at + 10;
+        if marker == 0xE1
+            && tiff_at <= raw.len()
+            && &raw[at + 4..tiff_at] == b"Exif\x00\x00"
+        {
+            let tiff = &raw[tiff_at..(at + 2 + len).min(raw.len())];
+            let (orientation, thumbnail) = parse_tiff(tiff)?;
+            return Some((
+                orientation,
+                thumbnail.map(|(from, size)| (tiff_at + from, size)),
+            ));
         }
 
+        // SOS; dál už jsou jen komprimovaná data.
         if marker == 0xDA {
             return None;
         }
@@ -219,7 +372,7 @@ fn exif_orientation(raw: &[u8]) -> Option<u8> {
     None
 }
 
-fn parse_tiff(tiff: &[u8]) -> Option<u8> {
+fn parse_tiff(tiff: &[u8]) -> Option<(u8, Option<(usize, usize)>)> {
     if tiff.len() < 8 {
         return None;
     }
@@ -246,15 +399,40 @@ fn parse_tiff(tiff: &[u8]) -> Option<u8> {
         })
     };
 
-    let ifd = u32at(4)? as usize;
-    let count = u16at(ifd)? as usize;
+    let ifd0 = u32at(4)? as usize;
+    let count = u16at(ifd0)? as usize;
+    let mut orientation = 1u8;
     for entry in 0..count {
-        let at = ifd + 2 + entry * 12;
-        if u16at(at)? == 0x0112 {
-            let value = u16at(at + 8)?;
-            return (1..=8).contains(&value).then_some(value as u8);
+        let at = ifd0 + 2 + entry * 12;
+        if u16at(at) == Some(0x0112) {
+            if let Some(value) = u16at(at + 8) {
+                if (1..=8).contains(&value) {
+                    orientation = value as u8;
+                }
+            }
         }
     }
 
-    None
+    // Za poslední položkou IFD0 stojí ukazatel na IFD1 a v něm bývá náhled.
+    let ifd1 = u32at(ifd0 + 2 + count * 12).unwrap_or(0) as usize;
+    let mut thumbnail = None;
+    if ifd1 != 0 && ifd1 + 2 <= tiff.len() {
+        if let Some(entries) = u16at(ifd1) {
+            let (mut from, mut size) = (0usize, 0usize);
+            for entry in 0..entries as usize {
+                let at = ifd1 + 2 + entry * 12;
+                match u16at(at) {
+                    Some(0x0201) => from = u32at(at + 8).unwrap_or(0) as usize,
+                    Some(0x0202) => size = u32at(at + 8).unwrap_or(0) as usize,
+                    _ => {}
+                }
+            }
+
+            if size > 0 && from > 0 && from.saturating_add(size) <= tiff.len() {
+                thumbnail = Some((from, size));
+            }
+        }
+    }
+
+    Some((orientation, thumbnail))
 }
