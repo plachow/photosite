@@ -50,6 +50,17 @@ scénáře, kdy nestíhá dekódovat ani jeden.
 Dnešek je rychlejší na otevření, protože drahou část odkládá — a pak ji platí
 při každém scrollu znovu. Rust zaplatí jedenáct minut jednou a pak nikdy.
 
+## proto — proklikatelná skořápka
+
+[proto](proto/README.md) je třetí spike: strom složek, mřížka diapozitivů a
+plný náhled v egui nad wgpu. Není to měření, je to na osahání — jestli ta
+architektura unese skutečné ovládání a jestli tmavě šedé fotografické
+prostředí vypadá, jak má.
+
+Celá knihovna 57 606 fotek se vylistuje **za 36 ms**, binárka má 19 MB a
+nepotřebuje runtime. Katalog ani předpočítané náhledy tam nejsou vůbec —
+dekóduje se za běhu.
+
 ## Co z toho plyne
 
 Ustálený pomalý scroll zvládá dnešní galerie dobře: 1,40 ms mediánu je hluboko
