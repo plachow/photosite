@@ -128,12 +128,15 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
                 }
             }
 
+            // Kolik textur si mřížka přeje udržet. Podle tohohle se zvedne
+            // strop cache, aby se nevyhazovalo to, co se za chvíli zase chce.
+            app.needed = (ahead_to - ahead_from) * 2;
+
             // Dotknout se použitých až po kreslení, aby LRU nevyhodila zrovna
-            // to, co je na obrazovce.
-            let visible: Vec<PathBuf> = (first * cols..(last * cols).min(count))
-                .map(|index| app.photos[index].clone())
-                .collect();
-            for path in visible {
+            // to, co je potřeba. Přednačtené řádky se počítají taky — jinak
+            // vypadnou jako první právě ony a hned se objednají znovu.
+            for index in ahead_from..ahead_to {
+                let path = app.photos[index].clone();
                 app.touch(&(path.clone(), Want::Thumb));
                 app.touch(&(path, Want::Quick));
             }

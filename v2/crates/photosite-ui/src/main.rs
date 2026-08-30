@@ -19,6 +19,7 @@ use photosite_core::{Paths, commands, diagnostics, i18n, jobs, t, theme as palet
 use photosite_image as img;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock};
 
 /// Co se z obrázku chce. Pořadí je zároveň priorita.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -176,6 +177,9 @@ pub struct App {
     pub wanted_preview: Option<PathBuf>,
     pub blank: usize,
     pub unsharp: usize,
+    /// Kolik textur si mřížka právě přeje udržet. Strop cache nesmí být pod
+    /// tímhle číslem, jinak se každý snímek něco vyhodí a hned znovu dekóduje.
+    pub needed: usize,
 
     /// Motiv, který se právě kreslí. Přepočítá se, když se změní nastavení
     /// nebo když systém přepne mezi světlým a tmavým režimem.
@@ -183,6 +187,11 @@ pub struct App {
     status: String,
     show_diagnostics: bool,
     show_settings: bool,
+
+    /// Jak se dá dekódovacím vláknům říct, že se má překreslit. Bez toho by
+    /// UI muselo pravidelně kontrolovat, jestli něco nedorazilo, a to znamená
+    /// budit se pořád dokola i když se nic neděje.
+    waker: Arc<OnceLock<egui::Context>>,
 
     pub selftest: bool,
     pub shot: Option<PathBuf>,
@@ -212,6 +221,8 @@ impl App {
         let thumb = settings.loading.thumb_size.clamp(32, 4096) as u32;
         let preview = settings.loading.preview_size.clamp(64, 16384) as u32;
         let embedded = settings.loading.use_embedded_thumbnails;
+        let waker: Arc<OnceLock<egui::Context>> = Arc::new(OnceLock::new());
+        let wake = waker.clone();
 
         let images = jobs::Wishlist::new(threads, move |key: &Key| {
             let (path, want) = key;
@@ -222,7 +233,7 @@ impl App {
                 Want::Preview => img::sized(path, preview).map(|rgb| Some(into_pixels(rgb))),
             };
 
-            match outcome {
+            let outcome = match outcome {
                 Ok(pixels) => pixels,
                 Err(error) => {
                     // Nečitelný soubor je v knihovně o desítkách tisíc fotek
@@ -230,7 +241,15 @@ impl App {
                     tracing::warn!(path = %path.display(), ?want, error = %format!("{error:#}"), "obrázek nelze načíst");
                     None
                 }
+            };
+
+            // Probudit UI, aby si výsledek vyzvedlo. Jinak by muselo koukat,
+            // jestli něco nepřišlo, a to stojí procesor i v naprostém klidu.
+            if let Some(ctx) = wake.get() {
+                ctx.request_repaint();
             }
+
+            outcome
         });
 
         let theme = palettes::resolve(&settings.appearance, None);
@@ -251,7 +270,9 @@ impl App {
             wanted_preview: None,
             blank: 0,
             unsharp: 0,
+            needed: 0,
             theme,
+            waker,
             status: i18n::t("gallery-pick-folder"),
             show_diagnostics: false,
             show_settings: false,
@@ -272,6 +293,8 @@ impl App {
     /// Přepočítá motiv a prožene ho skrz egui. Volá se při startu a po každé
     /// změně, která se vzhledu týká.
     fn dress(&mut self, ctx: &egui::Context) {
+        // Dekódovací vlákna potřebují kontext, aby si mohla říct o překreslení.
+        let _ = self.waker.set(ctx.clone());
         let system_dark = ctx.system_theme().map(|theme| theme == egui::Theme::Dark);
         self.theme = palettes::resolve(&self.settings.appearance, system_dark);
         theme::apply(
@@ -334,24 +357,39 @@ impl App {
         }
     }
 
-    fn collect(&mut self, ctx: &egui::Context) {
+    /// Vrací, kolik obrázků dorazilo — podle toho se pozná, jestli se ještě
+    /// něco děje, nebo se dá přestat překreslovat.
+    fn collect(&mut self, ctx: &egui::Context) -> usize {
         let uploads = self.settings.loading.uploads_per_frame.clamp(1, 4096) as usize;
-        for (key, pixels) in self.images.drain(uploads) {
+        let delivered = self.images.drain(uploads);
+        let count = delivered.len();
+        for (key, pixels) in delivered {
             let image = egui::ColorImage::from_rgb(pixels.size, &pixels.rgb);
             let handle =
                 ctx.load_texture(key.0.to_string_lossy(), image, egui::TextureOptions::LINEAR);
             self.order.retain(|existing| existing != &key);
             self.order.push(key.clone());
+
+            // Jakmile je ostrá verze na místě, ta rychlá z EXIFu je k ničemu.
+            // Držet obojí znamená dvojnásobný tlak na cache úplně zadarmo.
+            if key.1 == Want::Thumb {
+                let quick = (key.0.clone(), Want::Quick);
+                self.textures.remove(&quick);
+                self.order.retain(|existing| existing != &quick);
+            }
+
             self.textures.insert(key, handle);
         }
 
-        let budget = self.settings.loading.texture_budget.clamp(16, 65_536) as usize;
+        let budget = effective_budget(self.settings.loading.texture_budget, self.needed);
         while self.order.len() > budget {
             let oldest = self.order.remove(0);
             self.textures.remove(&oldest);
             // Vyhozenou texturu bude potřeba vyrobit znovu.
             self.images.forget(&oldest);
         }
+
+        count
     }
 
     fn run(&mut self, id: &str, ctx: &egui::Context) {
@@ -434,6 +472,27 @@ impl App {
     }
 }
 
+/// Strop cache textur.
+///
+/// Nastavená hodnota je přání, ne zákon: pod to, co je právě na obrazovce, jít
+/// nesmí. Menší strop totiž neznamená "míň paměti", ale nekonečné kolo — každý
+/// snímek se něco vyhodí, hned se to zase objedná a znovu dekóduje. Přesně
+/// tohle spálilo tři čtvrtiny jádra při 80px dlaždicích a stropu 300.
+fn effective_budget(configured: i64, needed: usize) -> usize {
+    let configured = configured.clamp(16, 65_536) as usize;
+    // Čtvrtina navrch, aby se cache nedotýkala stropu při každém posunu.
+    let floor = needed + needed / 4 + 16;
+    if configured < floor {
+        tracing::debug!(
+            configured,
+            floor,
+            "strop cache zvednut na velikost obrazovky"
+        );
+    }
+
+    configured.max(floor)
+}
+
 fn into_pixels(rgb: img::Rgb) -> Pixels {
     Pixels {
         size: [rgb.width as usize, rgb.height as usize],
@@ -444,7 +503,7 @@ fn into_pixels(rgb: img::Rgb) -> Pixels {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        self.collect(&ctx);
+        let delivered = self.collect(&ctx);
         self.shortcuts(&ctx);
 
         // Systém mohl mezitím přepnout na tmavý režim.
@@ -506,9 +565,12 @@ impl eframe::App for App {
                 .collect(),
         ]);
 
-        // Dokud něco chybí, chceme další snímek hned. Čekat znamená, že hotové
-        // dlaždice leží a mezitím se stihnou objednat podruhé.
-        if self.blank > 0 || self.unsharp > 0 || self.wanted_preview.is_some() {
+        // Hned další snímek jen tehdy, když se opravdu něco děje. Podmínka
+        // "ještě něco chybí" tu byla dřív a byla to past: když se chybějící
+        // dlaždice doplnit nemohla, točila se aplikace naprázdno na plné
+        // obrátky. O hotovou práci se hlásí vlákna sama, takže interval níž
+        // je jen pojistka pro případ, že by se to probuzení někde ztratilo.
+        if delivered > 0 {
             ctx.request_repaint();
         } else {
             ctx.request_repaint_after(std::time::Duration::from_millis(
@@ -925,4 +987,28 @@ fn roots() -> Vec<Node> {
     }
 
     found
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strop_cache_nikdy_neklesne_pod_obrazovku() {
+        // Nastavení 300 při 400 potřebných texturách znamenalo nekonečné
+        // vyhazování a znovunačítání, tedy tři čtvrtiny jádra na prázdno.
+        assert!(effective_budget(300, 400) > 400);
+        assert!(effective_budget(16, 1000) > 1000);
+    }
+
+    #[test]
+    fn vetsi_nastaveni_se_respektuje() {
+        assert_eq!(effective_budget(5000, 100), 5000);
+    }
+
+    #[test]
+    fn nesmyslne_hodnoty_neprojdou() {
+        assert!(effective_budget(-1, 0) >= 16);
+        assert!(effective_budget(i64::MAX, 0) <= 65_536);
+    }
 }

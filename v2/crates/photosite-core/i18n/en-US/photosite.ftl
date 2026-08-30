@@ -78,7 +78,7 @@ setting-uploads-per-frame = Uploads per frame
 setting-texture-budget = Images kept in memory
 setting-worker-threads = Decoding threads
 setting-use-embedded = Use embedded EXIF thumbnails
-setting-idle-repaint = Idle repaint interval
+setting-idle-repaint = Idle repaint interval (safety net)
 
 setting-theme = Theme
 setting-theme-dark = Theme when the system is dark

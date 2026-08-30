@@ -119,6 +119,31 @@ takže se zapsalo do tmavého — a jakmile dorazilo „světlo", egui přeplo n
 světlý slot se svými vlastními barvami a okno nastavení svítilo bíle uprostřed
 tmavé aplikace. Zapisuje se proto do obou.
 
+## Cache náhledů
+
+Strop `loading.texture_budget` je **přání, ne zákon**: pod to, co je právě na
+obrazovce, se nesmí dostat. Menší strop totiž neznamená „míň paměti", ale
+nekonečné kolo — každý snímek se něco vyhodí, hned se to zase objedná a znovu
+dekóduje. Při 80px dlaždicích, zavřeném náhledovém panelu a stropu 300 to
+spálilo **72 % jádra v naprostém klidu** a dlaždice u okrajů problikávaly.
+
+Tři věci, které to drží:
+
+* strop se zvedne na velikost obrazovky plus čtvrtina (`effective_budget`),
+* přednačtené řádky se počítají mezi používané, jinak vypadnou jako první
+  právě ony a hned se objednají znovu,
+* jakmile dorazí ostrá verze, ta rychlá z EXIFu se zahodí — držet obojí je
+  dvojnásobný tlak zadarmo.
+
+A překresluje se jen tehdy, když je co ukázat: dekódovací vlákna si o snímek
+řeknou sama. Podmínka „ještě něco chybí" tu byla dřív a byla to past — když se
+chybějící dlaždice doplnit nemohla, točila se aplikace na plné obrátky.
+
+| v klidu, 7 558 fotek, 80px dlaždice | |
+|---|---|
+| před | 72 % jádra |
+| po | **0 %** |
+
 ## Stav
 
 Hotové zázemí, žádné fotografické funkce. Mřížka, strom, náhled a tři motivy
@@ -126,7 +151,7 @@ jsou z prototypu, aby bylo co spustit.
 
 | | |
 |---|---|
-| testů | 76 (včetně 6 000 fuzz případů na EXIF) |
+| testů | 79 (včetně 6 000 fuzz případů na EXIF) |
 | sken 7 558 fotek | 0,3 s; opakovaně 0,1 s |
 | otevření složky v UI | 7 558 fotek, žádná prázdná dlaždice do 160 ms |
 | `cargo clippy -D warnings` | čisté |

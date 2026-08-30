@@ -118,7 +118,9 @@ pub struct Loading {
     /// Použít náhled vložený v EXIFu, než se dekóduje ostrý. Vypnout se to dá
     /// hlavně proto, aby šlo změřit, o kolik pomáhá.
     pub use_embedded_thumbnails: bool,
-    /// Jak dlouho čekat na další snímek, když se nic nenačítá.
+    /// Pojistka: nejdelší pauza mezi snímky, když se nic neděje. O hotovou
+    /// práci se dekódovací vlákna hlásí sama, takže tohle jen kryje případ,
+    /// kdy by se probuzení ztratilo. Krátký interval znamená budit se pro nic.
     pub idle_repaint_ms: i64,
 }
 
@@ -131,7 +133,7 @@ impl Default for Loading {
             texture_budget: 900,
             worker_threads: 0,
             use_embedded_thumbnails: true,
-            idle_repaint_ms: 200,
+            idle_repaint_ms: 1000,
         }
     }
 }
@@ -486,7 +488,10 @@ pub const TUNABLES: &[Tunable] = &[
     Tunable {
         path: "loading.idle_repaint_ms",
         label_key: "setting-idle-repaint",
-        kind: Kind::Int { min: 16, max: 2000 },
+        kind: Kind::Int {
+            min: 50,
+            max: 10_000,
+        },
     },
     Tunable {
         path: "appearance.theme",
