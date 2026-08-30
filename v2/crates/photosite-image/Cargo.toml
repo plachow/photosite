@@ -1,0 +1,21 @@
+[package]
+name = "photosite-image"
+description = "Dekódování, škálování a EXIF. Neví, že existuje UI."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+jpeg-decoder.workspace = true
+fast_image_resize.workspace = true
+image.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

@@ -1,0 +1,24 @@
+[package]
+name = "photosite-ui"
+description = "Aplikace. Jediná crate, která ví o egui a o GPU."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "photosite"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+photosite-core.workspace = true
+photosite-image.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+serde.workspace = true
+eframe.workspace = true
+egui.workspace = true
+walkdir.workspace = true

@@ -1,0 +1,64 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT"
+
+# Verze se drží tady, aby se crate nikdy nerozešly.
+[workspace.dependencies]
+photosite-core = { path = "crates/photosite-core" }
+photosite-image = { path = "crates/photosite-image" }
+
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+toml = "0.9"
+directories = "6"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+rusqlite = { version = "0.38", features = ["bundled"] }
+crossbeam-channel = "0.5"
+walkdir = "2"
+clap = { version = "4", features = ["derive"] }
+jpeg-decoder = "0.3"
+fast_image_resize = "6"
+image = { version = "0.25.10", default-features = false, features = [
+    "png",
+    "webp",
+    "bmp",
+    "tiff",
+    "gif",
+] }
+eframe = { version = "0.36.1", default-features = false, features = [
+    "wgpu",
+    "default_fonts",
+    "x11",
+    "wayland",
+] }
+egui = "0.36"
+tempfile = "3"
+proptest = "1"
+
+[workspace.lints.rust]
+# Chyba, která nikam nedojde, je horší než pád: dnešní prototyp kvůli jednomu
+# spolknutému výsledku tiše nevykreslil jediný náhled.
+unused_must_use = "deny"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+todo = "warn"
+dbg_macro = "warn"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+# Dekódování obrázků je v ladicím buildu jinak nepoužitelně pomalé.
+[profile.dev.package."*"]
+opt-level = 2

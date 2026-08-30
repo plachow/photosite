@@ -1,0 +1,25 @@
+[package]
+name = "photosite-cli"
+description = "Headless binárka: pustí celou pipeline bez okna a bez GPU."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "photosite-cli"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+photosite-core.workspace = true
+photosite-image.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+clap.workspace = true
+walkdir.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
