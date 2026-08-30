@@ -82,29 +82,41 @@ pub fn install_panic_hook(paths: &Paths) {
 
 /// Co vypsat, když se někdo ptá „co se u tebe děje". První otázka každé
 /// podpory, tak ať je odpověď na jedno zavolání.
-pub fn about(paths: &Paths) -> String {
-    let mut text = String::new();
-    text.push_str(&format!("PhotoSite {}\n", env!("CARGO_PKG_VERSION")));
-    text.push_str(&format!(
-        "{} {}\n",
-        std::env::consts::OS,
-        std::env::consts::ARCH
-    ));
-    text.push_str(&format!(
-        "režim         {}\n",
-        if paths.portable {
-            "přenosný"
-        } else {
-            "systémový"
-        }
-    ));
-    text.push_str(&format!("data          {}\n", paths.data.display()));
-    text.push_str(&format!(
-        "nastavení     {}\n",
-        paths.config_file().display()
-    ));
-    text.push_str(&format!("cache         {}\n", paths.cache.display()));
-    text.push_str(&format!("log           {}\n", paths.logs.display()));
-    text.push_str(&format!("katalog       {}\n", paths.catalog().display()));
-    text
+///
+/// Vrací dvojice popisek–hodnota, aby si je CLI mohlo vypsat a UI vysázet.
+pub fn about(paths: &Paths) -> Vec<(String, String)> {
+    use crate::i18n::t;
+    vec![
+        (
+            t("diagnostics-version"),
+            env!("CARGO_PKG_VERSION").to_owned(),
+        ),
+        (
+            t("diagnostics-platform"),
+            format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
+        ),
+        (
+            t("diagnostics-mode"),
+            t(if paths.portable {
+                "diagnostics-mode-portable"
+            } else {
+                "diagnostics-mode-system"
+            }),
+        ),
+        (
+            t("diagnostics-language"),
+            crate::i18n::language().to_string(),
+        ),
+        (t("diagnostics-data"), paths.data.display().to_string()),
+        (
+            t("diagnostics-config"),
+            paths.config_file().display().to_string(),
+        ),
+        (t("diagnostics-cache"), paths.cache.display().to_string()),
+        (t("diagnostics-logs"), paths.logs.display().to_string()),
+        (
+            t("diagnostics-catalog"),
+            paths.catalog().display().to_string(),
+        ),
+    ]
 }

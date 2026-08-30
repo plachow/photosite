@@ -8,7 +8,7 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use photosite_core::catalog::NewPhoto;
-use photosite_core::{Catalog, Paths, diagnostics, domain, jobs};
+use photosite_core::{Catalog, Paths, diagnostics, domain, i18n, jobs, t};
 use std::path::{Path, PathBuf};
 
 #[derive(Parser, Debug)]
@@ -21,6 +21,10 @@ struct Cli {
 
     #[arg(long, short, global = true)]
     verbose: bool,
+
+    /// Jazyk výpisů; bez něj `en-US`.
+    #[arg(long, global = true, value_name = "JAZYK")]
+    lang: Option<String>,
 
     #[command(subcommand)]
     command: Command,
@@ -48,22 +52,39 @@ fn main() -> Result<()> {
     paths.ensure()?;
     let _logging = diagnostics::start(&paths, cli.verbose);
     diagnostics::install_panic_hook(&paths);
+    i18n::set_language(&i18n::negotiate(cli.lang.as_deref()));
 
     match cli.command {
         Command::Scan { folder, recursive } => scan(&paths, &folder, recursive),
         Command::List { folder } => list(&paths, &folder),
         Command::Info { file } => info(&file),
         Command::Doctor => {
-            print!("{}", diagnostics::about(&paths));
-            println!("schéma       {}", photosite_core::catalog::latest_version());
-            println!("vláken       {}", jobs::worker_count());
+            let mut rows = diagnostics::about(&paths);
+            rows.push((
+                t!("diagnostics-schema"),
+                photosite_core::catalog::latest_version().to_string(),
+            ));
+            rows.push((t!("diagnostics-workers"), jobs::worker_count().to_string()));
+            let width = rows
+                .iter()
+                .map(|(label, _)| label.chars().count())
+                .max()
+                .unwrap_or(0);
+            for (label, value) in rows {
+                println!("{label:width$}  {value}");
+            }
+
             Ok(())
         }
     }
 }
 
 fn scan(paths: &Paths, folder: &Path, recursive: bool) -> Result<()> {
-    anyhow::ensure!(folder.is_dir(), "{} není složka", folder.display());
+    anyhow::ensure!(
+        folder.is_dir(),
+        "{}",
+        t!("error-not-a-folder", path = folder.display().to_string())
+    );
     let catalog = Catalog::open(&paths.catalog())?;
 
     let started = std::time::Instant::now();
@@ -76,9 +97,12 @@ fn scan(paths: &Paths, folder: &Path, recursive: bool) -> Result<()> {
         .filter(|path| domain::is_photo(path))
         .collect();
     println!(
-        "nalezeno {} fotek za {:.0} ms",
-        files.len(),
-        started.elapsed().as_secs_f64() * 1000.0
+        "{}",
+        t!(
+            "cli-scan-found",
+            count = files.len() as i64,
+            ms = started.elapsed().as_secs_f64() * 1000.0
+        )
     );
 
     let started = std::time::Instant::now();
@@ -123,11 +147,17 @@ fn scan(paths: &Paths, folder: &Path, recursive: bool) -> Result<()> {
 
     let seconds = started.elapsed().as_secs_f64();
     println!(
-        "zapsáno {added}, beze změny {skipped}, nečitelných {failed} za {seconds:.1} s \
-         ({:.0} souborů/s)",
-        files.len() as f64 / seconds.max(0.001)
+        "{}",
+        t!(
+            "cli-scan-done",
+            added = added as i64,
+            skipped = skipped as i64,
+            failed = failed as i64,
+            seconds = seconds,
+            rate = files.len() as f64 / seconds.max(0.001)
+        )
     );
-    println!("v katalogu celkem {}", catalog.count()?);
+    println!("{}", t!("cli-catalog-total", count = catalog.count()?));
     Ok(())
 }
 
@@ -165,40 +195,65 @@ fn list(paths: &Paths, folder: &Path) -> Result<()> {
         );
     }
 
-    println!("{} fotek", photos.len());
+    println!("{}", t!("cli-list-total", count = photos.len() as i64));
     Ok(())
 }
 
 fn info(file: &Path) -> Result<()> {
-    anyhow::ensure!(file.is_file(), "{} není soubor", file.display());
+    anyhow::ensure!(
+        file.is_file(),
+        "{}",
+        t!("error-not-a-file", path = file.display().to_string())
+    );
     let identity = domain::FileIdentity::read(file)?;
-    println!("cesta        {}", file.display());
-    println!("velikost     {} B", identity.file_size);
-    println!("změněn       {}", identity.modified_at);
+    let mut rows = vec![
+        (t!("cli-info-path"), file.display().to_string()),
+        (t!("cli-info-size"), format!("{} B", identity.file_size)),
+        (t!("cli-info-modified"), identity.modified_at.to_string()),
+    ];
 
     let raw = std::fs::read(file).context("soubor nelze přečíst")?;
     let meta = photosite_image::exif::read(&raw);
-    println!("orientace    {}", meta.orientation);
-    match meta.thumbnail {
-        Some(thumbnail) => println!(
-            "náhled EXIF  {} B na offsetu {}",
-            thumbnail.len, thumbnail.offset
-        ),
-        None => println!("náhled EXIF  žádný"),
-    }
-
-    match photosite_image::quick(file)? {
-        Some(image) => println!("rychlý náhled {}×{}", image.width, image.height),
-        None => println!("rychlý náhled nelze vyrobit"),
-    }
+    rows.push((t!("cli-info-orientation"), meta.orientation.to_string()));
+    rows.push((
+        t!("cli-info-embedded"),
+        match meta.thumbnail {
+            Some(thumbnail) => t!(
+                "cli-info-embedded-at",
+                bytes = thumbnail.len as i64,
+                offset = thumbnail.offset as i64
+            ),
+            None => t!("cli-info-embedded-none"),
+        },
+    ));
+    rows.push((
+        t!("cli-info-quick"),
+        match photosite_image::quick(file)? {
+            Some(image) => format!("{}×{}", image.width, image.height),
+            None => t!("cli-info-quick-none"),
+        },
+    ));
 
     let started = std::time::Instant::now();
     let full = photosite_image::sized(file, photosite_image::THUMB)?;
-    println!(
-        "dlaždice     {}×{} za {:.1} ms",
-        full.width,
-        full.height,
-        started.elapsed().as_secs_f64() * 1000.0
-    );
+    rows.push((
+        t!("cli-info-tile"),
+        t!(
+            "cli-info-size-px",
+            width = full.width as i64,
+            height = full.height as i64,
+            ms = started.elapsed().as_secs_f64() * 1000.0
+        ),
+    ));
+
+    let width = rows
+        .iter()
+        .map(|(label, _)| label.chars().count())
+        .max()
+        .unwrap_or(0);
+    for (label, value) in rows {
+        println!("{label:width$}  {value}");
+    }
+
     Ok(())
 }

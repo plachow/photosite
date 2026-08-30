@@ -20,6 +20,8 @@ tracing-subscriber.workspace = true
 tracing-appender.workspace = true
 rusqlite.workspace = true
 crossbeam-channel.workspace = true
+fluent-bundle.workspace = true
+unic-langid.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

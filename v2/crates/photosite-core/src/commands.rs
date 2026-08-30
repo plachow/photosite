@@ -21,12 +21,18 @@ pub enum Group {
 }
 
 impl Group {
-    pub fn title(self) -> &'static str {
+    /// Klíč do překladu, ne text. Jádro nesmí obsahovat nic, co je vidět.
+    pub fn title_key(self) -> &'static str {
         match self {
-            Group::File => "Soubor",
-            Group::View => "Zobrazení",
-            Group::Help => "Nápověda",
+            Group::File => "group-file",
+            Group::View => "group-view",
+            Group::Help => "group-help",
         }
+    }
+
+    /// Přeložený název skupiny.
+    pub fn title(self) -> String {
+        crate::i18n::t(self.title_key())
     }
 }
 
@@ -35,7 +41,9 @@ pub struct Command {
     /// Stabilní klíč. Do konfigurace se ukládá tenhle, ne název — název se
     /// smí kdykoliv přepsat nebo přeložit.
     pub id: &'static str,
-    pub title: &'static str,
+    /// Klíč do překladu. V registru nejsou texty, jen odkazy na ně —
+    /// jinak by se název nedal přeložit ani přepsat bez zásahu do kódu.
+    pub title_key: &'static str,
     pub group: Group,
     pub default_shortcut: Option<&'static str>,
 }
@@ -43,53 +51,60 @@ pub struct Command {
 pub const COMMANDS: &[Command] = &[
     Command {
         id: "file.open_folder",
-        title: "Otevřít složku…",
+        title_key: "command-file-open-folder",
         group: Group::File,
         default_shortcut: Some("Ctrl+O"),
     },
     Command {
         id: "file.rescan",
-        title: "Znovu načíst složku",
+        title_key: "command-file-rescan",
         group: Group::File,
         default_shortcut: Some("F5"),
     },
     Command {
         id: "file.quit",
-        title: "Konec",
+        title_key: "command-file-quit",
         group: Group::File,
         default_shortcut: Some("Ctrl+Q"),
     },
     Command {
         id: "view.recursive",
-        title: "Včetně podsložek",
+        title_key: "command-view-recursive",
         group: Group::View,
         default_shortcut: Some("Ctrl+R"),
     },
     Command {
         id: "view.bigger_tiles",
-        title: "Větší dlaždice",
+        title_key: "command-view-bigger-tiles",
         group: Group::View,
         default_shortcut: Some("Ctrl+Plus"),
     },
     Command {
         id: "view.smaller_tiles",
-        title: "Menší dlaždice",
+        title_key: "command-view-smaller-tiles",
         group: Group::View,
         default_shortcut: Some("Ctrl+Minus"),
     },
     Command {
         id: "view.next_theme",
-        title: "Další motiv",
+        title_key: "command-view-next-theme",
         group: Group::View,
         default_shortcut: Some("Ctrl+T"),
     },
     Command {
         id: "help.diagnostics",
-        title: "Diagnostika",
+        title_key: "command-help-diagnostics",
         group: Group::Help,
         default_shortcut: Some("Ctrl+Shift+D"),
     },
 ];
+
+impl Command {
+    /// Přeložený název příkazu.
+    pub fn title(&self) -> String {
+        crate::i18n::t(self.title_key)
+    }
+}
 
 pub fn command(id: &str) -> Option<&'static Command> {
     COMMANDS.iter().find(|command| command.id == id)
@@ -250,6 +265,25 @@ mod tests {
         let bindings = Bindings::defaults();
         for command in COMMANDS.iter().filter(|c| c.default_shortcut.is_some()) {
             assert!(bindings.shortcut(command.id).is_some(), "{}", command.id);
+        }
+    }
+
+    #[test]
+    fn kazdy_prikaz_ma_preklad() {
+        for command in COMMANDS {
+            assert!(
+                crate::i18n::has(command.title_key),
+                "příkaz {} odkazuje na chybějící klíč {}",
+                command.id,
+                command.title_key
+            );
+        }
+    }
+
+    #[test]
+    fn kazda_skupina_ma_preklad() {
+        for group in [Group::File, Group::View, Group::Help] {
+            assert!(crate::i18n::has(group.title_key()), "{:?}", group);
         }
     }
 

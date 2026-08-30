@@ -71,12 +71,15 @@ impl Default for Gallery {
 pub struct Appearance {
     /// Jméno palety. Neznámé jméno spadne na první paletu, ne na paniku.
     pub theme: String,
+    /// Jazyk rozhraní. Neznámý spadne na `en-US`.
+    pub language: String,
 }
 
 impl Default for Appearance {
     fn default() -> Self {
         Self {
             theme: "tmava".to_owned(),
+            language: crate::i18n::FALLBACK.to_string(),
         }
     }
 }

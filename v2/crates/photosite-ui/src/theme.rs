@@ -10,7 +10,8 @@ use egui::{Color32, CornerRadius, FontId, Rect, Stroke, StrokeKind, Vec2};
 pub struct Palette {
     /// Klíč do nastavení. Název se smí přepsat i přeložit, tenhle ne.
     pub id: &'static str,
-    pub title: &'static str,
+    /// Klíč do překladu, ne hotový text.
+    pub title_key: &'static str,
     pub window: Color32,
     pub panel: Color32,
     /// Rám diapozitivu.
@@ -30,7 +31,7 @@ pub struct Palette {
 pub const PALETTES: [Palette; 3] = [
     Palette {
         id: "tmava",
-        title: "Tmavě šedá",
+        title_key: "theme-dark",
         window: Color32::from_rgb(0x22, 0x22, 0x24),
         panel: Color32::from_rgb(0x2A, 0x2A, 0x2C),
         tile: Color32::from_rgb(0x3A, 0x3A, 0x3D),
@@ -44,7 +45,7 @@ pub const PALETTES: [Palette; 3] = [
     },
     Palette {
         id: "svetla",
-        title: "Světle šedá",
+        title_key: "theme-light",
         window: Color32::from_rgb(0x3C, 0x3C, 0x3E),
         panel: Color32::from_rgb(0x46, 0x46, 0x48),
         tile: Color32::from_rgb(0x58, 0x58, 0x5B),
@@ -58,7 +59,7 @@ pub const PALETTES: [Palette; 3] = [
     },
     Palette {
         id: "sepie",
-        title: "Sépie",
+        title_key: "theme-sepia",
         window: Color32::from_rgb(0x26, 0x21, 0x1B),
         panel: Color32::from_rgb(0x2E, 0x28, 0x21),
         tile: Color32::from_rgb(0x40, 0x38, 0x2D),
@@ -71,6 +72,13 @@ pub const PALETTES: [Palette; 3] = [
         bevel_dark: Color32::from_rgb(0x18, 0x14, 0x10),
     },
 ];
+
+impl Palette {
+    /// Přeložený název motivu.
+    pub fn title(&self) -> String {
+        photosite_core::i18n::t(self.title_key)
+    }
+}
 
 /// Najde paletu podle klíče z nastavení. Neznámý klíč spadne na první —
 /// překlep v konfiguraci nesmí aplikaci shodit.
@@ -237,6 +245,18 @@ mod tests {
     fn neznamy_motiv_spadne_na_prvni_misto_paniky() {
         assert_eq!(by_id("neexistuje").0, 0);
         assert_eq!(by_id("sepie").1.id, "sepie");
+    }
+
+    #[test]
+    fn kazdy_motiv_ma_preklad() {
+        for palette in &PALETTES {
+            assert!(
+                photosite_core::i18n::has(palette.title_key),
+                "motiv {} odkazuje na chybějící klíč {}",
+                palette.id,
+                palette.title_key
+            );
+        }
     }
 
     #[test]

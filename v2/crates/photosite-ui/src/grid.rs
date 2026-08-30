@@ -6,6 +6,7 @@
 use crate::{App, Node, Want, theme};
 use eframe::egui;
 use egui::{Sense, Vec2};
+use photosite_core::t;
 use std::path::{Path, PathBuf};
 
 const GAP: f32 = 10.0;
@@ -13,7 +14,7 @@ const GAP: f32 = 10.0;
 pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &theme::Palette) {
     if app.photos.is_empty() {
         ui.centered_and_justified(|ui| {
-            ui.label(egui::RichText::new("Žádné fotky").color(palette.dim));
+            ui.label(egui::RichText::new(t!("gallery-empty")).color(palette.dim));
         });
         return;
     }
@@ -130,7 +131,7 @@ pub fn preview(app: &mut App, ui: &mut egui::Ui, palette: &theme::Palette) {
     app.wanted_preview = None;
     let Some(index) = app.selected else {
         ui.centered_and_justified(|ui| {
-            ui.label(egui::RichText::new("Klikni na dlaždici").color(palette.dim));
+            ui.label(egui::RichText::new(t!("preview-pick-tile")).color(palette.dim));
         });
         return;
     };

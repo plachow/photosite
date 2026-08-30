@@ -11,12 +11,14 @@ pub mod commands;
 pub mod config;
 pub mod diagnostics;
 pub mod domain;
+pub mod i18n;
 pub mod jobs;
 pub mod paths;
 
 pub use catalog::{Catalog, NewPhoto};
 pub use config::Config;
 pub use domain::{FileIdentity, Photo, PhotoId, is_photo};
+pub use i18n::{t, t_args};
 pub use jobs::{Cancel, Progress, TaskStatus, Tasks, Wishlist};
 pub use paths::Paths;
 

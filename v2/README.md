@@ -55,6 +55,28 @@ seznamu. Dodělat ho do hotového UI znamená projít každé tlačítko zvláš
 **Zápisy po dávkách.** Řádek na transakci vypadá nevinně; sken 7 558 fotek
 s ním trval 44 s, s jednou transakcí na tisíc řádků 0,3 s.
 
+## Lokalizace
+
+Výchozí a zároveň záložní jazyk je **en-US**; co v jiném překladu chybí, se
+vezme z angličtiny, aby na obrazovce nikdy nezůstal holý klíč. Balíček je
+`crates/photosite-core/i18n/<jazyk>/photosite.ftl`, přepnout se dá
+`--lang cs-CZ` nebo v nastavení.
+
+Formát je [Fluent](https://projectfluent.org), a to schválně: čeština má tři
+plurálové tvary (*1 fotka, 2 fotky, 5 fotek*) a formát, který to neumí, by se
+musel později přepsat i se všemi voláními. Zaokrouhlování čísel je proto taky
+v balíčku (`NUMBER($ms, maximumFractionDigits: 0)`), ne v kódu — kolik
+desetinných míst se ukáže, je rozhodnutí jazyka.
+
+**V UI ani v CLI není jediný natvrdo psaný text** a hlídají to dva testy
+v `crates/photosite-ui/tests/preklady.rs`: jeden ověří, že každý použitý klíč
+v balíčku existuje, druhý prochází zdrojáky a hlásí literál předaný widgetu.
+Třetí test kontroluje samotné hledání — měřidlo, které si přestane všímat, je
+horší než žádné.
+
+Registr příkazů ani palety motivů neobsahují texty, jen klíče. Přidat jazyk
+tedy znamená přidat jeden `.ftl` a jeden řádek do `i18n::available()`.
+
 ## Stav
 
 Hotové zázemí, žádné fotografické funkce. Mřížka, strom, náhled a tři motivy
@@ -62,7 +84,7 @@ jsou z prototypu, aby bylo co spustit.
 
 | | |
 |---|---|
-| testů | 50 (včetně 6 000 fuzz případů na EXIF) |
+| testů | 62 (včetně 6 000 fuzz případů na EXIF) |
 | sken 7 558 fotek | 0,3 s; opakovaně 0,1 s |
 | otevření složky v UI | 7 558 fotek, žádná prázdná dlaždice do 160 ms |
 | `cargo clippy -D warnings` | čisté |
@@ -75,5 +97,6 @@ runnery.
 ## Co chybí a ví se o tom
 
 Otevírací dialog (`rfd`), sledování změn na disku (`notify`), jediná instance,
-lokalizace, přístupnost, podpis a notarizace pro macOS, automatické aktualizace.
+přístupnost, podpis a notarizace pro macOS, automatické aktualizace. Z jazyků
+zatím jen angličtina — cs-CZ je první na řadě.
 Nic z toho nevyžaduje přepisovat, co je hotové.

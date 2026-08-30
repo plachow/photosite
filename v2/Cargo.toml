@@ -23,6 +23,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 rusqlite = { version = "0.38", features = ["bundled"] }
 crossbeam-channel = "0.5"
+fluent-bundle = "0.16"
+unic-langid = { version = "0.9", features = ["macros"] }
 walkdir = "2"
 clap = { version = "4", features = ["derive"] }
 jpeg-decoder = "0.3"
