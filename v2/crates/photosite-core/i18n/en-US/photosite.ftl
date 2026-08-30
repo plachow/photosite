@@ -16,11 +16,25 @@ command-file-open-folder = Open folder…
 command-file-rescan = Reload folder
 command-file-quit = Quit
 command-view-recursive = Include subfolders
+command-view-toggle-tree = Folders
+command-view-toggle-preview = Preview
+command-view-toggle-info = Info
+command-view-reset-layout = Reset the layout
 command-view-bigger-tiles = Larger tiles
 command-view-smaller-tiles = Smaller tiles
 command-view-next-theme = Next theme
 command-view-settings = Settings…
 command-help-diagnostics = Diagnostics
+
+## Doky
+#
+# Názvy ploch, ze kterých se skládá rozložení okna.
+
+dock-tree = Folders
+dock-gallery = Photographs
+dock-preview = Preview
+dock-info = Photo info
+docks-all-hidden = Every dock is hidden
 
 ## Motivy
 
@@ -65,8 +79,9 @@ setting-window-height = Window height
 setting-window-x = Window position, horizontal
 setting-window-y = Window position, vertical
 setting-window-maximized = Window maximised
-setting-window-tree-width = Folder pane width
-setting-window-preview-width = Preview pane width
+setting-window-layout = Dock layout
+setting-window-docks-hidden = Hidden docks
+setting-window-splitter = Splitter thickness
 
 setting-tile-size = Tile size
 setting-gap = Gap between tiles
@@ -91,6 +106,21 @@ setting-theme-dark = Theme when the system is dark
 setting-theme-light = Theme when the system is light
 setting-language = Language
 setting-ui-scale = Interface scale
+
+## Informace o fotce
+
+info-pick-tile = Click a tile to see its details
+info-name = name
+info-folder = folder
+info-size = size on disk
+info-size-mb = { NUMBER($mb, maximumFractionDigits: 1) } MB
+info-orientation = orientation
+info-embedded = EXIF thumbnail
+info-embedded-at = { $bytes } B
+info-embedded-none = none
+info-preview-px = { $width }×{ $height }
+info-preview = preview decoded
+info-preview-waiting = decoding…
 
 ## Diagnostika
 

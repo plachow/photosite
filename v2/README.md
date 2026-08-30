@@ -36,6 +36,11 @@ Každá z nich je z konkrétní chyby, ne z příručky.
 nastavení, cache i log pod jeden kořen. Ve v1 byla cesta natvrdo a znamenalo to,
 že se nedalo nic změřit ani vyzkoušet jinak než na ostrých datech.
 
+**Zrušená volba nestojí zbytek nastavení.** Klíč, který jsme přestali
+používat, se zahodí a jde do logu; odloží se stranou jen soubor, kterému
+nerozumíme doopravdy. Jinak by člověk přišel o všechno, co si kdy nastavil,
+a jediné, co udělal špatně, je že aplikaci používal dřív.
+
 **Nic neselže mlčky.** Úloha, která spadne, si to nese ve stavu a jde do logu.
 Poškozené nastavení se odloží stranou a nezahodí. Pád nechá hlášení. Prototyp
 kvůli jednomu spolknutému výsledku nevykreslil jediný náhled a nikde o tom
@@ -68,6 +73,37 @@ zmáčknuté podruhé postaví druhý nad první.
 
 **Zápisy po dávkách.** Řádek na transakci vypadá nevinně; sken 7 558 fotek
 s ním trval 44 s, s jednou transakcí na tisíc řádků 0,3 s.
+
+## Doky
+
+Plochy nejsou v kreslicí vrstvě zadrátované vedle sebe. Rozložení je **strom,
+který je daty** — jeden řádek v nastavení:
+
+```
+h(0.16, tree, h(0.66, gallery, v(0.62, preview, info)))
+```
+
+Vodorovné dělení dá první části šestnáct procent šířky, druhá dostane zbytek;
+ve svislém sloupci vpravo je nahoře náhled a pod ním informace o fotce. Přidat
+plochu pod náhled je tedy změna toho řetězce, ne zásah do kreslení —
+`crates/photosite-ui/src/docks.rs` o žádném konkrétním rozložení neví.
+
+Zápis je textový schválně: do nastavení jde jedním řádkem, dá se opravit ručně
+a v diffu je vidět na první pohled. Zanořené tabulky v TOML by na třech
+úrovních byly nečitelné. Nesmyslné rozložení se odmítne a spadne se na výchozí,
+ať už chybí závorka, plocha je uvedená dvakrát, nebo v něm není mřížka.
+
+**Dok se nedá zavřít omylem.** Každý má nejmenší velikost a dělítko pod ni
+nepustí; schovat se dá jen příkazem, který ho umí i vrátit. Než to platilo, šel
+náhledový panel přetáhnout na nulu, uložilo se to do nastavení a zpátky ho
+nedostalo nic — kliknutí na dlaždici pořád fungovalo, jen nebylo kam kreslit.
+
+**Každá plocha musí mít vlastní klíč.** egui rozdá dětem téhož rodiče stejnou
+sůl (`"child"`) a rozliší je jen pořadím vzniku, takže dvě rolovací plochy si
+sáhnou na společný stav: kolečko nad stromem složek posouvalo dlaždice
+v mřížce. Měří to `kolecko_hne_jen_plochou_pod_mysi` — bez okna a bez GPU,
+protože egui se dá pustit i tak. Druhý test schválně staví plochy bez klíče
+a trvá na tom, že se rozjedou; měřidlo, které nikdy nespadne, neměří nic.
 
 ## Lokalizace
 
@@ -182,7 +218,7 @@ jsou z prototypu, aby bylo co spustit.
 
 | | |
 |---|---|
-| testů | 94 (včetně 6 000 fuzz případů na EXIF a 70 kontrolovaných dvojic barev) |
+| testů | 111 (včetně 6 000 fuzz případů na EXIF a 70 kontrolovaných dvojic barev) |
 | sken 7 558 fotek | 0,3 s; opakovaně 0,1 s |
 | otevření složky v UI | 7 558 fotek, žádná prázdná dlaždice do 160 ms |
 | `cargo clippy -D warnings` | čisté |

@@ -45,8 +45,14 @@ pub struct Window {
     pub x: Option<f64>,
     pub y: Option<f64>,
     pub maximized: bool,
-    pub tree_width: f64,
-    pub preview_width: f64,
+    /// Rozložení doků. Viz [`crate::docks`] — jeden řádek, ne zanořené
+    /// tabulky, aby se dal přečíst i opravit ručně.
+    pub layout: String,
+    /// Plochy, které jsou schované, oddělené čárkou.
+    pub docks_hidden: String,
+    /// Tloušťka dělítka mezi doky. I tohle je nastavení, ne konstanta
+    /// v kreslicí vrstvě — na dotykovém displeji je šest bodů málo.
+    pub splitter: f64,
 }
 
 impl Default for Window {
@@ -57,8 +63,9 @@ impl Default for Window {
             x: None,
             y: None,
             maximized: false,
-            tree_width: 250.0,
-            preview_width: 620.0,
+            layout: crate::docks::DEFAULT.to_owned(),
+            docks_hidden: String::new(),
+            splitter: 6.0,
         }
     }
 }
@@ -186,17 +193,27 @@ impl Settings {
 
         match toml::from_str(&text) {
             Ok(settings) => settings,
-            Err(error) => {
-                let broken = file.with_extension("toml.broken");
-                tracing::error!(
-                    path = %file.display(),
-                    odlozeno = %broken.display(),
-                    %error,
-                    "nastavení je poškozené"
-                );
-                let _ = std::fs::rename(&file, &broken);
-                Self::default()
-            }
+            // Volba, kterou jsme zrušili, nesmí stát celý zbytek nastavení.
+            Err(error) => match rescue(&text) {
+                Some((settings, dropped)) => {
+                    tracing::warn!(
+                        klice = dropped.join(", "),
+                        "nastavení má klíče, které už nepoužíváme; zbytek zůstává"
+                    );
+                    settings
+                }
+                None => {
+                    let broken = file.with_extension("toml.broken");
+                    tracing::error!(
+                        path = %file.display(),
+                        odlozeno = %broken.display(),
+                        %error,
+                        "nastavení je poškozené"
+                    );
+                    let _ = std::fs::rename(&file, &broken);
+                    Self::default()
+                }
+            },
         }
     }
 
@@ -308,6 +325,55 @@ impl Settings {
     }
 }
 
+/// Nastavení, ze kterého vadí jen klíč, který jsme přestali používat.
+///
+/// Volby přibývají a ubývají. Kdyby kvůli jedné zrušené šlo stranou celé
+/// nastavení, přišel by člověk i o všechno ostatní, co si kdy nastavil —
+/// a jediné, co udělal špatně, je že aplikaci používal dřív. Zahozené klíče
+/// jdou do logu; tiše se ztratit nesmí ani ony.
+fn rescue(text: &str) -> Option<(Settings, Vec<String>)> {
+    let mut table: toml::Table = toml::from_str(text).ok()?;
+    let known = paths_in_settings();
+    let mut dropped = Vec::new();
+    prune("", &mut table, &known, &mut dropped);
+    if dropped.is_empty() {
+        // Nevadily klíče, vadilo něco jiného — třeba text tam, kde má být
+        // číslo. To se zachraňovat nemá.
+        return None;
+    }
+
+    let settings = toml::Value::Table(table).try_into().ok()?;
+    Some((settings, dropped))
+}
+
+fn prune(prefix: &str, table: &mut toml::Table, known: &[String], dropped: &mut Vec<String>) {
+    table.retain(|key, value| {
+        let path = if prefix.is_empty() {
+            key.to_owned()
+        } else {
+            format!("{prefix}.{key}")
+        };
+
+        if let toml::Value::Table(nested) = value {
+            // Skupina zůstane, jen když pod ní ještě něco známého je.
+            if !known.iter().any(|it| it.starts_with(&format!("{path}."))) {
+                dropped.push(path);
+                return false;
+            }
+
+            prune(&path, nested, known, dropped);
+            return true;
+        }
+
+        if known.iter().any(|it| it == &path) {
+            return true;
+        }
+
+        dropped.push(path);
+        false
+    });
+}
+
 /// Rekurzivní rozdíl dvou tabulek; zůstane jen to, co se liší.
 fn diff(mine: &toml::Table, default: &toml::Table) -> toml::Table {
     let mut out = toml::Table::new();
@@ -386,14 +452,22 @@ pub const TUNABLES: &[Tunable] = &[
         kind: Kind::State,
     },
     Tunable {
-        path: "window.tree_width",
-        label_key: "setting-window-tree-width",
+        path: "window.layout",
+        label_key: "setting-window-layout",
         kind: Kind::State,
     },
     Tunable {
-        path: "window.preview_width",
-        label_key: "setting-window-preview-width",
+        path: "window.docks_hidden",
+        label_key: "setting-window-docks-hidden",
         kind: Kind::State,
+    },
+    Tunable {
+        path: "window.splitter",
+        label_key: "setting-window-splitter",
+        kind: Kind::Float {
+            min: 2.0,
+            max: 16.0,
+        },
     },
     Tunable {
         path: "gallery.tile_size",
@@ -559,6 +633,50 @@ mod tests {
         let paths = Paths::portable(dir.path());
         paths.ensure().unwrap();
         (dir, paths)
+    }
+
+    /// Volba, kterou jsme zrušili, nesmí sebrat všechno ostatní. Tohle
+    /// nastalo hned: `window.preview_width` zmizelo s doky a v souboru ho měl
+    /// každý, kdo aplikaci do té doby pustil.
+    #[test]
+    fn zruseny_klic_nestoji_zbytek_nastaveni() {
+        let (_dir, paths) = scratch();
+        std::fs::write(
+            paths.config_file(),
+            "[gallery]
+tile_size = 96.0
+
+[window]
+preview_width = 8.0
+tree_width = 237.0
+",
+        )
+        .unwrap();
+
+        let settings = Settings::load(&paths);
+        assert_eq!(settings.gallery.tile_size, 96.0, "zbytek se měl zachovat");
+        assert!(
+            paths.config_file().exists(),
+            "kvůli zrušenému klíči se soubor stranou neodkládá"
+        );
+    }
+
+    #[test]
+    fn opravdu_poskozene_nastaveni_jde_stranou() {
+        let (_dir, paths) = scratch();
+        std::fs::write(
+            paths.config_file(),
+            "[gallery]
+tile_size = 'sto'
+",
+        )
+        .unwrap();
+
+        assert_eq!(Settings::load(&paths), Settings::default());
+        assert!(
+            !paths.config_file().exists(),
+            "poškozený soubor se má odložit, ne přepsat"
+        );
     }
 
     #[test]

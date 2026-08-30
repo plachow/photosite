@@ -9,6 +9,7 @@
 pub mod catalog;
 pub mod commands;
 pub mod diagnostics;
+pub mod docks;
 pub mod domain;
 pub mod i18n;
 pub mod jobs;
@@ -17,6 +18,7 @@ pub mod settings;
 pub mod theme;
 
 pub use catalog::{Catalog, NewPhoto};
+pub use docks::Layout;
 pub use domain::{FileIdentity, Photo, PhotoId, is_photo};
 pub use i18n::{t, t_args};
 pub use jobs::{Cancel, Progress, TaskStatus, Tasks, Wishlist};

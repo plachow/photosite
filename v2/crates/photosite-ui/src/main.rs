@@ -8,7 +8,9 @@
 //! z [`Settings`], protože co je zadrátované, to nejde nastavit — a co nejde
 //! nastavit, to se jednou přepisuje.
 
+mod docks;
 mod grid;
+mod info;
 mod picker;
 mod theme;
 
@@ -16,7 +18,9 @@ use anyhow::Result;
 use eframe::egui;
 use photosite_core::commands::{Bindings, Group, Shortcut};
 use photosite_core::settings::{Gallery, Kind, Settings, TUNABLES, Tunable};
-use photosite_core::{Paths, commands, diagnostics, i18n, jobs, t, theme as palettes};
+use photosite_core::{
+    Paths, commands, diagnostics, docks as layout, i18n, jobs, t, theme as palettes,
+};
 use photosite_image as img;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -188,6 +192,14 @@ pub struct App {
     status: String,
     show_diagnostics: bool,
     show_settings: bool,
+    /// Rozložení doků, přečtené z nastavení. Zapisuje se zpátky, jakmile
+    /// někdo pohne dělítkem.
+    pub layout: layout::Layout,
+    /// Které plochy jsou schované.
+    pub hidden: Vec<String>,
+    /// Pro kterou fotku platí vyrobené řádky s informacemi.
+    pub info_of: Option<PathBuf>,
+    pub info_rows: Vec<(String, String)>,
     /// Otevřený dialog na výběr složky, nejvýš jeden.
     folder_dialog: Option<picker::Picker>,
     /// Složka, na kterou má strom vlevo odrolovat. Nastaví se při otevření
@@ -259,6 +271,8 @@ impl App {
         });
 
         let theme = palettes::resolve(&settings.appearance, None);
+        let settings_layout = settings.window.layout.clone();
+        let settings_hidden = settings.window.docks_hidden.clone();
         let mut app = Self {
             paths,
             settings,
@@ -282,6 +296,10 @@ impl App {
             status: i18n::t("gallery-pick-folder"),
             show_diagnostics: false,
             show_settings: false,
+            layout: layout::parse_or_default(&settings_layout),
+            hidden: layout::hidden(&settings_hidden),
+            info_of: None,
+            info_rows: Vec::new(),
             folder_dialog: None,
             scroll_tree_to: None,
             selftest: false,
@@ -464,10 +482,32 @@ impl App {
                 self.dress(ctx);
             }
             "view.settings" => self.show_settings = !self.show_settings,
+            "view.toggle_tree" => self.toggle_dock("tree"),
+            "view.toggle_preview" => self.toggle_dock("preview"),
+            "view.toggle_info" => self.toggle_dock("info"),
+            "view.reset_layout" => {
+                self.settings.window.layout = layout::DEFAULT.to_owned();
+                self.settings.window.docks_hidden = String::new();
+                self.layout = layout::parse_or_default(layout::DEFAULT);
+                self.hidden.clear();
+            }
             "help.diagnostics" => self.show_diagnostics = !self.show_diagnostics,
             "file.open_folder" => self.ask_for_folder(ctx),
             other => tracing::warn!(prikaz = other, "příkaz bez obsluhy"),
         }
+    }
+
+    /// Schová nebo vrátí plochu. Schované plochy jdou do nastavení, aby si
+    /// aplikace pamatovala, co má člověk zavřené.
+    fn toggle_dock(&mut self, id: &str) {
+        match self.hidden.iter().position(|hidden| hidden == id) {
+            Some(at) => {
+                self.hidden.remove(at);
+            }
+            None => self.hidden.push(id.to_owned()),
+        }
+
+        self.settings.window.docks_hidden = layout::hidden_to_text(&self.hidden);
     }
 
     /// Meze bere z popisu polí, ne z čísel napsaných tady.
@@ -567,27 +607,9 @@ impl eframe::App for App {
             .frame(egui::Frame::NONE.fill(panel).inner_margin(6.0))
             .show(ui, |ui| self.toolbar(ui, &palette, &ctx));
 
-        egui::Panel::left("tree")
-            .resizable(true)
-            .default_size(self.settings.window.tree_width as f32)
-            .frame(egui::Frame::NONE.fill(panel).inner_margin(6.0))
-            .show(ui, |ui| {
-                self.settings.window.tree_width = ui.available_width() as f64;
-                grid::tree(self, ui, &palette);
-            });
-
-        egui::Panel::right("preview")
-            .resizable(true)
-            .default_size(self.settings.window.preview_width as f32)
-            .frame(egui::Frame::NONE.fill(window))
-            .show(ui, |ui| {
-                self.settings.window.preview_width = ui.available_width() as f64;
-                grid::preview(self, ui, &palette);
-            });
-
         egui::CentralPanel::no_frame()
             .frame(egui::Frame::NONE.fill(window))
-            .show(ui, |ui| grid::gallery(self, ui, &palette));
+            .show(ui, |ui| docks::show(self, ui, &palette));
 
         self.diagnostics_window(&ctx);
         self.settings_window(&ctx);
