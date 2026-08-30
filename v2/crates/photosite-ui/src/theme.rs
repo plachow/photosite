@@ -1,176 +1,130 @@
-//! Motiv a kreslení dlaždice.
+//! Převod motivu z jádra do egui a kreslení dlaždice.
 //!
-//! Barvy jsou v jedné struktuře a berou si je odsud všichni — mřížka, doky,
-//! dialogy, posuvníky i combo. Přepnutí motivu je pak výměna jednoho ukazatele
-//! mezi snímky, ne převazování stylů. O to jde na tom slově „konzistentní".
+//! Barvy ani rozměry tu nejsou. Barvy přicházejí z [`photosite_core::theme`]
+//! jako data, rozměry z nastavení. Tenhle soubor umí jediné: vzít je a
+//! nakreslit podle nich.
 
 use egui::{Color32, CornerRadius, FontId, Rect, Stroke, StrokeKind, Vec2};
+use photosite_core::settings::Gallery;
+use photosite_core::theme::{Color, Palette};
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Palette {
-    /// Klíč do nastavení. Název se smí přepsat i přeložit, tenhle ne.
-    pub id: &'static str,
-    /// Klíč do překladu, ne hotový text.
-    pub title_key: &'static str,
-    pub window: Color32,
-    pub panel: Color32,
-    /// Rám diapozitivu.
-    pub tile: Color32,
-    /// Plocha pod fotkou. Tmavší než rám, aby fotka „seděla v okně".
-    pub well: Color32,
-    /// Proužek s názvem.
-    pub caption: Color32,
-    pub text: Color32,
-    pub dim: Color32,
-    pub accent: Color32,
-    /// Horní a levá hrana rámu. Jen náznak, ne vypouklé tlačítko.
-    pub bevel_light: Color32,
-    pub bevel_dark: Color32,
+pub fn color(value: Color) -> Color32 {
+    Color32::from_rgb(value.r, value.g, value.b)
 }
 
-pub const PALETTES: [Palette; 3] = [
-    Palette {
-        id: "tmava",
-        title_key: "theme-dark",
-        window: Color32::from_rgb(0x22, 0x22, 0x24),
-        panel: Color32::from_rgb(0x2A, 0x2A, 0x2C),
-        tile: Color32::from_rgb(0x3A, 0x3A, 0x3D),
-        well: Color32::from_rgb(0x1A, 0x1A, 0x1C),
-        caption: Color32::from_rgb(0x44, 0x44, 0x48),
-        text: Color32::from_rgb(0xDA, 0xDA, 0xDE),
-        dim: Color32::from_rgb(0x8A, 0x8A, 0x90),
-        accent: Color32::from_rgb(0x5B, 0x9D, 0xD9),
-        bevel_light: Color32::from_rgb(0x50, 0x50, 0x55),
-        bevel_dark: Color32::from_rgb(0x16, 0x16, 0x18),
-    },
-    Palette {
-        id: "svetla",
-        title_key: "theme-light",
-        window: Color32::from_rgb(0x3C, 0x3C, 0x3E),
-        panel: Color32::from_rgb(0x46, 0x46, 0x48),
-        tile: Color32::from_rgb(0x58, 0x58, 0x5B),
-        well: Color32::from_rgb(0x2E, 0x2E, 0x30),
-        caption: Color32::from_rgb(0x62, 0x62, 0x66),
-        text: Color32::from_rgb(0xEC, 0xEC, 0xEE),
-        dim: Color32::from_rgb(0xA6, 0xA6, 0xAA),
-        accent: Color32::from_rgb(0x6F, 0xB0, 0xE8),
-        bevel_light: Color32::from_rgb(0x74, 0x74, 0x78),
-        bevel_dark: Color32::from_rgb(0x2A, 0x2A, 0x2C),
-    },
-    Palette {
-        id: "sepie",
-        title_key: "theme-sepia",
-        window: Color32::from_rgb(0x26, 0x21, 0x1B),
-        panel: Color32::from_rgb(0x2E, 0x28, 0x21),
-        tile: Color32::from_rgb(0x40, 0x38, 0x2D),
-        well: Color32::from_rgb(0x1B, 0x17, 0x12),
-        caption: Color32::from_rgb(0x4C, 0x42, 0x35),
-        text: Color32::from_rgb(0xE4, 0xD8, 0xC4),
-        dim: Color32::from_rgb(0x99, 0x8C, 0x77),
-        accent: Color32::from_rgb(0xC9, 0x94, 0x4F),
-        bevel_light: Color32::from_rgb(0x58, 0x4D, 0x3E),
-        bevel_dark: Color32::from_rgb(0x18, 0x14, 0x10),
-    },
-];
-
-impl Palette {
-    /// Přeložený název motivu.
-    pub fn title(&self) -> String {
-        photosite_core::i18n::t(self.title_key)
-    }
-}
-
-/// Najde paletu podle klíče z nastavení. Neznámý klíč spadne na první —
-/// překlep v konfiguraci nesmí aplikaci shodit.
-pub fn by_id(id: &str) -> (usize, &'static Palette) {
-    PALETTES
-        .iter()
-        .position(|palette| palette.id == id)
-        .map(|at| (at, &PALETTES[at]))
-        .unwrap_or((0, &PALETTES[0]))
-}
-
-pub fn apply(ctx: &egui::Context, p: &Palette) {
-    let mut visuals = egui::Visuals::dark();
-    visuals.panel_fill = p.panel;
-    visuals.window_fill = p.panel;
-    visuals.extreme_bg_color = p.well;
-    visuals.faint_bg_color = p.tile;
-    visuals.code_bg_color = p.well;
-    visuals.override_text_color = Some(p.text);
-    visuals.hyperlink_color = p.accent;
-    visuals.window_stroke = Stroke::new(1.0, p.bevel_light);
-    visuals.selection.bg_fill = p.accent.gamma_multiply(0.45);
-    visuals.selection.stroke = Stroke::new(1.0, p.accent);
+/// Prožene paletu skrz egui, aby stejné barvy měly i dialogy, menu a posuvníky.
+pub fn apply(ctx: &egui::Context, palette: &Palette, dark: bool, scale: f32) {
+    let mut visuals = if dark {
+        egui::Visuals::dark()
+    } else {
+        egui::Visuals::light()
+    };
+    visuals.panel_fill = color(palette.panel);
+    visuals.window_fill = color(palette.panel);
+    visuals.extreme_bg_color = color(palette.well);
+    visuals.faint_bg_color = color(palette.tile);
+    visuals.code_bg_color = color(palette.well);
+    visuals.override_text_color = Some(color(palette.text));
+    visuals.hyperlink_color = color(palette.accent);
+    visuals.window_stroke = Stroke::new(1.0, color(palette.bevel_light));
+    visuals.selection.bg_fill = color(palette.accent).gamma_multiply(0.45);
+    visuals.selection.stroke = Stroke::new(1.0, color(palette.accent));
     visuals.window_corner_radius = CornerRadius::same(4);
 
     for (widget, fill) in [
-        (&mut visuals.widgets.noninteractive, p.panel),
-        (&mut visuals.widgets.inactive, p.tile),
-        (&mut visuals.widgets.hovered, p.caption),
-        (&mut visuals.widgets.active, p.caption),
-        (&mut visuals.widgets.open, p.tile),
+        (&mut visuals.widgets.noninteractive, palette.panel),
+        (&mut visuals.widgets.inactive, palette.tile),
+        (&mut visuals.widgets.hovered, palette.caption),
+        (&mut visuals.widgets.active, palette.caption),
+        (&mut visuals.widgets.open, palette.tile),
     ] {
-        widget.bg_fill = fill;
-        widget.weak_bg_fill = fill;
-        widget.bg_stroke = Stroke::new(1.0, p.bevel_dark);
-        widget.fg_stroke = Stroke::new(1.0, p.text);
+        widget.bg_fill = color(fill);
+        widget.weak_bg_fill = color(fill);
+        widget.bg_stroke = Stroke::new(1.0, color(palette.bevel_dark));
+        widget.fg_stroke = Stroke::new(1.0, color(palette.text));
         widget.corner_radius = CornerRadius::same(3);
     }
-    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, p.bevel_light);
+    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, color(palette.bevel_light));
 
-    ctx.set_visuals(visuals);
+    // Do obou slotů, ne jen do aktivního.
+    //
+    // `set_visuals` zapisuje pod motiv, který je zrovna zvolený. Při startu
+    // systém ještě nestihl ohlásit, jestli je v tmavém nebo světlém režimu,
+    // takže egui použije tmavý; jakmile odpověď dorazí a je „světlo", přepne
+    // na světlý slot — a v něm jsou pořád jeho vlastní barvy. Okno nastavení
+    // pak svítí bíle uprostřed tmavé aplikace.
+    ctx.set_visuals_of(egui::Theme::Dark, visuals.clone());
+    ctx.set_visuals_of(egui::Theme::Light, visuals);
+    ctx.set_theme(if dark {
+        egui::ThemePreference::Dark
+    } else {
+        egui::ThemePreference::Light
+    });
+    ctx.set_pixels_per_point(scale.clamp(0.5, 3.0));
 }
 
-/// Výška proužku s názvem.
-pub const CAPTION: f32 = 22.0;
-/// Kolik místa nechá rám kolem fotky.
-pub const PADDING: f32 = 7.0;
+/// Výška proužku s názvem; nula, když se popisky nezobrazují.
+pub fn caption_height(gallery: &Gallery) -> f32 {
+    if gallery.show_captions {
+        gallery.caption_height as f32
+    } else {
+        0.0
+    }
+}
+
+/// Výška dlaždice podle nastavení: obrázek, proužek a rám.
+pub fn tile_height(gallery: &Gallery) -> f32 {
+    (gallery.tile_size * gallery.tile_aspect) as f32
+        + caption_height(gallery)
+        + gallery.tile_padding as f32
+}
 
 /// Nakreslí diapozitiv a vrátí obdélník, do kterého patří fotka.
 pub fn slide(
     painter: &egui::Painter,
     rect: Rect,
-    p: &Palette,
+    palette: &Palette,
+    gallery: &Gallery,
     name: &str,
     selected: bool,
     hovered: bool,
 ) -> Rect {
     let radius = CornerRadius::same(2);
+    let tile = color(palette.tile);
     let fill = if selected {
-        p.tile.lerp_to_gamma(p.accent, 0.22)
+        tile.lerp_to_gamma(color(palette.accent), 0.22)
     } else if hovered {
-        p.tile.lerp_to_gamma(p.bevel_light, 0.35)
+        tile.lerp_to_gamma(color(palette.bevel_light), 0.35)
     } else {
-        p.tile
+        tile
     };
     painter.rect_filled(rect, radius, fill);
 
     // Jeden pixel světla nahoře a vlevo, jeden pixel stínu dole a vpravo.
     // Víc by z toho udělalo tlačítko.
-    for (from, to, color) in [
+    for (from, to, line) in [
         (
             rect.left_top() + Vec2::new(1.0, 0.5),
             rect.right_top() + Vec2::new(-1.0, 0.5),
-            p.bevel_light,
+            palette.bevel_light,
         ),
         (
             rect.left_top() + Vec2::new(0.5, 1.0),
             rect.left_bottom() + Vec2::new(0.5, -1.0),
-            p.bevel_light,
+            palette.bevel_light,
         ),
         (
             rect.left_bottom() + Vec2::new(1.0, -0.5),
             rect.right_bottom() + Vec2::new(-1.0, -0.5),
-            p.bevel_dark,
+            palette.bevel_dark,
         ),
         (
             rect.right_top() + Vec2::new(-0.5, 1.0),
             rect.right_bottom() + Vec2::new(-0.5, -1.0),
-            p.bevel_dark,
+            palette.bevel_dark,
         ),
     ] {
-        painter.line_segment([from, to], Stroke::new(1.0, color));
+        painter.line_segment([from, to], Stroke::new(1.0, color(line)));
     }
 
     if selected {
@@ -178,32 +132,40 @@ pub fn slide(
             rect,
             radius,
             Color32::TRANSPARENT,
-            Stroke::new(1.0, p.accent),
+            Stroke::new(1.0, color(palette.accent)),
             StrokeKind::Inside,
         );
     }
 
-    let inner = rect.shrink(PADDING);
-    let well = Rect::from_min_max(inner.min, egui::pos2(inner.max.x, inner.max.y - CAPTION));
-    painter.rect_filled(well, CornerRadius::same(1), p.well);
+    let inner = rect.shrink(gallery.tile_padding as f32);
+    let strip_height = caption_height(gallery);
+    let well = Rect::from_min_max(
+        inner.min,
+        egui::pos2(inner.max.x, inner.max.y - strip_height),
+    );
+    painter.rect_filled(well, CornerRadius::same(1), color(palette.well));
+
+    if !gallery.show_captions {
+        return well;
+    }
 
     let strip = Rect::from_min_max(egui::pos2(inner.min.x, well.max.y + 2.0), inner.max);
     painter.rect_filled(
         strip,
         CornerRadius::same(1),
         if selected {
-            p.caption.lerp_to_gamma(p.accent, 0.30)
+            color(palette.caption).lerp_to_gamma(color(palette.accent), 0.30)
         } else {
-            p.caption
+            color(palette.caption)
         },
     );
 
     // Jeden řádek s výpustkou, ne zalomení: název musí zůstat na proužku.
-    let color = if selected { p.text } else { p.dim };
+    let text = if selected { palette.text } else { palette.dim };
     let mut job = egui::text::LayoutJob::simple_singleline(
         name.to_owned(),
         FontId::proportional(11.0),
-        color,
+        color(text),
     );
     job.wrap = egui::text::TextWrapping {
         max_width: strip.width(),
@@ -216,7 +178,7 @@ pub fn slide(
         strip.center().x - galley.size().x * 0.5,
         strip.center().y - galley.size().y * 0.5,
     );
-    painter.galley(at, galley, color);
+    painter.galley(at, galley, color(text));
 
     well
 }
@@ -231,37 +193,33 @@ pub fn fit(area: Rect, size: [usize; 2]) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use photosite_core::theme::THEMES;
 
     #[test]
-    fn klice_palet_jsou_jedinecne() {
-        let mut ids: Vec<_> = PALETTES.iter().map(|p| p.id).collect();
-        let count = ids.len();
-        ids.sort();
-        ids.dedup();
-        assert_eq!(ids.len(), count);
-    }
-
-    #[test]
-    fn neznamy_motiv_spadne_na_prvni_misto_paniky() {
-        assert_eq!(by_id("neexistuje").0, 0);
-        assert_eq!(by_id("sepie").1.id, "sepie");
-    }
-
-    #[test]
-    fn kazdy_motiv_ma_preklad() {
-        for palette in &PALETTES {
-            assert!(
-                photosite_core::i18n::has(palette.title_key),
-                "motiv {} odkazuje na chybějící klíč {}",
-                palette.id,
-                palette.title_key
+    fn prevod_barvy_nic_neztrati() {
+        for theme in THEMES {
+            let converted = color(theme.palette.accent);
+            let original = theme.palette.accent;
+            assert_eq!(
+                (converted.r(), converted.g(), converted.b()),
+                (original.r, original.g, original.b)
             );
         }
     }
 
     #[test]
-    fn vychozi_motiv_z_nastaveni_existuje() {
-        let default = photosite_core::Config::default().appearance.theme;
-        assert_eq!(by_id(&default).1.id, default);
+    fn vyska_dlazdice_reaguje_na_nastaveni() {
+        let mut gallery = Gallery::default();
+        let s_popisky = tile_height(&gallery);
+        gallery.show_captions = false;
+        let bez = tile_height(&gallery);
+        assert!(
+            bez < s_popisky,
+            "bez popisků musí být dlaždice nižší: {bez} proti {s_popisky}"
+        );
+
+        gallery.show_captions = true;
+        gallery.tile_size *= 2.0;
+        assert!(tile_height(&gallery) > s_popisky);
     }
 }

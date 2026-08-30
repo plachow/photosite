@@ -2,38 +2,43 @@
 //!
 //! Mřížka je virtualizovaná ručně — kreslí se jen viditelné řádky, takže na
 //! počtu fotek nezáleží. Nic v téhle smyčce s velikostí knihovny neroste.
+//!
+//! Rozměry si nic nevymýšlí: mezera, poměr stran, výška proužku i kolik řádků
+//! se načítá dopředu jsou v nastavení.
 
 use crate::{App, Node, Want, theme};
 use eframe::egui;
 use egui::{Sense, Vec2};
 use photosite_core::t;
+use photosite_core::theme::Palette;
 use std::path::{Path, PathBuf};
 
-const GAP: f32 = 10.0;
-
-pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &theme::Palette) {
+pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
     if app.photos.is_empty() {
         ui.centered_and_justified(|ui| {
-            ui.label(egui::RichText::new(t!("gallery-empty")).color(palette.dim));
+            ui.label(egui::RichText::new(t!("gallery-empty")).color(theme::color(palette.dim)));
         });
         return;
     }
 
-    let tile_w = app.config_tile();
-    let tile_h = tile_w * 0.72 + theme::CAPTION + theme::PADDING;
+    let gallery = app.gallery().clone();
+    let tile_w = gallery.tile_size as f32;
+    let tile_h = theme::tile_height(&gallery);
+    let gap = gallery.gap as f32;
+    let margin = gallery.prefetch_rows.clamp(0, 64) as usize;
     let count = app.photos.len();
 
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show_viewport(ui, |ui, viewport| {
             let width = ui.available_width();
-            let cols = (((width - GAP) / (tile_w + GAP)).floor() as usize).max(1);
+            let cols = (((width - gap) / (tile_w + gap)).floor() as usize).max(1);
             let rows = count.div_ceil(cols);
-            let pitch = tile_h + GAP;
+            let pitch = tile_h + gap;
             let (area, _) =
-                ui.allocate_exact_size(Vec2::new(width, rows as f32 * pitch + GAP), Sense::hover());
+                ui.allocate_exact_size(Vec2::new(width, rows as f32 * pitch + gap), Sense::hover());
 
-            let first = ((viewport.min.y - GAP) / pitch).floor().max(0.0) as usize;
+            let first = ((viewport.min.y - gap) / pitch).floor().max(0.0) as usize;
             let last = ((viewport.max.y / pitch).ceil() as usize).min(rows);
 
             let mut wanted_quick: Vec<(usize, PathBuf)> = Vec::new();
@@ -50,8 +55,8 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &theme::Palette) {
                     let rect = egui::Rect::from_min_size(
                         area.min
                             + Vec2::new(
-                                GAP + col as f32 * (tile_w + GAP),
-                                GAP + row as f32 * pitch,
+                                gap + col as f32 * (tile_w + gap),
+                                gap + row as f32 * pitch,
                             ),
                         Vec2::new(tile_w, tile_h),
                     );
@@ -63,12 +68,13 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &theme::Palette) {
 
                     let name = path
                         .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
+                        .map(|name| name.to_string_lossy().into_owned())
                         .unwrap_or_default();
                     let well = theme::slide(
                         ui.painter(),
                         rect,
                         palette,
+                        &gallery,
                         &name,
                         app.selected == Some(index),
                         response.hovered(),
@@ -111,6 +117,17 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &theme::Palette) {
             app.wanted_quick = order(wanted_quick);
             app.wanted_sharp = order(wanted_sharp);
 
+            // Řádky nad a pod viewportem: připravit dopředu, ale nepočítat je
+            // mezi prázdné — na ty se nikdo nedívá.
+            let ahead_from = first.saturating_sub(margin) * cols;
+            let ahead_to = ((last + margin) * cols).min(count);
+            for index in ahead_from..ahead_to {
+                let path = app.photos[index].clone();
+                if !app.has(&path, Want::Thumb) && !app.wanted_sharp.contains(&path) {
+                    app.wanted_sharp.push(path);
+                }
+            }
+
             // Dotknout se použitých až po kreslení, aby LRU nevyhodila zrovna
             // to, co je na obrazovce.
             let visible: Vec<PathBuf> = (first * cols..(last * cols).min(count))
@@ -127,18 +144,19 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &theme::Palette) {
         });
 }
 
-pub fn preview(app: &mut App, ui: &mut egui::Ui, palette: &theme::Palette) {
+pub fn preview(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
     app.wanted_preview = None;
     let Some(index) = app.selected else {
         ui.centered_and_justified(|ui| {
-            ui.label(egui::RichText::new(t!("preview-pick-tile")).color(palette.dim));
+            ui.label(egui::RichText::new(t!("preview-pick-tile")).color(theme::color(palette.dim)));
         });
         return;
     };
 
     let path = app.photos[index].clone();
     let area = ui.available_rect_before_wrap();
-    ui.painter().rect_filled(area, 0, palette.well);
+    ui.painter()
+        .rect_filled(area, 0, theme::color(palette.well));
 
     // Než se dekóduje plné rozlišení, ukáže se to, co už je — panel tak nikdy
     // neproblikne prázdnotou.
@@ -166,18 +184,18 @@ pub fn preview(app: &mut App, ui: &mut egui::Ui, palette: &theme::Palette) {
 
     let name = path
         .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
+        .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
     ui.painter().text(
         egui::pos2(area.center().x, area.max.y - 14.0),
         egui::Align2::CENTER_CENTER,
         name,
         egui::FontId::proportional(12.0),
-        palette.dim,
+        theme::color(palette.dim),
     );
 }
 
-pub fn tree(app: &mut App, ui: &mut egui::Ui, palette: &theme::Palette) {
+pub fn tree(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
     egui::ScrollArea::both()
         .auto_shrink([false, false])
         .show(ui, |ui| {
@@ -198,7 +216,7 @@ pub fn tree(app: &mut App, ui: &mut egui::Ui, palette: &theme::Palette) {
 fn node(
     ui: &mut egui::Ui,
     node: &mut Node,
-    palette: &theme::Palette,
+    palette: &Palette,
     current: Option<&Path>,
     pick: &mut Option<PathBuf>,
 ) {
@@ -210,11 +228,11 @@ fn node(
         // a vyšly by jako prázdné čtverečky.
         let (rect, response) = ui.allocate_exact_size(Vec2::new(14.0, 16.0), Sense::click());
         let center = rect.center();
-        let tint = if response.hovered() {
+        let tint = theme::color(if response.hovered() {
             palette.text
         } else {
             palette.dim
-        };
+        });
         let points = if node.expanded {
             vec![
                 egui::pos2(center.x - 4.0, center.y - 2.0),
@@ -240,11 +258,11 @@ fn node(
             }
         }
 
-        let label = egui::RichText::new(&node.name).color(if is_current {
+        let label = egui::RichText::new(&node.name).color(theme::color(if is_current {
             palette.accent
         } else {
             palette.text
-        });
+        }));
         if ui.add(egui::Button::new(label).frame(false)).clicked() {
             node.load_children();
             node.expanded = true;

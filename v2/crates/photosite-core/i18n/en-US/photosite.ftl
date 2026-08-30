@@ -19,13 +19,17 @@ command-view-recursive = Include subfolders
 command-view-bigger-tiles = Larger tiles
 command-view-smaller-tiles = Smaller tiles
 command-view-next-theme = Next theme
+command-view-settings = Settings…
 command-help-diagnostics = Diagnostics
 
 ## Motivy
 
-theme-dark = Dark grey
-theme-light = Light grey
+theme-dark = Dark
+theme-light = Light
+theme-grey = Grey
 theme-sepia = Sepia
+theme-seabreeze = Sea Breeze
+theme-automatic = Follow the system
 
 ## Mřížka
 
@@ -41,6 +45,53 @@ gallery-count =
         [one] { $count } photograph
        *[other] { $count } photographs
     } in { NUMBER($ms, maximumFractionDigits: 0) } ms
+
+## Nastavení
+#
+# Popisky polí. Klíče se drží tvaru setting-<cesta s pomlčkami>, aby šlo
+# od jednoho k druhému dojít bez hledání.
+
+settings-title = Settings
+settings-reset = Reset to defaults
+settings-reset-section = Reset this section
+settings-presets = Presets
+
+preset-comfortable = Comfortable
+preset-compact = Compact
+preset-large = Large tiles
+preset-modest-machine = Modest machine
+
+setting-window-width = Window width
+setting-window-height = Window height
+setting-window-x = Window position, horizontal
+setting-window-y = Window position, vertical
+setting-window-maximized = Window maximised
+setting-window-tree-width = Folder pane width
+setting-window-preview-width = Preview pane width
+
+setting-tile-size = Tile size
+setting-gap = Gap between tiles
+setting-tile-aspect = Tile image ratio
+setting-caption-height = Caption strip height
+setting-tile-padding = Tile padding
+setting-prefetch-rows = Rows loaded ahead
+setting-show-captions = Show file names
+setting-recursive = Include subfolders
+setting-last-folder = Last folder
+
+setting-thumb-size = Thumbnail size
+setting-preview-size = Preview size
+setting-uploads-per-frame = Uploads per frame
+setting-texture-budget = Images kept in memory
+setting-worker-threads = Decoding threads
+setting-use-embedded = Use embedded EXIF thumbnails
+setting-idle-repaint = Idle repaint interval
+
+setting-theme = Theme
+setting-theme-dark = Theme when the system is dark
+setting-theme-light = Theme when the system is light
+setting-language = Language
+setting-ui-scale = Interface scale
 
 ## Diagnostika
 

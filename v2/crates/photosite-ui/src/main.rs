@@ -1,8 +1,12 @@
 //! PhotoSite.
 //!
 //! Tahle crate je jediná, která ví o egui a o GPU. Všechno ostatní —
-//! katalog, cesty, nastavení, úlohy, příkazy — bydlí v jádře a dá se
+//! katalog, cesty, nastavení, motivy, úlohy, příkazy — bydlí v jádře a dá se
 //! otestovat bez okna.
+//!
+//! Nejsou tu žádné konstanty ovlivňující vzhled ani chování. Všechno jde
+//! z [`Settings`], protože co je zadrátované, to nejde nastavit — a co nejde
+//! nastavit, to se jednou přepisuje.
 
 mod grid;
 mod theme;
@@ -10,7 +14,8 @@ mod theme;
 use anyhow::Result;
 use eframe::egui;
 use photosite_core::commands::{Bindings, Group, Shortcut};
-use photosite_core::{Config, Paths, commands, diagnostics, i18n, jobs, t};
+use photosite_core::settings::{Gallery, Kind, PRESETS, Settings, TUNABLES, Tunable};
+use photosite_core::{Paths, commands, diagnostics, i18n, jobs, t, theme as palettes};
 use photosite_image as img;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -45,14 +50,18 @@ fn main() -> Result<()> {
     let mut selftest = false;
     let mut language: Option<String> = None;
     let mut shot: Option<PathBuf> = None;
+    let mut reset = false;
+    let mut open_settings = false;
     let mut folder: Option<PathBuf> = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--data" => data = args.next().map(PathBuf::from),
             "--verbose" | "-v" => verbose = true,
-            "--lang" => language = args.next(),
             "--selftest" => selftest = true,
+            "--lang" => language = args.next(),
             "--shot" => shot = args.next().map(PathBuf::from),
+            "--reset-settings" => reset = true,
+            "--open-settings" => open_settings = true,
             other => folder = Some(PathBuf::from(other)),
         }
     }
@@ -63,17 +72,24 @@ fn main() -> Result<()> {
     diagnostics::install_panic_hook(&paths);
     tracing::info!(verze = photosite_core::VERSION, "start");
 
-    let config = Config::load(&paths);
+    let mut settings = Settings::load(&paths);
+    if reset {
+        settings.reset_all();
+        settings.save(&paths)?;
+        tracing::info!("nastavení vráceno na výchozí");
+    }
+
     i18n::set_language(&i18n::negotiate(
-        language.as_deref().or(Some(&config.appearance.language)),
+        language.as_deref().or(Some(&settings.appearance.language)),
     ));
+
     let mut viewport = egui::ViewportBuilder::default()
-        .with_inner_size([config.window.width, config.window.height])
+        .with_inner_size([settings.window.width as f32, settings.window.height as f32])
         .with_min_inner_size([900.0, 600.0])
-        .with_maximized(config.window.maximized)
+        .with_maximized(settings.window.maximized)
         .with_title("PhotoSite");
-    if let (Some(x), Some(y)) = (config.window.x, config.window.y) {
-        viewport = viewport.with_position([x, y]);
+    if let (Some(x), Some(y)) = (settings.window.x, settings.window.y) {
+        viewport = viewport.with_position([x as f32, y as f32]);
     }
 
     let options = eframe::NativeOptions {
@@ -84,11 +100,11 @@ fn main() -> Result<()> {
         "PhotoSite",
         options,
         Box::new(move |cc| {
-            let palette = theme::by_id(&config.appearance.theme).1;
-            theme::apply(&cc.egui_ctx, palette);
-            let mut app = App::new(paths, config, folder);
+            let mut app = App::new(paths, settings, folder);
             app.selftest = selftest;
             app.shot = shot;
+            app.show_settings = open_settings;
+            app.dress(&cc.egui_ctx);
             Ok(Box::new(app))
         }),
     )
@@ -141,15 +157,9 @@ impl Node {
     }
 }
 
-/// Kolik obrázků se za snímek nahraje do GPU. Bez stropu by jedna dávka
-/// dokončených dekódů zasekla vlákno, které kreslí.
-const UPLOADS_PER_FRAME: usize = 32;
-/// Kolik textur se drží, než začnou vypadávat nejdéle nepoužité.
-const TEXTURE_BUDGET: usize = 900;
-
 pub struct App {
     paths: Paths,
-    config: Config,
+    pub settings: Settings,
     bindings: Bindings,
     tasks: jobs::Tasks,
     images: jobs::Wishlist<Key, Pixels>,
@@ -167,17 +177,14 @@ pub struct App {
     pub blank: usize,
     pub unsharp: usize,
 
-    palette: usize,
+    /// Motiv, který se právě kreslí. Přepočítá se, když se změní nastavení
+    /// nebo když systém přepne mezi světlým a tmavým režimem.
+    theme: &'static palettes::Theme,
     status: String,
     show_diagnostics: bool,
+    show_settings: bool,
 
-    /// Samokontrola: otevři složku, chvíli běž a ověř, že žádná viditelná
-    /// dlaždice nezůstala prázdná. Přesně tuhle vadu měl WPF benchmark, kde
-    /// jedna spolknutá výjimka způsobila, že se nevyrobil jediný náhled a
-    /// aplikace se přitom tvářila, že běží.
     pub selftest: bool,
-    /// Kam uložit snímek okna. Slouží k ověření, že se opravdu kreslí to, co
-    /// si myslíme — bez toho by šlo UI zkontrolovat jedině očima.
     pub shot: Option<PathBuf>,
     frames: u32,
     started: std::time::Instant,
@@ -197,28 +204,22 @@ impl std::fmt::Debug for App {
 }
 
 impl App {
-    fn new(paths: Paths, config: Config, folder: Option<PathBuf>) -> Self {
-        let images = jobs::Wishlist::new(jobs::worker_count(), |key: &Key| {
+    fn new(paths: Paths, settings: Settings, folder: Option<PathBuf>) -> Self {
+        let threads = match settings.loading.worker_threads {
+            0 => jobs::worker_count(),
+            count => count.clamp(1, 128) as usize,
+        };
+        let thumb = settings.loading.thumb_size.clamp(32, 4096) as u32;
+        let preview = settings.loading.preview_size.clamp(64, 16384) as u32;
+        let embedded = settings.loading.use_embedded_thumbnails;
+
+        let images = jobs::Wishlist::new(threads, move |key: &Key| {
             let (path, want) = key;
             let outcome = match want {
-                Want::Quick => img::quick(path).map(|found| {
-                    found.map(|rgb| Pixels {
-                        size: [rgb.width as usize, rgb.height as usize],
-                        rgb: rgb.pixels,
-                    })
-                }),
-                Want::Thumb => img::sized(path, img::THUMB).map(|rgb| {
-                    Some(Pixels {
-                        size: [rgb.width as usize, rgb.height as usize],
-                        rgb: rgb.pixels,
-                    })
-                }),
-                Want::Preview => img::sized(path, img::PREVIEW).map(|rgb| {
-                    Some(Pixels {
-                        size: [rgb.width as usize, rgb.height as usize],
-                        rgb: rgb.pixels,
-                    })
-                }),
+                Want::Quick if !embedded => Ok(None),
+                Want::Quick => img::quick(path).map(|found| found.map(into_pixels)),
+                Want::Thumb => img::sized(path, thumb).map(|rgb| Some(into_pixels(rgb))),
+                Want::Preview => img::sized(path, preview).map(|rgb| Some(into_pixels(rgb))),
             };
 
             match outcome {
@@ -232,10 +233,10 @@ impl App {
             }
         });
 
-        let (palette, _) = theme::by_id(&config.appearance.theme);
+        let theme = palettes::resolve(&settings.appearance, None);
         let mut app = Self {
             paths,
-            config,
+            settings,
             bindings: Bindings::defaults(),
             tasks: jobs::Tasks::new(),
             images,
@@ -250,34 +251,48 @@ impl App {
             wanted_preview: None,
             blank: 0,
             unsharp: 0,
-            palette,
-            status: photosite_core::i18n::t("gallery-pick-folder"),
+            theme,
+            status: i18n::t("gallery-pick-folder"),
             show_diagnostics: false,
+            show_settings: false,
             selftest: false,
             shot: None,
             frames: 0,
             started: std::time::Instant::now(),
         };
 
-        let start = folder.or_else(|| app.config.gallery.last_folder.as_ref().map(PathBuf::from));
-        if let Some(folder) = start.filter(|f| f.is_dir()) {
+        let start = folder.or_else(|| app.settings.gallery.last_folder.as_ref().map(PathBuf::from));
+        if let Some(folder) = start.filter(|folder| folder.is_dir()) {
             app.open(folder);
         }
 
         app
     }
 
-    pub fn config_tile(&self) -> f32 {
-        self.config.gallery.tile_size
+    /// Přepočítá motiv a prožene ho skrz egui. Volá se při startu a po každé
+    /// změně, která se vzhledu týká.
+    fn dress(&mut self, ctx: &egui::Context) {
+        let system_dark = ctx.system_theme().map(|theme| theme == egui::Theme::Dark);
+        self.theme = palettes::resolve(&self.settings.appearance, system_dark);
+        theme::apply(
+            ctx,
+            &self.theme.palette,
+            self.theme.dark,
+            self.settings.appearance.ui_scale as f32,
+        );
     }
 
-    pub fn palette(&self) -> &'static theme::Palette {
-        &theme::PALETTES[self.palette]
+    pub fn palette(&self) -> &'static palettes::Palette {
+        &self.theme.palette
+    }
+
+    pub fn gallery(&self) -> &Gallery {
+        &self.settings.gallery
     }
 
     pub fn open(&mut self, folder: PathBuf) {
         let started = std::time::Instant::now();
-        let depth = if self.config.gallery.recursive {
+        let depth = if self.settings.gallery.recursive {
             usize::MAX
         } else {
             1
@@ -299,7 +314,7 @@ impl App {
         tracing::info!(folder = %folder.display(), pocet = photos.len(), "složka otevřena");
         self.photos = photos;
         self.selected = None;
-        self.config.gallery.last_folder = Some(folder.to_string_lossy().into_owned());
+        self.settings.gallery.last_folder = Some(folder.to_string_lossy().into_owned());
         self.folder = Some(folder);
     }
 
@@ -313,14 +328,15 @@ impl App {
 
     /// Označí texturu jako právě použitou, aby ji LRU nevyhodila zpod ruky.
     pub fn touch(&mut self, key: &Key) {
-        if let Some(at) = self.order.iter().position(|k| k == key) {
+        if let Some(at) = self.order.iter().position(|existing| existing == key) {
             let key = self.order.remove(at);
             self.order.push(key);
         }
     }
 
     fn collect(&mut self, ctx: &egui::Context) {
-        for (key, pixels) in self.images.drain(UPLOADS_PER_FRAME) {
+        let uploads = self.settings.loading.uploads_per_frame.clamp(1, 4096) as usize;
+        for (key, pixels) in self.images.drain(uploads) {
             let image = egui::ColorImage::from_rgb(pixels.size, &pixels.rgb);
             let handle =
                 ctx.load_texture(key.0.to_string_lossy(), image, egui::TextureOptions::LINEAR);
@@ -329,7 +345,8 @@ impl App {
             self.textures.insert(key, handle);
         }
 
-        while self.order.len() > TEXTURE_BUDGET {
+        let budget = self.settings.loading.texture_budget.clamp(16, 65_536) as usize;
+        while self.order.len() > budget {
             let oldest = self.order.remove(0);
             self.textures.remove(&oldest);
             // Vyhozenou texturu bude potřeba vyrobit znovu.
@@ -346,28 +363,43 @@ impl App {
             }
             "file.quit" => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             "view.recursive" => {
-                self.config.gallery.recursive = !self.config.gallery.recursive;
+                self.settings.gallery.recursive = !self.settings.gallery.recursive;
                 if let Some(folder) = self.folder.clone() {
                     self.open(folder);
                 }
             }
-            "view.bigger_tiles" => {
-                self.config.gallery.tile_size = (self.config.gallery.tile_size * 1.25).min(460.0);
-            }
-            "view.smaller_tiles" => {
-                self.config.gallery.tile_size = (self.config.gallery.tile_size / 1.25).max(110.0);
-            }
+            "view.bigger_tiles" => self.resize_tiles(1.25),
+            "view.smaller_tiles" => self.resize_tiles(1.0 / 1.25),
             "view.next_theme" => {
-                self.palette = (self.palette + 1) % theme::PALETTES.len();
-                self.config.appearance.theme = self.palette().id.to_owned();
-                theme::apply(ctx, self.palette());
+                let at = palettes::THEMES
+                    .iter()
+                    .position(|theme| theme.id == self.theme.id)
+                    .unwrap_or(0);
+                let next = &palettes::THEMES[(at + 1) % palettes::THEMES.len()];
+                self.settings.appearance.theme = next.id.to_owned();
+                self.dress(ctx);
             }
+            "view.settings" => self.show_settings = !self.show_settings,
             "help.diagnostics" => self.show_diagnostics = !self.show_diagnostics,
             // Otevírací dialog přijde s `rfd`; do té doby se složka vybírá
             // ve stromu vlevo.
             "file.open_folder" => self.status = t!("gallery-pick-folder"),
             other => tracing::warn!(prikaz = other, "příkaz bez obsluhy"),
         }
+    }
+
+    /// Meze bere z popisu polí, ne z čísel napsaných tady.
+    fn resize_tiles(&mut self, factor: f64) {
+        let (min, max) = match TUNABLES
+            .iter()
+            .find(|tunable| tunable.path == "gallery.tile_size")
+            .map(|tunable| tunable.kind)
+        {
+            Some(Kind::Float { min, max }) => (min, max),
+            _ => (80.0, 640.0),
+        };
+        self.settings.gallery.tile_size =
+            (self.settings.gallery.tile_size * factor).clamp(min, max);
     }
 
     /// Zkratky se čtou z registru, ne z natvrdo napsaných podmínek.
@@ -402,68 +434,59 @@ impl App {
     }
 }
 
+fn into_pixels(rgb: img::Rgb) -> Pixels {
+    Pixels {
+        size: [rgb.width as usize, rgb.height as usize],
+        rgb: rgb.pixels,
+    }
+}
+
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.collect(&ctx);
         self.shortcuts(&ctx);
+
+        // Systém mohl mezitím přepnout na tmavý režim.
+        if self.settings.appearance.theme == palettes::AUTOMATIC {
+            let system_dark = ctx.system_theme().map(|theme| theme == egui::Theme::Dark);
+            if palettes::resolve(&self.settings.appearance, system_dark).id != self.theme.id {
+                self.dress(&ctx);
+            }
+        }
+
         let palette = *self.palette();
+        let panel = theme::color(palette.panel);
+        let window = theme::color(palette.window);
 
         egui::Panel::top("toolbar")
-            .frame(egui::Frame::NONE.fill(palette.panel).inner_margin(6.0))
+            .frame(egui::Frame::NONE.fill(panel).inner_margin(6.0))
             .show(ui, |ui| self.toolbar(ui, &palette, &ctx));
 
         egui::Panel::left("tree")
             .resizable(true)
-            .default_size(self.config.window.tree_width)
-            .frame(egui::Frame::NONE.fill(palette.panel).inner_margin(6.0))
+            .default_size(self.settings.window.tree_width as f32)
+            .frame(egui::Frame::NONE.fill(panel).inner_margin(6.0))
             .show(ui, |ui| {
-                self.config.window.tree_width = ui.available_width();
+                self.settings.window.tree_width = ui.available_width() as f64;
                 grid::tree(self, ui, &palette);
             });
 
         egui::Panel::right("preview")
             .resizable(true)
-            .default_size(self.config.window.preview_width)
-            .frame(egui::Frame::NONE.fill(palette.window))
+            .default_size(self.settings.window.preview_width as f32)
+            .frame(egui::Frame::NONE.fill(window))
             .show(ui, |ui| {
-                self.config.window.preview_width = ui.available_width();
+                self.settings.window.preview_width = ui.available_width() as f64;
                 grid::preview(self, ui, &palette);
             });
 
         egui::CentralPanel::no_frame()
-            .frame(egui::Frame::NONE.fill(palette.window))
+            .frame(egui::Frame::NONE.fill(window))
             .show(ui, |ui| grid::gallery(self, ui, &palette));
 
-        if self.show_diagnostics {
-            let mut rows = diagnostics::about(&self.paths);
-            rows.push((t!("diagnostics-photos"), self.photos.len().to_string()));
-            rows.push((t!("diagnostics-textures"), self.textures.len().to_string()));
-            rows.push((
-                t!("diagnostics-decoding"),
-                self.images.running().to_string(),
-            ));
-            rows.push((
-                t!("diagnostics-tasks"),
-                self.tasks.running().len().to_string(),
-            ));
-            rows.push((t!("diagnostics-blank"), self.blank.to_string()));
-            rows.push((t!("diagnostics-unsharp"), self.unsharp.to_string()));
-            let width = rows
-                .iter()
-                .map(|(label, _)| label.chars().count())
-                .max()
-                .unwrap_or(0);
-            let mut open = true;
-            egui::Window::new(t!("diagnostics-title"))
-                .open(&mut open)
-                .show(&ctx, |ui| {
-                    for (label, value) in &rows {
-                        ui.monospace(format!("{label:width$}  {value}"));
-                    }
-                });
-            self.show_diagnostics = open;
-        }
+        self.diagnostics_window(&ctx);
+        self.settings_window(&ctx);
 
         // Seznam přání se přepíše až tady, když je jasné, co je vidět a co je
         // vybrané. Všechno, co v něm není, se přestane dekódovat.
@@ -488,8 +511,25 @@ impl eframe::App for App {
         if self.blank > 0 || self.unsharp > 0 || self.wanted_preview.is_some() {
             ctx.request_repaint();
         } else {
-            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+            ctx.request_repaint_after(std::time::Duration::from_millis(
+                self.settings.loading.idle_repaint_ms.clamp(1, 60_000) as u64,
+            ));
         }
+
+        // Stav okna se sbírá každý snímek, ukládá se až při zavření.
+        ctx.input(|input| {
+            if let Some(rect) = input.viewport().inner_rect {
+                self.settings.window.width = rect.width() as f64;
+                self.settings.window.height = rect.height() as f64;
+            }
+
+            if let Some(outer) = input.viewport().outer_rect {
+                self.settings.window.x = Some(outer.min.x as f64);
+                self.settings.window.y = Some(outer.min.y as f64);
+            }
+
+            self.settings.window.maximized = input.viewport().maximized.unwrap_or(false);
+        });
 
         self.frames += 1;
         if self.selftest {
@@ -497,28 +537,13 @@ impl eframe::App for App {
         }
 
         self.grab(&ctx);
-
-        // Stav okna se sbírá každý snímek, ukládá se až při zavření.
-        ctx.input(|input| {
-            if let Some(rect) = input.viewport().inner_rect {
-                self.config.window.width = rect.width();
-                self.config.window.height = rect.height();
-            }
-
-            if let Some(outer) = input.viewport().outer_rect {
-                self.config.window.x = Some(outer.min.x);
-                self.config.window.y = Some(outer.min.y);
-            }
-
-            self.config.window.maximized = input.viewport().maximized.unwrap_or(false);
-        });
     }
 }
 
 impl App {
-    fn toolbar(&mut self, ui: &mut egui::Ui, palette: &theme::Palette, ctx: &egui::Context) {
+    fn toolbar(&mut self, ui: &mut egui::Ui, palette: &palettes::Palette, ctx: &egui::Context) {
         ui.horizontal(|ui| {
-            let mut recursive = self.config.gallery.recursive;
+            let mut recursive = self.settings.gallery.recursive;
             if ui
                 .checkbox(&mut recursive, t!("toolbar-recursive"))
                 .changed()
@@ -528,11 +553,10 @@ impl App {
 
             ui.separator();
             // Tlačítka se berou z registru příkazů, ne z ručně psaného seznamu.
-            for command in commands::COMMANDS.iter().filter(|c| c.group == Group::View) {
-                if command.id == "view.recursive" {
-                    continue;
-                }
-
+            for command in commands::COMMANDS
+                .iter()
+                .filter(|command| command.group == Group::View && command.id != "view.recursive")
+            {
                 let title = command.title();
                 let hint = match self.bindings.shortcut(command.id) {
                     Some(shortcut) => format!("{title}  ({shortcut})"),
@@ -548,23 +572,184 @@ impl App {
                 egui::RichText::new(
                     self.folder
                         .as_ref()
-                        .map(|f| f.to_string_lossy().into_owned())
+                        .map(|folder| folder.to_string_lossy().into_owned())
                         .unwrap_or_default(),
                 )
-                .color(palette.dim),
+                .color(theme::color(palette.dim)),
             );
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(egui::RichText::new(&self.status).color(palette.dim));
+                ui.label(egui::RichText::new(&self.status).color(theme::color(palette.dim)));
                 for task in self.tasks.running() {
-                    ui.label(egui::RichText::new(&task.title).color(palette.accent));
+                    ui.label(egui::RichText::new(&task.title).color(theme::color(palette.accent)));
                 }
             });
         });
     }
-}
 
-impl App {
+    fn diagnostics_window(&mut self, ctx: &egui::Context) {
+        if !self.show_diagnostics {
+            return;
+        }
+
+        let mut rows = diagnostics::about(&self.paths);
+        rows.push((t!("diagnostics-photos"), self.photos.len().to_string()));
+        rows.push((t!("diagnostics-textures"), self.textures.len().to_string()));
+        rows.push((
+            t!("diagnostics-decoding"),
+            self.images.running().to_string(),
+        ));
+        rows.push((
+            t!("diagnostics-tasks"),
+            self.tasks.running().len().to_string(),
+        ));
+        rows.push((t!("diagnostics-blank"), self.blank.to_string()));
+        rows.push((t!("diagnostics-unsharp"), self.unsharp.to_string()));
+        let width = rows
+            .iter()
+            .map(|(label, _)| label.chars().count())
+            .max()
+            .unwrap_or(0);
+
+        let mut open = true;
+        egui::Window::new(t!("diagnostics-title"))
+            .open(&mut open)
+            .show(ctx, |ui| {
+                for (label, value) in &rows {
+                    ui.monospace(format!("{label:width$}  {value}"));
+                }
+            });
+        self.show_diagnostics = open;
+    }
+
+    /// Obrazovka nastavení se skládá z popisu polí, ne z ručně psaných
+    /// ovládacích prvků. Přidat volbu znamená přidat řádek do `TUNABLES`.
+    fn settings_window(&mut self, ctx: &egui::Context) {
+        if !self.show_settings {
+            return;
+        }
+
+        let mut open = true;
+        let mut changed = false;
+        let mut redress = false;
+        egui::Window::new(t!("settings-title"))
+            .open(&mut open)
+            .default_width(520.0)
+            .show(ctx, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(t!("settings-presets"));
+                    for preset in PRESETS {
+                        if ui.button(i18n::t(preset.label_key)).clicked() {
+                            if let Err(error) = self.settings.apply_preset(preset.id) {
+                                tracing::error!(error = %format!("{error:#}"), "sada selhala");
+                            }
+
+                            changed = true;
+                        }
+                    }
+                });
+
+                ui.separator();
+                egui::ScrollArea::vertical()
+                    .max_height(440.0)
+                    .show(ui, |ui| {
+                        for tunable in TUNABLES {
+                            // Stav okna není předvolba, do nastavení nepatří.
+                            if tunable.kind == Kind::State {
+                                continue;
+                            }
+
+                            if self.tunable_row(ui, tunable) {
+                                changed = true;
+                                redress |= tunable.path.starts_with("appearance.");
+                            }
+                        }
+                    });
+
+                ui.separator();
+                if ui.button(t!("settings-reset")).clicked() {
+                    self.settings.reset_all();
+                    changed = true;
+                    redress = true;
+                }
+            });
+
+        self.show_settings = open;
+        if redress {
+            self.dress(ctx);
+        }
+
+        if changed && let Err(error) = self.settings.save(&self.paths) {
+            tracing::error!(error = %format!("{error:#}"), "nastavení se nepodařilo uložit");
+        }
+    }
+
+    fn tunable_row(&mut self, ui: &mut egui::Ui, tunable: &Tunable) -> bool {
+        let label = i18n::t(tunable.label_key);
+        let mut changed = false;
+        ui.horizontal(|ui| {
+            ui.label(label);
+            ui.with_layout(
+                egui::Layout::right_to_left(egui::Align::Center),
+                |ui| match tunable.kind {
+                    Kind::Bool => {
+                        let mut value = self
+                            .settings
+                            .get(tunable.path)
+                            .and_then(|value| value.as_bool())
+                            .unwrap_or(false);
+                        if ui.checkbox(&mut value, "").changed() {
+                            changed = self.write(tunable.path, toml::Value::Boolean(value));
+                        }
+                    }
+                    Kind::Float { min, max } => {
+                        let mut value = self
+                            .settings
+                            .get(tunable.path)
+                            .and_then(|value| value.as_float())
+                            .unwrap_or(0.0);
+                        if ui.add(egui::Slider::new(&mut value, min..=max)).changed() {
+                            changed = self.write(tunable.path, toml::Value::Float(value));
+                        }
+                    }
+                    Kind::Int { min, max } => {
+                        let mut value = self
+                            .settings
+                            .get(tunable.path)
+                            .and_then(|value| value.as_integer())
+                            .unwrap_or(0);
+                        if ui.add(egui::Slider::new(&mut value, min..=max)).changed() {
+                            changed = self.write(tunable.path, toml::Value::Integer(value));
+                        }
+                    }
+                    Kind::Text | Kind::Choice(_) => {
+                        let mut value = self
+                            .settings
+                            .get(tunable.path)
+                            .and_then(|value| value.as_str().map(str::to_owned))
+                            .unwrap_or_default();
+                        if ui.text_edit_singleline(&mut value).changed() {
+                            changed = self.write(tunable.path, toml::Value::String(value));
+                        }
+                    }
+                    Kind::State => {}
+                },
+            );
+        });
+
+        changed
+    }
+
+    fn write(&mut self, path: &str, value: toml::Value) -> bool {
+        match self.settings.set(path, value) {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::warn!(path, error = %format!("{error:#}"), "hodnotu nelze nastavit");
+                false
+            }
+        }
+    }
+
     /// Vyfotí okno, jakmile jsou dlaždice na místě, a skončí.
     fn grab(&mut self, ctx: &egui::Context) {
         let Some(path) = self.shot.clone() else {
@@ -582,7 +767,11 @@ impl App {
             })
         });
         if let Some(image) = captured {
-            let rgba: Vec<u8> = image.pixels.iter().flat_map(|c| c.to_array()).collect();
+            let rgba: Vec<u8> = image
+                .pixels
+                .iter()
+                .flat_map(|color| color.to_array())
+                .collect();
             match write_png(&path, &rgba, image.size[0] as u32, image.size[1] as u32) {
                 Ok(()) => tracing::info!(path = %path.display(), "snímek uložen"),
                 Err(error) => {
@@ -594,9 +783,12 @@ impl App {
         }
     }
 
+    /// Samokontrola: otevři složku, chvíli běž a ověř, že žádná viditelná
+    /// dlaždice nezůstala prázdná. Přesně tuhle vadu měl WPF benchmark, kde
+    /// jedna spolknutá výjimka způsobila, že se nevyrobil jediný náhled a
+    /// aplikace se přitom tvářila, že běží.
     fn run_selftest(&mut self, ctx: &egui::Context) {
         let elapsed = self.started.elapsed().as_secs_f64();
-        // Pár snímků na rozjezd, pak se čeká, až se dlaždice doplní.
         if self.frames < 10 {
             return;
         }
@@ -635,7 +827,7 @@ impl App {
 
 impl Drop for App {
     fn drop(&mut self) {
-        if let Err(error) = self.config.save(&self.paths) {
+        if let Err(error) = self.settings.save(&self.paths) {
             tracing::error!(error = %format!("{error:#}"), "nastavení se nepodařilo uložit");
         }
     }

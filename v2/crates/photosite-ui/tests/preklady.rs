@@ -82,22 +82,56 @@ fn radek(text: &str, at: usize) -> usize {
     text[..at].matches('\n').count() + 1
 }
 
-/// První řetězcový literál za značkou, spolu s tím, co je mezi nimi.
-/// Hledá i přes konce řádků, protože volání se běžně lámou.
-fn prvni_literal(text: &str, from: usize) -> Option<(String, String, usize)> {
-    let konec = text[from..]
-        .find(';')
-        .map(|at| from + at)
-        .unwrap_or(text.len());
-    let usek = &text[from..konec];
-    let start = usek.find('"')?;
+/// Literál hned za značkou, bez ničeho mezi. Pro `t!("klic")`, kde klíč je
+/// vždycky první argument.
+///
+/// Volnější hledání „první literál až po středník" tu bylo dřív a přisvojilo
+/// si `format!("{error:#}")` z úplně jiného řádku pod `i18n::t(promenna)`.
+fn literal_hned(text: &str, from: usize) -> Option<(String, usize)> {
+    let usek = &text[from..];
+    let start = usek.find(|znak: char| !znak.is_whitespace())?;
+    if usek.as_bytes().get(start) != Some(&b'"') {
+        return None;
+    }
+
     let zbytek = &usek[start + 1..];
     let end = zbytek.find('"')?;
-    Some((
-        zbytek[..end].to_owned(),
-        usek[..start].to_owned(),
-        from + start,
-    ))
+    Some((zbytek[..end].to_owned(), from + start))
+}
+
+/// První literál uvnitř závorky volání, spolu s tím, co je před ním.
+/// Hlídá vnoření, takže se nedostane za konec argumentů.
+fn literal_v_zavorce(text: &str, from: usize) -> Option<(String, String, usize)> {
+    let mut hloubka = 1i32;
+    let mut v_retezci = false;
+    let mut zacatek = None;
+    for (index, znak) in text[from..].char_indices() {
+        match znak {
+            '"' if v_retezci => {
+                let start = zacatek?;
+                return Some((
+                    text[from + start..from + index].to_owned(),
+                    text[from..from + start].to_owned(),
+                    from + start,
+                ));
+            }
+            '"' => {
+                v_retezci = true;
+                zacatek = Some(index + 1);
+            }
+            _ if v_retezci => {}
+            '(' => hloubka += 1,
+            ')' => {
+                hloubka -= 1;
+                if hloubka == 0 {
+                    return None;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    None
 }
 
 fn vyskyty<'a>(text: &'a str, marker: &'a str) -> impl Iterator<Item = usize> + 'a {
@@ -132,7 +166,7 @@ fn v_ui_nejsou_natvrdo_psane_texty() {
         let text = bez_komentaru(&std::fs::read_to_string(&path).unwrap());
         for marker in WIDGETY {
             for at in vyskyty(&text, marker) {
-                let Some((literal, mezi, kde)) = prvni_literal(&text, at + marker.len()) else {
+                let Some((literal, mezi, kde)) = literal_v_zavorce(&text, at + marker.len()) else {
                     continue;
                 };
 
@@ -169,7 +203,7 @@ fn kazdy_pouzity_klic_v_balicku_existuje() {
         let text = bez_komentaru(&std::fs::read_to_string(&path).unwrap());
         for marker in PREKLADY {
             for at in vyskyty(&text, marker) {
-                let Some((klic, _, kde)) = prvni_literal(&text, at + marker.len()) else {
+                let Some((klic, kde)) = literal_hned(&text, at + marker.len()) else {
                     continue;
                 };
 
@@ -204,13 +238,15 @@ fn hledani_opravdu_hleda() {
         ui.label("Hotovo");
         ui.button(t!("command-file-quit"));
         let x = format!("{a:#}");
+        ui.button(i18n::t(promenna));
+        tracing::error!(error = %format!("{error:#}"), "necoseposralo");
     "#;
     let text = bez_komentaru(vzorek);
 
     let mut nalezene = Vec::new();
     for marker in WIDGETY {
         for at in vyskyty(&text, marker) {
-            if let Some((literal, mezi, _)) = prvni_literal(&text, at + marker.len())
+            if let Some((literal, mezi, _)) = literal_v_zavorce(&text, at + marker.len())
                 && !PREKLADY.iter().any(|p| mezi.contains(p))
                 && obsahuje_slovo(&literal)
             {
@@ -221,4 +257,16 @@ fn hledani_opravdu_hleda() {
 
     assert_eq!(nalezene, vec!["Hotovo".to_owned()], "{nalezene:?}");
     assert_eq!(vyskyty(&text, "t!(").count(), 1, "format! není t!");
+
+    // Klíč se bere jen když stojí hned za závorkou. Dřív si `i18n::t(x)`
+    // přisvojilo literál z následujícího řádku a test hlásil nesmysl.
+    let klice: Vec<String> = PREKLADY
+        .iter()
+        .flat_map(|marker| {
+            vyskyty(&text, marker)
+                .filter_map(|at| literal_hned(&text, at + marker.len()).map(|(klic, _)| klic))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert_eq!(klice, vec!["command-file-quit".to_owned()], "{klice:?}");
 }

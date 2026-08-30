@@ -19,6 +19,7 @@ photosite-image.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 serde.workspace = true
+toml.workspace = true
 eframe.workspace = true
 egui.workspace = true
 walkdir.workspace = true

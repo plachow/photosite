@@ -92,6 +92,12 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Ctrl+T"),
     },
     Command {
+        id: "view.settings",
+        title_key: "command-view-settings",
+        group: Group::View,
+        default_shortcut: Some("Ctrl+Comma"),
+    },
+    Command {
         id: "help.diagnostics",
         title_key: "command-help-diagnostics",
         group: Group::Help,

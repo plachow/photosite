@@ -2164,6 +2164,7 @@ dependencies = [
  "photosite-core",
  "photosite-image",
  "serde",
+ "toml",
  "tracing",
  "walkdir",
 ]
