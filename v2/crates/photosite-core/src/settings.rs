@@ -15,8 +15,12 @@
 //! 4. **Reset je první třída.** Jedna položka, celá skupina, nebo všechno.
 //!    Když se dá bezpečně vrátit, člověk si troufne zkoušet.
 //!
-//! Sady ([`PRESETS`]) jsou hotové kombinace pro lidi, kteří nechtějí nic
-//! ladit. Jsou to data, ne kód, takže si je časem půjde přidávat.
+//! Hotové sady nastavení tu schválně **nejsou**. Byly, a byly předčasné: jedna
+//! z nich doslova opisovala výchozí hodnoty, takže by při jejich zlepšení
+//! tiše zůstala na starých, a u ostatních se nedalo poznat, jestli je někdo
+//! bude chtít. Reset na výchozí stav pokrývá „vrať mi to rozumné" celý.
+//! Až bude nastavení tolik, že kombinace začnou dávat smysl, budou to data
+//! v souboru, ne konstanty v kódu.
 
 use crate::paths::Paths;
 use anyhow::{Context, Result};
@@ -300,28 +304,6 @@ impl Settings {
         self.gallery.last_folder = keep_folder;
         self.window = window;
     }
-
-    /// Použije pojmenovanou sadu.
-    pub fn apply_preset(&mut self, id: &str) -> Result<()> {
-        let preset = PRESETS
-            .iter()
-            .find(|preset| preset.id == id)
-            .with_context(|| format!("sada {id} neexistuje"))?;
-        let changes: toml::Table =
-            toml::from_str(preset.toml).with_context(|| format!("sada {id} je poškozená"))?;
-        for (section, values) in &changes {
-            let Some(values) = values.as_table() else {
-                continue;
-            };
-
-            for (key, value) in values {
-                self.set(&format!("{section}.{key}"), value.clone())?;
-            }
-        }
-
-        tracing::info!(sada = id, "sada použita");
-        Ok(())
-    }
 }
 
 /// Rekurzivní rozdíl dvou tabulek; zůstane jen to, co se liší.
@@ -344,40 +326,6 @@ fn diff(mine: &toml::Table, default: &toml::Table) -> toml::Table {
 
     out
 }
-
-// ------------------------------------------------------------------- sady
-
-/// Hotová kombinace nastavení. Data, ne kód — časem půjdou přidávat ze
-/// souboru, aniž by se aplikace překládala.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Preset {
-    pub id: &'static str,
-    pub label_key: &'static str,
-    pub toml: &'static str,
-}
-
-pub const PRESETS: &[Preset] = &[
-    Preset {
-        id: "comfortable",
-        label_key: "preset-comfortable",
-        toml: "[gallery]\ntile_size = 220.0\ngap = 10.0\nshow_captions = true\n",
-    },
-    Preset {
-        id: "compact",
-        label_key: "preset-compact",
-        toml: "[gallery]\ntile_size = 140.0\ngap = 6.0\nshow_captions = false\n",
-    },
-    Preset {
-        id: "large",
-        label_key: "preset-large",
-        toml: "[gallery]\ntile_size = 320.0\ngap = 14.0\nshow_captions = true\n",
-    },
-    Preset {
-        id: "modest-machine",
-        label_key: "preset-modest-machine",
-        toml: "[loading]\ntexture_budget = 300\nuploads_per_frame = 12\npreview_size = 1600\n",
-    },
-];
 
 // -------------------------------------------------------------- popis polí
 
@@ -738,22 +686,6 @@ mod tests {
     }
 
     #[test]
-    fn sady_jsou_platne_a_pouzitelne() {
-        for preset in PRESETS {
-            let mut settings = Settings::default();
-            settings
-                .apply_preset(preset.id)
-                .unwrap_or_else(|error| panic!("sada {} selhala: {error:#}", preset.id));
-        }
-
-        let mut settings = Settings::default();
-        settings.apply_preset("compact").unwrap();
-        assert_eq!(settings.gallery.tile_size, 140.0);
-        assert!(!settings.gallery.show_captions);
-        assert!(settings.apply_preset("neexistuje").is_err());
-    }
-
-    #[test]
     fn popis_poli_pokryva_presne_to_co_v_nastaveni_je() {
         let skutecne = paths_in_settings();
         let popsane: Vec<String> = TUNABLES
@@ -791,10 +723,6 @@ mod tests {
                 tunable.path,
                 tunable.label_key
             );
-        }
-
-        for preset in PRESETS {
-            assert!(crate::i18n::has(preset.label_key), "sada {}", preset.id);
         }
     }
 }

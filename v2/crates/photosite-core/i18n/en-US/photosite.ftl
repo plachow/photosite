@@ -54,13 +54,6 @@ gallery-count =
 settings-title = Settings
 settings-reset = Reset to defaults
 settings-reset-section = Reset this section
-settings-presets = Presets
-
-preset-comfortable = Comfortable
-preset-compact = Compact
-preset-large = Large tiles
-preset-modest-machine = Modest machine
-
 setting-window-width = Window width
 setting-window-height = Window height
 setting-window-x = Window position, horizontal

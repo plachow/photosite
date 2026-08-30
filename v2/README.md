@@ -91,8 +91,11 @@ tedy znamená přidat jeden `.ftl` a jeden řádek do `i18n::available()`.
 4. **Reset je první třída.** Jedna položka, celá skupina, nebo všechno. Poloha
    okna a naposledy otevřená složka se resetem nemyslí — to nejsou předvolby.
 
-Sady (`PRESETS`) jsou hotové kombinace pro lidi, kteří nechtějí nic ladit:
-*Comfortable*, *Compact*, *Large tiles*, *Modest machine*. Jsou to data, ne kód.
+Hotové sady nastavení tu schválně **nejsou**. Byly, a byly předčasné: jedna
+z nich doslova opisovala výchozí hodnoty, takže by při jejich zlepšení tiše
+zůstala na starých, a u ostatních se nedalo poznat, jestli je někdo bude chtít.
+Reset pokrývá „vrať mi to rozumné" celý. Až bude nastavení tolik, že kombinace
+začnou dávat smysl, budou to data v souboru, ne konstanty v kódu.
 
 **V UI nezůstala jediná konstanta ovlivňující vzhled nebo chování** — mezera
 mezi dlaždicemi, poměr stran, výška proužku, počet nahrání za snímek, strop
@@ -123,7 +126,7 @@ jsou z prototypu, aby bylo co spustit.
 
 | | |
 |---|---|
-| testů | 77 (včetně 6 000 fuzz případů na EXIF) |
+| testů | 76 (včetně 6 000 fuzz případů na EXIF) |
 | sken 7 558 fotek | 0,3 s; opakovaně 0,1 s |
 | otevření složky v UI | 7 558 fotek, žádná prázdná dlaždice do 160 ms |
 | `cargo clippy -D warnings` | čisté |

@@ -14,7 +14,7 @@ mod theme;
 use anyhow::Result;
 use eframe::egui;
 use photosite_core::commands::{Bindings, Group, Shortcut};
-use photosite_core::settings::{Gallery, Kind, PRESETS, Settings, TUNABLES, Tunable};
+use photosite_core::settings::{Gallery, Kind, Settings, TUNABLES, Tunable};
 use photosite_core::{Paths, commands, diagnostics, i18n, jobs, t, theme as palettes};
 use photosite_image as img;
 use std::collections::HashMap;
@@ -636,19 +636,6 @@ impl App {
             .open(&mut open)
             .default_width(520.0)
             .show(ctx, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(t!("settings-presets"));
-                    for preset in PRESETS {
-                        if ui.button(i18n::t(preset.label_key)).clicked() {
-                            if let Err(error) = self.settings.apply_preset(preset.id) {
-                                tracing::error!(error = %format!("{error:#}"), "sada selhala");
-                            }
-
-                            changed = true;
-                        }
-                    }
-                });
-
                 ui.separator();
                 egui::ScrollArea::vertical()
                     .max_height(440.0)
