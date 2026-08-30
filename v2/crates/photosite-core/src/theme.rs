@@ -1,13 +1,19 @@
-//! Motivy jako data.
+//! Motivy jako data — a test, který hlídá, že jsou čitelné.
 //!
 //! Barvy nejsou konstanty v kódu, ale hodnoty, které jde serializovat. Dnes
 //! jsou vestavěné, ale právě proto, že jsou to data, půjde je časem načíst ze
-//! souboru, aniž by se čehokoliv dotklo v kódu. Kdyby byly zadrátované jako
-//! `Color32::from_rgb(...)` uvnitř kreslení, znamenal by uživatelský motiv
-//! přepsat každé místo, kde se něco kreslí.
+//! souboru, aniž by se čehokoliv dotklo v kódu.
 //!
-//! Jádro o žádné grafické knihovně neví — [`Color`] je trojice bajtů, ne typ
-//! z egui. Převod si dělá vrstva UI.
+//! Paleta pokrývá **všechny** role, které grafická vrstva potřebuje, včetně
+//! zakázaného textu, varování a chyb. Co paleta neurčí, dokreslí si toolkit
+//! po svém — a jeho výchozí barvy se s cizí paletou pohádají. Tak vzniká
+//! tmavě šedý text na šedém pozadí, který se pak hledá po jednom.
+//!
+//! Aby se nehledal, je tu [`contrast`] a test, který projde **každý motiv
+//! krát každou dvojici popředí a pozadí**. Nečitelná kombinace je od téhle
+//! chvíle spadlý test, ne hlášení od uživatele.
+//!
+//! Jádro o žádné grafické knihovně neví — [`Color`] je trojice bajtů.
 
 use crate::settings::Appearance;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -45,6 +51,34 @@ impl Color {
             b: u8::from_str_radix(&digits[4..6], 16).ok()?,
         })
     }
+
+    /// Relativní jas podle WCAG. Podklad pro [`contrast`].
+    pub fn luminance(self) -> f64 {
+        fn channel(value: u8) -> f64 {
+            let c = value as f64 / 255.0;
+            if c <= 0.039_28 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        }
+
+        0.2126 * channel(self.r) + 0.7152 * channel(self.g) + 0.0722 * channel(self.b)
+    }
+}
+
+/// Poměr kontrastu dvou barev, 1,0 až 21,0.
+///
+/// Pro běžný text se doporučuje aspoň 4,5; pro druhotný a zakázaný text stačí
+/// míň, ale nikdy tak málo, aby text splynul s pozadím.
+pub fn contrast(a: Color, b: Color) -> f64 {
+    let (first, second) = (a.luminance(), b.luminance());
+    let (lighter, darker) = if first > second {
+        (first, second)
+    } else {
+        (second, first)
+    };
+    (lighter + 0.05) / (darker + 0.05)
 }
 
 impl Serialize for Color {
@@ -67,7 +101,7 @@ impl<'de> Deserialize<'de> for Color {
 pub struct Palette {
     /// Pozadí za vším.
     pub window: Color,
-    /// Doky.
+    /// Doky a lišty.
     pub panel: Color,
     /// Rám diapozitivu.
     pub tile: Color,
@@ -75,9 +109,16 @@ pub struct Palette {
     pub well: Color,
     /// Proužek s názvem.
     pub caption: Color,
+    /// Hlavní text.
     pub text: Color,
+    /// Druhotný text: popisky, cesty, stavový řádek.
     pub dim: Color,
+    /// Text zakázaného prvku. „Zakázáno" neznamená „neviditelné".
+    pub disabled: Color,
     pub accent: Color,
+    /// Varování a chyby. Bez nich by je toolkit kreslil po svém.
+    pub warn: Color,
+    pub error: Color,
     /// Horní a levá hrana rámu. Jen náznak, ne vypouklé tlačítko.
     pub bevel_light: Color,
     pub bevel_dark: Color,
@@ -109,8 +150,11 @@ pub const THEMES: &[Theme] = &[
             well: Color::hex(0x1A_1A1C),
             caption: Color::hex(0x44_4448),
             text: Color::hex(0xDA_DADE),
-            dim: Color::hex(0x8A_8A90),
+            dim: Color::hex(0x9A_9AA2),
+            disabled: Color::hex(0x6E_6E76),
             accent: Color::hex(0x5B_9DD9),
+            warn: Color::hex(0xE0_B15A),
+            error: Color::hex(0xE0_705A),
             bevel_light: Color::hex(0x50_5055),
             bevel_dark: Color::hex(0x16_1618),
         },
@@ -127,7 +171,10 @@ pub const THEMES: &[Theme] = &[
             caption: Color::hex(0xE0_E0E4),
             text: Color::hex(0x1E_1E20),
             dim: Color::hex(0x66_666C),
+            disabled: Color::hex(0x85_858C),
             accent: Color::hex(0x1F_6FB2),
+            warn: Color::hex(0x8A_5A00),
+            error: Color::hex(0xB0_201A),
             bevel_light: Color::hex(0xFF_FFFF),
             bevel_dark: Color::hex(0xA8_A8AC),
         },
@@ -143,8 +190,11 @@ pub const THEMES: &[Theme] = &[
             well: Color::hex(0x2E_2E30),
             caption: Color::hex(0x62_6266),
             text: Color::hex(0xEC_ECEE),
-            dim: Color::hex(0xA6_A6AA),
+            dim: Color::hex(0xC0_C0C6),
+            disabled: Color::hex(0x85_858A),
             accent: Color::hex(0x6F_B0E8),
+            warn: Color::hex(0xE8_BC66),
+            error: Color::hex(0xE8_7A66),
             bevel_light: Color::hex(0x74_7478),
             bevel_dark: Color::hex(0x2A_2A2C),
         },
@@ -160,8 +210,11 @@ pub const THEMES: &[Theme] = &[
             well: Color::hex(0x1B_1712),
             caption: Color::hex(0x4C_4235),
             text: Color::hex(0xE4_D8C4),
-            dim: Color::hex(0x99_8C77),
+            dim: Color::hex(0xA9_9C85),
+            disabled: Color::hex(0x7B_705C),
             accent: Color::hex(0xC9_944F),
+            warn: Color::hex(0xD7_A24A),
+            error: Color::hex(0xD2_705A),
             bevel_light: Color::hex(0x58_4D3E),
             bevel_dark: Color::hex(0x18_1410),
         },
@@ -177,8 +230,11 @@ pub const THEMES: &[Theme] = &[
             well: Color::hex(0x10_171E),
             caption: Color::hex(0x33_4557),
             text: Color::hex(0xD6_E4EE),
-            dim: Color::hex(0x7E_94A6),
+            dim: Color::hex(0x8E_A6B8),
+            disabled: Color::hex(0x64_7A8C),
             accent: Color::hex(0x4F_C3D9),
+            warn: Color::hex(0xE0_B96F),
+            error: Color::hex(0xE0_8A7A),
             bevel_light: Color::hex(0x3C_5064),
             bevel_dark: Color::hex(0x0C_1218),
         },
@@ -211,6 +267,11 @@ pub fn resolve(appearance: &Appearance, system_dark: Option<bool>) -> &'static T
 mod tests {
     use super::*;
 
+    /// Nejmenší přijatelný kontrast pro danou roli textu.
+    const HLAVNI: f64 = 4.5;
+    const DRUHOTNY: f64 = 3.0;
+    const ZAKAZANY: f64 = 2.2;
+
     #[test]
     fn barva_tam_a_zpatky() {
         for text in ["#000000", "#FFFFFF", "#2A2A2C", "#4FC3D9"] {
@@ -220,6 +281,115 @@ mod tests {
         assert_eq!(Color::parse("2A2A2C"), Color::parse("#2A2A2C"));
         assert_eq!(Color::parse("#ZZZZZZ"), None);
         assert_eq!(Color::parse("#FFF"), None);
+    }
+
+    #[test]
+    fn kontrast_pocita_spravne() {
+        let black = Color::hex(0x00_0000);
+        let white = Color::hex(0xFF_FFFF);
+        assert!((contrast(black, white) - 21.0).abs() < 0.01);
+        assert!((contrast(white, white) - 1.0).abs() < 0.01);
+        // Na pořadí nezáleží.
+        assert_eq!(contrast(black, white), contrast(white, black));
+    }
+
+    /// Tohle je ten test, kvůli kterému to celé vzniklo: projít každý motiv
+    /// krát každou dvojici popředí a pozadí. Tmavě šedý text na šedém pozadí
+    /// je od teď spadlý test, ne hlášení od uživatele.
+    #[test]
+    fn kazdy_motiv_je_citelny() {
+        let mut hrichy = Vec::new();
+        for theme in THEMES {
+            let p = &theme.palette;
+            let dvojice: &[(&str, Color, Color, f64)] = &[
+                ("text na okně", p.text, p.window, HLAVNI),
+                ("text na panelu", p.text, p.panel, HLAVNI),
+                ("text na dlaždici", p.text, p.tile, HLAVNI),
+                ("text na proužku", p.text, p.caption, HLAVNI),
+                ("text na ploše pod fotkou", p.text, p.well, HLAVNI),
+                ("druhotný na okně", p.dim, p.window, DRUHOTNY),
+                ("druhotný na panelu", p.dim, p.panel, DRUHOTNY),
+                ("druhotný na proužku", p.dim, p.caption, DRUHOTNY),
+                ("zakázaný na panelu", p.disabled, p.panel, ZAKAZANY),
+                ("zakázaný na okně", p.disabled, p.window, ZAKAZANY),
+                ("zvýraznění na panelu", p.accent, p.panel, DRUHOTNY),
+                ("zvýraznění na dlaždici", p.accent, p.tile, DRUHOTNY),
+                ("varování na panelu", p.warn, p.panel, DRUHOTNY),
+                ("chyba na panelu", p.error, p.panel, DRUHOTNY),
+            ];
+
+            for (kde, popredi, pozadi, prah) in dvojice {
+                let pomer = contrast(*popredi, *pozadi);
+                if pomer < *prah {
+                    hrichy.push(format!(
+                        "{}: {kde} má kontrast {pomer:.2}, potřebuje {prah:.1} ({} na {})",
+                        theme.id,
+                        popredi.to_hex(),
+                        pozadi.to_hex()
+                    ));
+                }
+            }
+        }
+
+        assert!(
+            hrichy.is_empty(),
+            "nečitelné kombinace:\n  {}",
+            hrichy.join("\n  ")
+        );
+    }
+
+    /// Zakázaný text musí být slabší než běžný, ale ne neviditelný. Kdyby
+    /// splynul s hlavním, nepoznal by se zakázaný prvek od živého.
+    #[test]
+    fn zakazany_text_je_slabsi_nez_bezny_ale_je_videt() {
+        for theme in THEMES {
+            let p = &theme.palette;
+            let bezny = contrast(p.text, p.panel);
+            let zakazany = contrast(p.disabled, p.panel);
+            assert!(
+                zakazany < bezny,
+                "{}: zakázaný text není slabší ({zakazany:.2} proti {bezny:.2})",
+                theme.id
+            );
+            assert!(
+                zakazany >= ZAKAZANY,
+                "{}: zakázaný text je neviditelný ({zakazany:.2})",
+                theme.id
+            );
+        }
+    }
+
+    /// Náznak plastičnosti musí být vidět, ale nesmí z rámu udělat tlačítko.
+    #[test]
+    fn bevel_je_znat_ale_nekrici() {
+        for theme in THEMES {
+            let p = &theme.palette;
+            for (kde, hrana) in [("světlá", p.bevel_light), ("tmavá", p.bevel_dark)] {
+                let pomer = contrast(hrana, p.tile);
+                assert!(
+                    pomer > 1.1,
+                    "{}: {kde} hrana splývá s rámem ({pomer:.2})",
+                    theme.id
+                );
+                assert!(
+                    pomer < 6.0,
+                    "{}: {kde} hrana je příliš ostrá ({pomer:.2})",
+                    theme.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tmavost_motivu_odpovida_barvam() {
+        for theme in THEMES {
+            let svetle_pozadi = theme.palette.window.luminance() > 0.35;
+            assert_eq!(
+                theme.dark, !svetle_pozadi,
+                "{}: příznak dark neodpovídá barvě pozadí",
+                theme.id
+            );
+        }
     }
 
     #[test]

@@ -113,6 +113,23 @@ půjde je časem načíst ze souboru, aniž by se sáhlo na cokoliv, co kreslí.
 
 Jádro o egui neví: `Color` je trojice bajtů, převod si dělá vrstva UI.
 
+Paleta pokrývá **všechny** role, které grafická vrstva potřebuje — hlavní,
+druhotný a zakázaný text, zvýraznění, varování, chyby, hrany. Co paleta
+neurčí, dokreslí si toolkit po svém a jeho výchozí barvy se s cizí paletou
+pohádají; tak vzniká tmavě šedý text na šedém pozadí. `override_text_color`
+se schválně nepoužívá: přebilo by veškerý text jednou barvou a zrušilo rozdíl
+mezi stavy.
+
+**Čitelnost hlídá test, ne oko.** `kazdy_motiv_je_citelny` projde každý motiv
+krát čtrnáct dvojic popředí a pozadí a měří kontrast podle WCAG: 4,5 pro
+hlavní text, 3,0 pro druhotný a zvýraznění, 2,2 pro zakázaný. Nečitelná
+kombinace je spadlý test, ne hlášení od uživatele. K tomu `bevel_je_znat_ale_nekrici`
+drží náznak plastičnosti v rozmezí, kde je vidět, ale nedělá z rámu tlačítko.
+
+Zakázaný text nekreslí paleta, ale egui — zamíchá barvu textu směrem
+k `noninteractive.weak_bg_fill`. Test `zakazany_text_zustane_citelny_i_po_egui`
+proto volá skutečnou funkci toolkitu a měří, co z ní vyleze.
+
 Jedna past, která tu byla a je opravená: `ctx.set_visuals` zapisuje jen do
 slotu právě zvoleného motivu. Při startu systém ještě nestihl ohlásit režim,
 takže se zapsalo do tmavého — a jakmile dorazilo „světlo", egui přeplo na
@@ -151,7 +168,7 @@ jsou z prototypu, aby bylo co spustit.
 
 | | |
 |---|---|
-| testů | 79 (včetně 6 000 fuzz případů na EXIF) |
+| testů | 85 (včetně 6 000 fuzz případů na EXIF a 70 kontrolovaných dvojic barev) |
 | sken 7 558 fotek | 0,3 s; opakovaně 0,1 s |
 | otevření složky v UI | 7 558 fotek, žádná prázdná dlaždice do 160 ms |
 | `cargo clippy -D warnings` | čisté |
