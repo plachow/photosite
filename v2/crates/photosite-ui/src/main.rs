@@ -9,6 +9,7 @@
 //! nastavit, to se jednou přepisuje.
 
 mod grid;
+mod picker;
 mod theme;
 
 use anyhow::Result;
@@ -187,6 +188,11 @@ pub struct App {
     status: String,
     show_diagnostics: bool,
     show_settings: bool,
+    /// Otevřený dialog na výběr složky, nejvýš jeden.
+    folder_dialog: Option<picker::Picker>,
+    /// Složka, na kterou má strom vlevo odrolovat. Nastaví se při otevření
+    /// a strom si ji hned vezme.
+    pub scroll_tree_to: Option<PathBuf>,
 
     /// Jak se dá dekódovacím vláknům říct, že se má překreslit. Bez toho by
     /// UI muselo pravidelně kontrolovat, jestli něco nedorazilo, a to znamená
@@ -276,6 +282,8 @@ impl App {
             status: i18n::t("gallery-pick-folder"),
             show_diagnostics: false,
             show_settings: false,
+            folder_dialog: None,
+            scroll_tree_to: None,
             selftest: false,
             shot: None,
             frames: 0,
@@ -338,7 +346,45 @@ impl App {
         self.photos = photos;
         self.selected = None;
         self.settings.gallery.last_folder = Some(folder.to_string_lossy().into_owned());
+
+        // Strom vlevo jde za galerií, ať se do složky člověk dostal odkudkoliv.
+        // Bez tohohle svítí v mřížce sedm tisíc fotek a strom zatím ukazuje
+        // zabalené kořeny — zvýrazněná složka je někde uvnitř a není vidět.
+        let mut roots = std::mem::take(&mut self.roots);
+        reveal(&mut roots, &folder);
+        self.roots = roots;
+        self.scroll_tree_to = Some(folder.clone());
         self.folder = Some(folder);
+    }
+
+    /// Zeptá se na složku nativním dialogem.
+    fn ask_for_folder(&mut self, ctx: &egui::Context) {
+        if self.folder_dialog.is_some() {
+            return;
+        }
+
+        let start = picker::start_dir(
+            self.folder.as_deref(),
+            self.settings.gallery.last_folder.as_deref(),
+        );
+        self.folder_dialog = Some(picker::ask(ctx, t!("dialog-pick-folder"), start));
+    }
+
+    /// Vyzvedne, co dialog vrátil. Zrušený dialog se nikam nehlásí — zavřít
+    /// ho je odpověď jako každá jiná, ne chyba.
+    fn take_picked_folder(&mut self) {
+        let Some(dialog) = &self.folder_dialog else {
+            return;
+        };
+
+        match dialog.answer() {
+            picker::Answer::Waiting => {}
+            picker::Answer::Cancelled => self.folder_dialog = None,
+            picker::Answer::Picked(folder) => {
+                self.folder_dialog = None;
+                self.open(folder);
+            }
+        }
     }
 
     pub fn texture(&self, key: &Key) -> Option<&egui::TextureHandle> {
@@ -419,9 +465,7 @@ impl App {
             }
             "view.settings" => self.show_settings = !self.show_settings,
             "help.diagnostics" => self.show_diagnostics = !self.show_diagnostics,
-            // Otevírací dialog přijde s `rfd`; do té doby se složka vybírá
-            // ve stromu vlevo.
-            "file.open_folder" => self.status = t!("gallery-pick-folder"),
+            "file.open_folder" => self.ask_for_folder(ctx),
             other => tracing::warn!(prikaz = other, "příkaz bez obsluhy"),
         }
     }
@@ -504,6 +548,7 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         let delivered = self.collect(&ctx);
+        self.take_picked_folder();
         self.shortcuts(&ctx);
 
         // Systém mohl mezitím přepnout na tmavý režim.
@@ -613,12 +658,16 @@ impl App {
                 self.run("view.recursive", ctx);
             }
 
-            ui.separator();
-            // Tlačítka se berou z registru příkazů, ne z ručně psaného seznamu.
-            for command in commands::COMMANDS
-                .iter()
-                .filter(|command| command.group == Group::View && command.id != "view.recursive")
-            {
+            // Tlačítka i jejich pořadí se berou z registru příkazů. Který
+            // příkaz na lištu patří, si říká sám — kreslicí vrstva se nesmí
+            // ptát po jménech, jinak se u každého dalšího přepisuje.
+            let mut previous: Option<Group> = None;
+            for command in commands::COMMANDS.iter().filter(|command| command.toolbar) {
+                if previous != Some(command.group) {
+                    ui.separator();
+                }
+
+                previous = Some(command.group);
                 let title = command.title();
                 let hint = match self.bindings.shortcut(command.id) {
                     Some(shortcut) => format!("{title}  ({shortcut})"),
@@ -944,6 +993,27 @@ fn write_png(path: &Path, rgba: &[u8], width: u32, height: u32) -> Result<()> {
     Ok(())
 }
 
+/// Rozbalí strom až k dané složce a nechá ho tak.
+///
+/// Kořenů, které složku obsahují, může být víc — na Windows je domovská
+/// složka pod `C:\` a zároveň sama kořenem. Rozbalí se proto všechny, ne jen
+/// první nalezený.
+fn reveal(nodes: &mut [Node], folder: &Path) {
+    for node in nodes {
+        if !folder.starts_with(&node.path) {
+            continue;
+        }
+
+        node.load_children();
+        node.expanded = true;
+        if node.path != folder
+            && let Some(children) = node.children.as_mut()
+        {
+            reveal(children, folder);
+        }
+    }
+}
+
 /// Kořeny stromu. Jediné místo, kde na platformě záleží.
 fn roots() -> Vec<Node> {
     let mut found = Vec::new();
@@ -1010,5 +1080,91 @@ mod tests {
     fn nesmyslne_hodnoty_neprojdou() {
         assert!(effective_budget(-1, 0) >= 16);
         assert!(effective_budget(i64::MAX, 0) <= 65_536);
+    }
+
+    fn dite<'a>(node: &'a Node, name: &str) -> &'a Node {
+        node.children
+            .as_ref()
+            .expect("nenačtené děti")
+            .iter()
+            .find(|child| child.name == name)
+            .unwrap_or_else(|| panic!("ve stromu chybí {name}"))
+    }
+
+    #[test]
+    fn strom_se_rozbali_az_k_otevrene_slozce() {
+        let dir = tempfile::tempdir().unwrap();
+        let cesta = dir.path().join("2019").join("leto");
+        std::fs::create_dir_all(cesta.join("more")).unwrap();
+        std::fs::create_dir_all(dir.path().join("2019").join("zima")).unwrap();
+        std::fs::create_dir_all(dir.path().join("2020")).unwrap();
+
+        let mut roots = vec![Node::new(dir.path().to_owned())];
+        reveal(&mut roots, &cesta);
+
+        assert!(roots[0].expanded);
+        let rok = dite(&roots[0], "2019");
+        assert!(rok.expanded, "cesta k cíli musí být rozbalená celá");
+        assert!(dite(rok, "leto").expanded);
+
+        // Sourozenci se nerozbalují. Rozbalit všechno, co je po cestě, znamená
+        // přečíst půlku disku kvůli jedné složce.
+        assert!(!dite(rok, "zima").expanded);
+        assert!(!dite(&roots[0], "2020").expanded);
+
+        // A pod cíl se nesestupuje: co je v něm, se dozvíme, až o to někdo
+        // požádá kliknutím.
+        assert!(!dite(dite(rok, "leto"), "more").expanded);
+    }
+
+    #[test]
+    fn koren_mimo_cestu_zustane_zavreny() {
+        let dir = tempfile::tempdir().unwrap();
+        let jinde = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("fotky")).unwrap();
+
+        let mut roots = vec![
+            Node::new(jinde.path().to_owned()),
+            Node::new(dir.path().to_owned()),
+        ];
+        reveal(&mut roots, &dir.path().join("fotky"));
+
+        assert!(!roots[0].expanded, "cizí kořen se neotevírá");
+        assert!(roots[0].children.is_none(), "ani nečte z disku");
+        assert!(roots[1].expanded);
+    }
+
+    #[test]
+    fn slozka_ktera_uz_neni_strom_nerozhodi() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut roots = vec![Node::new(dir.path().to_owned())];
+        reveal(&mut roots, &dir.path().join("smazano").join("hloubeji"));
+
+        // Kořen se otevře, protože cesta pod něj opravdu míří; hlouběji už
+        // není co najít a tím to končí — ne pádem.
+        assert!(roots[0].expanded);
+        assert!(dite_neni(&roots[0], "smazano"));
+    }
+
+    /// Filtr záznamu bere cíle podle jména crate, a to u binárky není jméno
+    /// balíčku (`photosite_ui`), ale jméno cíle (`photosite`). Než se to
+    /// spravilo, nešel do logu jediný řádek z aplikace samotné — a poznat to
+    /// nešlo, protože varování a chyby propadly obecnou úrovní na konci.
+    #[test]
+    fn zaznam_z_aplikace_projde_filtrem() {
+        let jmeno = module_path!().split("::").next().expect("prázdná cesta");
+        for verbose in [false, true] {
+            let filter = diagnostics::default_filter(verbose);
+            assert!(
+                filter.contains(&format!("{jmeno}=")),
+                "výchozí filtr nezná {jmeno}: {filter}"
+            );
+        }
+    }
+
+    fn dite_neni(node: &Node, name: &str) -> bool {
+        node.children
+            .as_ref()
+            .is_some_and(|children| !children.iter().any(|child| child.name == name))
     }
 }

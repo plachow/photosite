@@ -35,7 +35,7 @@ theme-automatic = Follow the system
 
 toolbar-recursive = Recursive
 gallery-empty = No photographs here
-gallery-pick-folder = Pick a folder on the left
+gallery-pick-folder = Open a folder to begin
 preview-pick-tile = Click a tile to see it here
 
 # Plurál je tu schválně: čeština bude potřebovat tři tvary a formát, který
@@ -45,6 +45,12 @@ gallery-count =
         [one] { $count } photograph
        *[other] { $count } photographs
     } in { NUMBER($ms, maximumFractionDigits: 0) } ms
+
+## Dialogy
+
+# Titulek nativního dialogu. Windows i macOS ho ukazují v záhlaví, XDG portál
+# v pruhu nahoře — nikde se nezahodí, takže musí být přeložený.
+dialog-pick-folder = Choose a folder with photographs
 
 ## Nastavení
 #

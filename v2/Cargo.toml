@@ -26,6 +26,13 @@ crossbeam-channel = "0.5"
 fluent-bundle = "0.16"
 unic-langid = { version = "0.9", features = ["macros"] }
 walkdir = "2"
+# Nativní dialogy. Na Linuxu jde přes XDG portál, ne přes GTK: portál umí
+# Wayland i Flatpak a k překladu nepotřebuje céčkové hlavičky navíc.
+rfd = "0.17"
+# Jediné `block_on`. Dialog se vyrábí na hlavním vlákně a čeká se na něj
+# jinde; na to celý asynchronní běh nepotřebujeme. Stejnou verzi už má
+# `eframe`, takže tenhle řádek do stromu nic nepřidává.
+pollster = "1"
 clap = { version = "4", features = ["derive"] }
 jpeg-decoder = "0.3"
 fast_image_resize = "6"

@@ -39,7 +39,10 @@ nastavení, cache i log pod jeden kořen. Ve v1 byla cesta natvrdo a znamenalo t
 **Nic neselže mlčky.** Úloha, která spadne, si to nese ve stavu a jde do logu.
 Poškozené nastavení se odloží stranou a nezahodí. Pád nechá hlášení. Prototyp
 kvůli jednomu spolknutému výsledku nevykreslil jediný náhled a nikde o tom
-nebylo ani slovo.
+nebylo ani slovo. I samotný log si dokáže lhát: filtr vyjmenovává crate a
+u binárky je cíl záznamu jméno *cíle*, ne balíčku, takže `photosite_ui`
+v seznamu nezabíralo a z aplikace neprošel do souboru jediný řádek. Varování
+a chyby propadaly obecnou úrovní na konci, takže to nebylo nijak vidět.
 
 **Práce na pozadí není fronta.** [`Wishlist`](crates/photosite-core/src/jobs.rs)
 se každý snímek přepíše na to, co je právě vidět; co z něj vypadne, se nikdy
@@ -51,6 +54,17 @@ z novějšího buildu se odmítne otevřít místo toho, aby se poškodil.
 
 **Registr příkazů od začátku.** Zkratky, tlačítka i budoucí menu čtou z jednoho
 seznamu. Dodělat ho do hotového UI znamená projít každé tlačítko zvlášť.
+I to, jestli příkaz patří na lištu, si říká sám: kreslicí vrstva se ptala po
+jménech („všechno z *View* kromě `view.recursive`") a takové pravidlo se musí
+přepsat u každého dalšího příkazu.
+
+**Nativní dialog patří vedle, ne doprostřed.** Otevírací dialog se zakládá na
+hlavním vlákně — macOS jinak neumí panel přišpendlit k oknu — ale čeká se na
+něj [ve vlákně vedle](crates/photosite-ui/src/picker.rs). Zablokovat na tu
+dobu vykreslování je lákavé a znamená to, že po celou dobu, co člověk prochází
+disk, se nepřekreslí jediná dlaždice; Windows takové okno po pár sekundách
+prohlásí za nereagující. Otevřený je vždycky nejvýš jeden, jinak Ctrl+O
+zmáčknuté podruhé postaví druhý nad první.
 
 **Zápisy po dávkách.** Řádek na transakci vypadá nevinně; sken 7 558 fotek
 s ním trval 44 s, s jednou transakcí na tisíc řádků 0,3 s.
@@ -168,7 +182,7 @@ jsou z prototypu, aby bylo co spustit.
 
 | | |
 |---|---|
-| testů | 85 (včetně 6 000 fuzz případů na EXIF a 70 kontrolovaných dvojic barev) |
+| testů | 94 (včetně 6 000 fuzz případů na EXIF a 70 kontrolovaných dvojic barev) |
 | sken 7 558 fotek | 0,3 s; opakovaně 0,1 s |
 | otevření složky v UI | 7 558 fotek, žádná prázdná dlaždice do 160 ms |
 | `cargo clippy -D warnings` | čisté |
@@ -182,7 +196,7 @@ runnery.
 
 ## Co chybí a ví se o tom
 
-Otevírací dialog (`rfd`), sledování změn na disku (`notify`), jediná instance,
-přístupnost, podpis a notarizace pro macOS, automatické aktualizace. Z jazyků
-zatím jen angličtina — cs-CZ je první na řadě.
+Sledování změn na disku (`notify`), jediná instance, přístupnost, podpis
+a notarizace pro macOS, automatické aktualizace. Z jazyků zatím jen angličtina
+— cs-CZ je první na řadě.
 Nic z toho nevyžaduje přepisovat, co je hotové.

@@ -46,6 +46,11 @@ pub struct Command {
     pub title_key: &'static str,
     pub group: Group,
     pub default_shortcut: Option<&'static str>,
+    /// Patří na lištu? Ukončení aplikace ani zaškrtávátko „včetně podsložek"
+    /// tam nemají co dělat — a je to rozhodnutí registru, ne kreslicí vrstvy.
+    /// Ta se jinak ptá po jménech („všechno z View kromě `view.recursive`")
+    /// a při každém dalším příkazu se to musí přepsat.
+    pub toolbar: bool,
 }
 
 pub const COMMANDS: &[Command] = &[
@@ -54,54 +59,63 @@ pub const COMMANDS: &[Command] = &[
         title_key: "command-file-open-folder",
         group: Group::File,
         default_shortcut: Some("Ctrl+O"),
+        toolbar: true,
     },
     Command {
         id: "file.rescan",
         title_key: "command-file-rescan",
         group: Group::File,
         default_shortcut: Some("F5"),
+        toolbar: true,
     },
     Command {
         id: "file.quit",
         title_key: "command-file-quit",
         group: Group::File,
         default_shortcut: Some("Ctrl+Q"),
+        toolbar: false,
     },
     Command {
         id: "view.recursive",
         title_key: "command-view-recursive",
         group: Group::View,
         default_shortcut: Some("Ctrl+R"),
+        toolbar: false,
     },
     Command {
         id: "view.bigger_tiles",
         title_key: "command-view-bigger-tiles",
         group: Group::View,
         default_shortcut: Some("Ctrl+Plus"),
+        toolbar: true,
     },
     Command {
         id: "view.smaller_tiles",
         title_key: "command-view-smaller-tiles",
         group: Group::View,
         default_shortcut: Some("Ctrl+Minus"),
+        toolbar: true,
     },
     Command {
         id: "view.next_theme",
         title_key: "command-view-next-theme",
         group: Group::View,
         default_shortcut: Some("Ctrl+T"),
+        toolbar: true,
     },
     Command {
         id: "view.settings",
         title_key: "command-view-settings",
         group: Group::View,
         default_shortcut: Some("Ctrl+Comma"),
+        toolbar: true,
     },
     Command {
         id: "help.diagnostics",
         title_key: "command-help-diagnostics",
         group: Group::Help,
         default_shortcut: Some("Ctrl+Shift+D"),
+        toolbar: true,
     },
 ];
 

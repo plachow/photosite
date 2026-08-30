@@ -21,6 +21,30 @@ pub struct Logging {
     pub file: PathBuf,
 }
 
+/// Cíle, které patří nám. Filtr je bere podle jména *crate*, a to u binárky
+/// není jméno balíčku, ale jméno cíle: aplikace v `photosite-ui` hlásí pod
+/// `photosite`. Dokud tady nestálo, nešel do logu jediný řádek z aplikace
+/// samotné — jen z jádra — a nebylo to nijak poznat, protože varování
+/// a chyby propadly obecnou úrovní na konci.
+const NASE: &[&str] = &[
+    "photosite",
+    "photosite_ui",
+    "photosite_cli",
+    "photosite_core",
+    "photosite_image",
+];
+
+/// Výchozí úrovně, když `RUST_LOG` mlčí: naše crate podrobně, cizí až od
+/// varování výš, aby log nezaplavila grafika.
+pub fn default_filter(verbose: bool) -> String {
+    let level = if verbose { "debug" } else { "info" };
+    NASE.iter()
+        .map(|krate| format!("{krate}={level}"))
+        .chain(std::iter::once("warn".to_owned()))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 /// Zapne záznam do souboru i na standardní chybový výstup.
 ///
 /// Úroveň se dá přebít proměnnou `RUST_LOG`; bez ní je to `info` pro nás a
@@ -33,13 +57,8 @@ pub fn start(paths: &Paths, verbose: bool) -> Logging {
     let appender = tracing_appender::rolling::daily(&paths.logs, "photosite.log");
     let (writer, guard) = tracing_appender::non_blocking(appender);
 
-    let default = if verbose {
-        "photosite_core=debug,photosite_image=debug,photosite_ui=debug,photosite_cli=debug,warn"
-    } else {
-        "photosite_core=info,photosite_image=info,photosite_ui=info,photosite_cli=info,warn"
-    };
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default));
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_filter(verbose)));
 
     tracing_subscriber::registry()
         .with(filter)

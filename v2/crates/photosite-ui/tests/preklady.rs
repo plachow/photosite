@@ -20,6 +20,8 @@ const WIDGETY: &[&str] = &[
     "Window::new(",
     "on_hover_text(",
     "heading(",
+    // Titulek nativního dialogu. Do egui nejde, na obrazovku ano.
+    "set_title(",
 ];
 
 /// Volání, která berou klíč do překladu.

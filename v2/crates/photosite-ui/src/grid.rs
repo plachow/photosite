@@ -204,9 +204,20 @@ pub fn tree(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
         .show(ui, |ui| {
             let mut pick = None;
             let current = app.folder.clone();
+            // Vybrat se musí dřív, než se kreslí: kdyby se přání odrolovat
+            // mazalo až potom, smazalo by se rovnou to, které vzniklo teď
+            // kliknutím v tomhle stromu.
+            let scroll_to = app.scroll_tree_to.take();
             let mut roots = std::mem::take(&mut app.roots);
             for root in &mut roots {
-                node(ui, root, palette, current.as_deref(), &mut pick);
+                node(
+                    ui,
+                    root,
+                    palette,
+                    current.as_deref(),
+                    scroll_to.as_deref(),
+                    &mut pick,
+                );
             }
 
             app.roots = roots;
@@ -221,6 +232,7 @@ fn node(
     node: &mut Node,
     palette: &Palette,
     current: Option<&Path>,
+    scroll_to: Option<&Path>,
     pick: &mut Option<PathBuf>,
 ) {
     let is_current = current == Some(node.path.as_path());
@@ -266,7 +278,14 @@ fn node(
         } else {
             palette.text
         }));
-        if ui.add(egui::Button::new(label).frame(false)).clicked() {
+        let response = ui.add(egui::Button::new(label).frame(false));
+        // Rozbalený strom sám o sobě nestačí: otevřená složka může být hluboko
+        // pod okrajem panelu a pak je to k ničemu.
+        if scroll_to == Some(node.path.as_path()) {
+            response.scroll_to_me(Some(egui::Align::Center));
+        }
+
+        if response.clicked() {
             node.load_children();
             node.expanded = true;
             *pick = Some(node.path.clone());
@@ -278,7 +297,7 @@ fn node(
     {
         ui.indent(node.path.as_path(), |ui| {
             for child in children {
-                self::node(ui, child, palette, current, pick);
+                self::node(ui, child, palette, current, scroll_to, pick);
             }
         });
     }
