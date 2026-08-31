@@ -1500,6 +1500,7 @@ impl App {
                         &path,
                         &entry.photo.organisation,
                         entry.photo.place,
+                        regions_for(&entry),
                     ) {
                         Ok(_) => match photosite_core::FileIdentity::read(&path) {
                             Ok(identity) => catalog.written(entry.photo.id, &identity)?,
@@ -1942,6 +1943,28 @@ fn effective_budget(configured: i64, needed: usize) -> usize {
 /// word, so it needs no translation — and a single angle quote rather than
 /// the greater-than sign, which reads as an operator.
 const SEPARATOR_MARK: &str = "\u{203a}";
+
+/// The face frames of one pending write, in the form the file wants.
+///
+/// Nothing at all comes back in two cases, and both are deliberate: when the
+/// photograph has never been face-scanned, because another program's frames
+/// are not ours to clear; and when we do not know the photograph's pixel
+/// size, because an MWG region is a fraction of a frame and a frame of
+/// unknown size is not something to guess at.
+///
+/// The size is the **shown** one. A camera held on its side writes the frame
+/// as the sensor read it and records the turn separately; the faces were
+/// found on the picture the right way up, so that is the frame they are
+/// fractions of.
+fn regions_for(entry: &photosite_core::catalog::Pending) -> Option<photosite_meta::xmp::Regions> {
+    let faces = entry.regions.clone()?;
+    let (width, height) = entry.photo.shown()?;
+    Some(photosite_meta::xmp::Regions {
+        width,
+        height,
+        faces,
+    })
+}
 
 /// Seconds since the epoch.
 ///

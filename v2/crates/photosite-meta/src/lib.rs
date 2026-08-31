@@ -218,10 +218,23 @@ fn utc_of(meta: &photosite_image::exif::Exif) -> Option<i64> {
 /// Not a change to it but the whole of it: the caller holds one pending write
 /// per photograph, so a retry writes the truth as it stands rather than a
 /// change that may since have been undone.
-pub fn write(path: &Path, organisation: &Organisation, place: Option<Place>) -> Result<Target> {
+///
+/// `regions` is the one argument that means something by being absent.
+/// `None` says the photograph has never been face-scanned here, and then
+/// whatever face frames another program left in it are none of our business.
+/// `Some` with an empty list says we looked and nobody on it is named, which
+/// is a thing to write: it is how a face taken off somebody comes back out
+/// of the file.
+pub fn write(
+    path: &Path,
+    organisation: &Organisation,
+    place: Option<Place>,
+    regions: Option<xmp::Regions>,
+) -> Result<Target> {
     let target = target_for(path);
     let mut wanted = Xmp::from(organisation);
     wanted.place = place;
+    wanted.regions = regions;
 
     match &target {
         Target::Sidecar(sidecar) => {
@@ -459,7 +472,7 @@ mod tests {
         std::fs::write(&path, jpeg_bytes()).unwrap();
 
         assert_eq!(
-            write(&path, &organisation(), None).unwrap(),
+            write(&path, &organisation(), None, None).unwrap(),
             Target::Embedded
         );
         let read = read(&path);
@@ -467,6 +480,77 @@ mod tests {
         assert_eq!(read.label.as_deref(), Some("Green"));
         assert_eq!(read.title.as_deref(), Some("Sunrise"));
         assert_eq!(read.keywords, ["Hawaii"]);
+    }
+
+    /// The face frames have to reach the file itself, not merely a packet
+    /// in a test — and the photograph has to come out of it byte for byte
+    /// the same, which is the promise this whole crate is built on.
+    #[test]
+    fn face_frames_go_into_the_photograph_without_touching_the_photograph() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.jpg");
+        let before = jpeg_bytes();
+        std::fs::write(&path, &before).unwrap();
+
+        let regions = xmp::Regions {
+            width: 6000,
+            height: 4000,
+            faces: vec![photosite_core::people::Region {
+                name: "Jana".to_owned(),
+                x: 0.2,
+                y: 0.3,
+                width: 0.1,
+                height: 0.1,
+            }],
+        };
+        write(&path, &organisation(), None, Some(regions)).unwrap();
+
+        let after = std::fs::read(&path).unwrap();
+        let packet = jpeg::xmp(&after).expect("no XMP packet in the file");
+        assert!(
+            packet.contains("<mwg-rs:Name>Jana</mwg-rs:Name>"),
+            "{packet}"
+        );
+        assert_eq!(
+            jpeg::compressed_image(&before),
+            jpeg::compressed_image(&after),
+            "the photograph itself changed"
+        );
+    }
+
+    /// A RAW cannot be written into, so its faces go beside it — which is
+    /// also the only place a RAW's stars have ever lived.
+    #[test]
+    fn a_raw_keeps_its_face_frames_in_the_sidecar() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.nef");
+        std::fs::write(&path, b"not really a raw").unwrap();
+
+        write(
+            &path,
+            &organisation(),
+            None,
+            Some(xmp::Regions {
+                width: 100,
+                height: 100,
+                faces: vec![photosite_core::people::Region {
+                    name: "Jana".to_owned(),
+                    x: 0.1,
+                    y: 0.1,
+                    width: 0.2,
+                    height: 0.2,
+                }],
+            }),
+        )
+        .unwrap();
+
+        let sidecar = std::fs::read_to_string(dir.path().join("a.xmp")).unwrap();
+        assert!(sidecar.contains("Jana"), "{sidecar}");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"not really a raw",
+            "the file itself was touched"
+        );
     }
 
     /// A corrected position has to survive the trip into the file and back
@@ -484,7 +568,7 @@ mod tests {
             Place::new(50.0755, 14.4378).unwrap(),
             Place::new(-33.8688, -70.6693).unwrap(),
         ] {
-            write(&path, &organisation(), Some(wanted)).unwrap();
+            write(&path, &organisation(), Some(wanted), None).unwrap();
 
             let raw = std::fs::read(&path).unwrap();
             let gps = photosite_image::exif::read(&raw)
@@ -526,6 +610,7 @@ mod tests {
             &path,
             &organisation(),
             Some(Place::new(50.0755, 14.4378).unwrap()),
+            None,
         )
         .unwrap();
 
@@ -554,8 +639,8 @@ mod tests {
         std::fs::write(&path, jpeg_bytes()).unwrap();
 
         let wanted = Place::new(50.0755, 14.4378).unwrap();
-        write(&path, &organisation(), Some(wanted)).unwrap();
-        write(&path, &organisation(), None).unwrap();
+        write(&path, &organisation(), Some(wanted), None).unwrap();
+        write(&path, &organisation(), None, None).unwrap();
 
         let raw = std::fs::read(&path).unwrap();
         let gps = photosite_image::exif::read(&raw)
@@ -571,7 +656,7 @@ mod tests {
         let before = jpeg_bytes();
         std::fs::write(&path, &before).unwrap();
 
-        write(&path, &organisation(), None).unwrap();
+        write(&path, &organisation(), None, None).unwrap();
         let after = std::fs::read(&path).unwrap();
         assert_eq!(
             jpeg::compressed_image(&before),
@@ -585,7 +670,7 @@ mod tests {
         let path = dir.path().join("a.nef");
         std::fs::write(&path, b"pretend this is a raw file").unwrap();
 
-        let target = write(&path, &organisation(), None).unwrap();
+        let target = write(&path, &organisation(), None, None).unwrap();
         assert_eq!(target, Target::Sidecar(dir.path().join("a.xmp")));
         assert_eq!(
             std::fs::read(&path).unwrap(),
@@ -601,9 +686,9 @@ mod tests {
         let path = dir.path().join("a.jpg");
         std::fs::write(&path, jpeg_bytes()).unwrap();
 
-        write(&path, &organisation(), None).unwrap();
+        write(&path, &organisation(), None, None).unwrap();
         let once = std::fs::read(&path).unwrap();
-        write(&path, &organisation(), None).unwrap();
+        write(&path, &organisation(), None, None).unwrap();
         let twice = std::fs::read(&path).unwrap();
         assert_eq!(once, twice, "the second write changed the file");
     }
@@ -614,8 +699,8 @@ mod tests {
         let path = dir.path().join("a.jpg");
         std::fs::write(&path, jpeg_bytes()).unwrap();
 
-        write(&path, &organisation(), None).unwrap();
-        write(&path, &Organisation::default(), None).unwrap();
+        write(&path, &organisation(), None, None).unwrap();
+        write(&path, &Organisation::default(), None, None).unwrap();
         assert!(read(&path).is_empty(), "{:?}", read(&path));
     }
 
@@ -634,7 +719,7 @@ mod tests {
         let path = dir.path().join("a.jpg");
         std::fs::write(&path, b"this is not a jpeg at all").unwrap();
 
-        assert!(write(&path, &organisation(), None).is_err());
+        assert!(write(&path, &organisation(), None, None).is_err());
         assert_eq!(
             std::fs::read(&path).unwrap(),
             b"this is not a jpeg at all",
@@ -647,7 +732,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("a.jpg");
         std::fs::write(&path, b"not a jpeg").unwrap();
-        let _ = write(&path, &organisation(), None);
+        let _ = write(&path, &organisation(), None, None);
 
         let strays: Vec<_> = std::fs::read_dir(dir.path())
             .unwrap()

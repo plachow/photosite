@@ -27,6 +27,10 @@ const NS_DC: &[u8] = b"http://purl.org/dc/elements/1.1/";
 const NS_RDF: &[u8] = b"http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 /// Where a position lives in XMP, whatever the file it sits in.
 const NS_EXIF: &[u8] = b"http://ns.adobe.com/exif/1.0/";
+/// The Metadata Working Group's face regions — what Lightroom, digiKam and
+/// Windows all read a face frame from. Named `mwg-rs:` by everybody, and the
+/// URI is what we match on, as everywhere else here.
+const NS_MWG_RS: &[u8] = b"http://www.metadataworkinggroup.com/schemas/regions/";
 
 /// What we read out of a packet, and what we put back into one.
 // Not `Eq`: a position is two floating-point numbers.
@@ -41,11 +45,32 @@ pub struct Xmp {
     /// **removed** from a file by us: what we do not know we leave alone,
     /// and a photograph that arrived with coordinates keeps them.
     pub place: Option<Place>,
+    /// The named faces, when we have actually looked.
+    ///
+    /// `None` and an empty list mean two different things, and the
+    /// difference is the whole of the rule. `None` is "this photograph has
+    /// never been face-scanned", and then whatever frames Lightroom or
+    /// Picasa left in it are none of our business. `Some(empty)` is "we
+    /// looked and nobody here is named", which is a thing to write — it is
+    /// how a face taken off somebody comes back out of the file.
+    pub regions: Option<Regions>,
     /// The two halves as they were read, held between reading the latitude
     /// and the longitude. They are separate properties and either can come
     /// first.
     latitude: Option<String>,
     longitude: Option<String>,
+}
+
+/// The face frames of one photograph, with the frame they were measured in.
+///
+/// The pixel dimensions are not decoration: an MWG area is a fraction of the
+/// image, and a reader needs to know which image. Without them Lightroom
+/// ignores the whole block.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Regions {
+    pub width: u32,
+    pub height: u32,
+    pub faces: Vec<photosite_core::people::Region>,
 }
 
 impl Xmp {
@@ -90,20 +115,28 @@ impl From<&Organisation> for Xmp {
             description: organisation.description.clone(),
             keywords: organisation.keywords.clone(),
             // A position is not part of what somebody said about a
-            // photograph; it is set beside it, by whoever knows one.
+            // photograph; it is set beside it, by whoever knows one. The
+            // same goes for who is on it.
             place: None,
+            regions: None,
             latitude: None,
             longitude: None,
         }
     }
 }
 
-/// Is this one of the five properties we own?
-fn ours(namespace: Option<&[u8]>, local: &[u8]) -> bool {
+/// Is this one of the properties we own?
+///
+/// The face regions are ours **only when we have some to write**. A
+/// photograph nobody has face-scanned here may well carry frames another
+/// program put there, and taking those out because we happen to be writing a
+/// rating would be destroying somebody else's work on the way past.
+fn ours(namespace: Option<&[u8]>, local: &[u8], regions: bool) -> bool {
     match namespace {
         Some(NS_XMP) => matches!(local, b"Rating" | b"Label"),
         Some(NS_DC) => matches!(local, b"title" | b"description" | b"subject"),
         Some(NS_EXIF) => matches!(local, b"GPSLatitude" | b"GPSLongitude"),
+        Some(NS_MWG_RS) => regions && local == b"Regions",
         _ => false,
     }
 }
@@ -367,7 +400,94 @@ fn our_block(xmp: &Xmp) -> String {
     }
 
     out.push_str("  </rdf:Description>\n");
+    if let Some(regions) = &xmp.regions {
+        out.push_str(&region_block(regions));
+    }
+
     out
+}
+
+/// The face frames, as the Metadata Working Group specifies them.
+///
+/// A block of its own rather than more properties in the one above, because
+/// it is a nested structure carrying two further namespaces and mixing it in
+/// would make both harder to read. A second `rdf:Description` is legal and
+/// is what exiftool writes too.
+///
+/// Three details decide whether anybody else can read the result:
+///
+/// * **An area is centred**, not measured from its corner. Everything else
+///   in this application measures a rectangle from its top left, so the
+///   conversion happens here, once, at the boundary — a reader that assumes
+///   otherwise draws every frame offset by half its own size.
+/// * **The applied-to dimensions must be there.** A fraction of an image
+///   means nothing without saying which image, and Lightroom ignores a
+///   region list that does not carry them.
+/// * **The numbers are written with a full stop** and never by the locale's
+///   rules. The same trap as a coordinate in a URL, and the same answer.
+fn region_block(regions: &Regions) -> String {
+    let mut out = String::from(
+        "  <rdf:Description rdf:about=\"\"
+               xmlns:mwg-rs=\"http://www.metadataworkinggroup.com/schemas/regions/\"
+               xmlns:stArea=\"http://ns.adobe.com/xmp/sType/Area#\"
+               xmlns:stDim=\"http://ns.adobe.com/xap/1.0/sType/Dimensions#\">
+            <mwg-rs:Regions rdf:parseType=\"Resource\">
+",
+    );
+    out.push_str(&format!(
+        "    <mwg-rs:AppliedToDimensions rdf:parseType=\"Resource\">
+              <stDim:w>{}</stDim:w>
+              <stDim:h>{}</stDim:h>
+              <stDim:unit>pixel</stDim:unit>
+             </mwg-rs:AppliedToDimensions>
+",
+        regions.width, regions.height
+    ));
+
+    out.push_str(
+        "    <mwg-rs:RegionList>
+     <rdf:Bag>
+",
+    );
+    for face in &regions.faces {
+        let centre = |start: f64, size: f64| number(start + size / 2.0);
+        out.push_str(&format!(
+            "      <rdf:li rdf:parseType=\"Resource\">
+                    <mwg-rs:Name>{}</mwg-rs:Name>
+                    <mwg-rs:Type>Face</mwg-rs:Type>
+                    <mwg-rs:Area rdf:parseType=\"Resource\">
+                     <stArea:x>{}</stArea:x>
+                     <stArea:y>{}</stArea:y>
+                     <stArea:w>{}</stArea:w>
+                     <stArea:h>{}</stArea:h>
+                     <stArea:unit>normalized</stArea:unit>
+                    </mwg-rs:Area>
+                   </rdf:li>
+",
+            escape(&face.name),
+            centre(face.x, face.width),
+            centre(face.y, face.height),
+            number(face.width),
+            number(face.height),
+        ));
+    }
+
+    out.push_str(
+        "     </rdf:Bag>
+    </mwg-rs:RegionList>
+   </mwg-rs:Regions>
+",
+    );
+    out.push_str(
+        "  </rdf:Description>
+",
+    );
+    out
+}
+
+/// A fraction, clamped into the frame and written with a full stop.
+fn number(value: f64) -> String {
+    format!("{:.6}", value.clamp(0.0, 1.0))
 }
 
 fn escape(text: &str) -> String {
@@ -410,6 +530,8 @@ pub fn merge(existing: Option<&str>, xmp: &Xmp) -> String {
 }
 
 fn transform(existing: &str, xmp: &Xmp) -> anyhow::Result<String> {
+    // Whether the face frames already in the packet are ours to replace.
+    let replacing_regions = xmp.regions.is_some();
     let mut reader = NsReader::from_str(existing);
     let mut writer = Writer::new(Cursor::new(Vec::new()));
 
@@ -471,12 +593,12 @@ fn transform(existing: &str, xmp: &Xmp) -> anyhow::Result<String> {
         match event {
             Event::Start(element) => {
                 let local = element.local_name().as_ref().to_vec();
-                if ours(namespace, &local) {
+                if ours(namespace, &local, replacing_regions) {
                     skipping = Some(0);
                     continue;
                 }
 
-                let kept = without_our_attributes(&reader, &element);
+                let kept = without_our_attributes(&reader, &element, replacing_regions);
                 if held.is_none() && namespace == Some(NS_RDF) && local == b"Description" {
                     held = Some(Held {
                         start: kept,
@@ -499,11 +621,11 @@ fn transform(existing: &str, xmp: &Xmp) -> anyhow::Result<String> {
             }
             Event::Empty(element) => {
                 let local = element.local_name().as_ref().to_vec();
-                if ours(namespace, &local) {
+                if ours(namespace, &local, replacing_regions) {
                     continue;
                 }
 
-                let kept = without_our_attributes(&reader, &element);
+                let kept = without_our_attributes(&reader, &element, replacing_regions);
                 if held.is_none() && namespace == Some(NS_RDF) && local == b"Description" {
                     // An empty Description with nothing of ours left on it
                     // says nothing at all.
@@ -626,12 +748,13 @@ fn name_of_start(element: &BytesStart<'_>) -> String {
 fn without_our_attributes(
     reader: &NsReader<&[u8]>,
     element: &BytesStart<'_>,
+    regions: bool,
 ) -> BytesStart<'static> {
     let name = String::from_utf8_lossy(element.name().as_ref()).into_owned();
     let mut kept = BytesStart::new(name);
     for attribute in element.attributes().flatten() {
         let (resolved, local) = reader.resolve_attribute(attribute.key);
-        if ours(namespace_of(&resolved), local.as_ref()) {
+        if ours(namespace_of(&resolved), local.as_ref(), regions) {
             continue;
         }
 
@@ -658,9 +781,168 @@ mod tests {
             description: Some("The first morning".to_owned()),
             keywords: vec!["Hawaii".to_owned(), "holiday".to_owned()],
             place: None,
+            regions: None,
             latitude: None,
             longitude: None,
         }
+    }
+
+    fn face(name: &str, x: f64, y: f64, size: f64) -> photosite_core::people::Region {
+        photosite_core::people::Region {
+            name: name.to_owned(),
+            x,
+            y,
+            width: size,
+            height: size,
+        }
+    }
+
+    /// An MWG area is measured from its **centre**. Everything else here
+    /// measures from a corner, so this conversion is the one thing in the
+    /// block that can be silently wrong — and it would show as every face
+    /// frame in Lightroom sitting half a face up and to the left.
+    #[test]
+    fn a_face_frame_is_written_from_its_centre() {
+        let xmp = Xmp {
+            regions: Some(Regions {
+                width: 6000,
+                height: 4000,
+                faces: vec![face("Jana", 0.2, 0.3, 0.1)],
+            }),
+            ..Default::default()
+        };
+
+        let packet = merge(None, &xmp);
+        assert!(packet.contains("<stArea:x>0.250000</stArea:x>"), "{packet}");
+        assert!(packet.contains("<stArea:y>0.350000</stArea:y>"), "{packet}");
+        assert!(packet.contains("<stArea:w>0.100000</stArea:w>"), "{packet}");
+        assert!(
+            packet.contains("<mwg-rs:Name>Jana</mwg-rs:Name>"),
+            "{packet}"
+        );
+        assert!(
+            packet.contains("<mwg-rs:Type>Face</mwg-rs:Type>"),
+            "{packet}"
+        );
+    }
+
+    /// A fraction of an image means nothing without saying which image.
+    #[test]
+    fn the_frame_the_faces_were_measured_in_goes_with_them() {
+        let xmp = Xmp {
+            regions: Some(Regions {
+                width: 6000,
+                height: 4000,
+                faces: vec![face("Jana", 0.2, 0.3, 0.1)],
+            }),
+            ..Default::default()
+        };
+
+        let packet = merge(None, &xmp);
+        assert!(packet.contains("<stDim:w>6000</stDim:w>"), "{packet}");
+        assert!(packet.contains("<stDim:h>4000</stDim:h>"), "{packet}");
+        assert!(
+            packet.contains("<stDim:unit>pixel</stDim:unit>"),
+            "{packet}"
+        );
+    }
+
+    /// The rule that keeps us from destroying somebody else's work on the
+    /// way past. A photograph nobody has swept here keeps the face frames
+    /// Lightroom or Picasa put in it, even while we write a rating.
+    #[test]
+    fn face_frames_we_know_nothing_about_are_left_alone() {
+        let existing = concat!(
+            "<?xpacket begin=\"\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>",
+            "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">",
+            "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">",
+            "<rdf:Description rdf:about=\"\"",
+            " xmlns:mwg-rs=\"http://www.metadataworkinggroup.com/schemas/regions/\">",
+            "<mwg-rs:Regions rdf:parseType=\"Resource\">",
+            "<mwg-rs:RegionList><rdf:Bag><rdf:li rdf:parseType=\"Resource\">",
+            "<mwg-rs:Name>Somebody Else</mwg-rs:Name>",
+            "</rdf:li></rdf:Bag></mwg-rs:RegionList>",
+            "</mwg-rs:Regions></rdf:Description>",
+            "</rdf:RDF></x:xmpmeta><?xpacket end=\"w\"?>"
+        );
+
+        let rating = Xmp {
+            rating: Some(4),
+            ..Default::default()
+        };
+        assert_eq!(rating.regions, None, "the fixture must not claim to know");
+        let packet = merge(Some(existing), &rating);
+        assert!(
+            packet.contains("Somebody Else"),
+            "another program's face frames were thrown away: {packet}"
+        );
+        assert!(packet.contains("<xmp:Rating>4</xmp:Rating>"), "{packet}");
+    }
+
+    /// And the other half of the same rule: once we have looked, ours are
+    /// the answer — including the answer "nobody here is named", which is
+    /// how a face taken off somebody comes back out of the file.
+    #[test]
+    fn once_we_have_looked_our_face_frames_replace_what_was_there() {
+        let named = Xmp {
+            regions: Some(Regions {
+                width: 100,
+                height: 100,
+                faces: vec![face("Jana", 0.1, 0.1, 0.2)],
+            }),
+            ..Default::default()
+        };
+        let packet = merge(None, &named);
+        assert!(packet.contains("Jana"));
+
+        let cleared = Xmp {
+            regions: Some(Regions {
+                width: 100,
+                height: 100,
+                faces: Vec::new(),
+            }),
+            ..Default::default()
+        };
+        let packet = merge(Some(&packet), &cleared);
+        assert!(!packet.contains("Jana"), "the name stayed behind: {packet}");
+    }
+
+    /// The packet must not grow a block every time it is written, which is
+    /// the same trap the whitespace handling was written for.
+    #[test]
+    fn writing_the_faces_twice_settles_rather_than_growing() {
+        let xmp = Xmp {
+            regions: Some(Regions {
+                width: 100,
+                height: 100,
+                faces: vec![face("Jana", 0.1, 0.1, 0.2)],
+            }),
+            ..Default::default()
+        };
+
+        let once = merge(None, &xmp);
+        let twice = merge(Some(&once), &xmp);
+        let thrice = merge(Some(&twice), &xmp);
+        assert_eq!(twice, thrice, "the packet is still changing");
+        assert_eq!(twice.matches("mwg-rs:Regions").count(), 2, "{twice}");
+    }
+
+    /// A name with an ampersand in it is a name, not a broken packet.
+    #[test]
+    fn a_name_with_markup_in_it_is_escaped() {
+        let xmp = Xmp {
+            regions: Some(Regions {
+                width: 10,
+                height: 10,
+                faces: vec![face("Bell & <Ross>", 0.1, 0.1, 0.2)],
+            }),
+            ..Default::default()
+        };
+
+        let packet = merge(None, &xmp);
+        assert!(packet.contains("Bell &amp; &lt;Ross&gt;"), "{packet}");
+        // And it still parses, which is the point of escaping it.
+        assert_eq!(read(&packet).rating, None);
     }
 
     #[test]

@@ -139,6 +139,74 @@ const MIGRATIONS: &[Migration] = &[
         ALTER TABLE photos ADD COLUMN place_reason  INTEGER NOT NULL DEFAULT 0;
     ",
     },
+    Migration {
+        name: "0006-faces-and-people",
+        // Who is in the photograph.
+        //
+        // A face hangs off the photograph's **number**, not off its path.
+        // v1 keyed its face rows by path, so renaming a file orphaned every
+        // face on it and the next sweep found them all again as strangers.
+        // Here the row travels with the photograph exactly as its stars do,
+        // and a deleted photograph takes its faces with it because the
+        // foreign key says so rather than because somebody remembered.
+        //
+        // The embedding is a blob and not a column per dimension: it is
+        // never queried on, only fetched whole and compared in memory. A
+        // hundred and twenty-eight REAL columns would be a table nobody
+        // could read and a schema change on the day the model changes.
+        sql: "
+        CREATE TABLE people (
+            id   INTEGER PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE COLLATE NOCASE
+        );
+
+        CREATE TABLE faces (
+            id         INTEGER PRIMARY KEY,
+            photo_id   INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
+            -- Fractions of the frame, so the rectangle means the same on a
+            -- tile, in the preview and in the file.
+            x          REAL NOT NULL,
+            y          REAL NOT NULL,
+            w          REAL NOT NULL,
+            h          REAL NOT NULL,
+            confidence REAL NOT NULL,
+            embedding  BLOB NOT NULL,
+            person_id           INTEGER REFERENCES people(id) ON DELETE SET NULL,
+            -- Probably this person. Nothing has been written anywhere on the
+            -- strength of it, and nothing will be until somebody answers.
+            suggested_person_id INTEGER REFERENCES people(id) ON DELETE SET NULL,
+            -- NULL is not a low score: it is a face the expression models
+            -- have never seen, and it is what the scoring pass looks for.
+            smile      REAL,
+            eyes_open  REAL,
+            -- Waved away as a stranger. The row stays so the photograph
+            -- still counts as scanned.
+            ignored    INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX faces_photo     ON faces(photo_id);
+        CREATE INDEX faces_person    ON faces(person_id);
+        CREATE INDEX faces_suggested ON faces(suggested_person_id);
+
+        -- Somebody on the photograph with no face to frame: turned away,
+        -- behind the camera, in the dark. A badge and a filter mean the same
+        -- thing whichever of the two put the name there.
+        CREATE TABLE photo_people (
+            photo_id  INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
+            person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+            PRIMARY KEY (photo_id, person_id)
+        );
+
+        -- What the file looked like when it was last swept, so an
+        -- interrupted sweep resumes and an unchanged file is skipped.
+        CREATE TABLE face_scans (
+            photo_id    INTEGER PRIMARY KEY REFERENCES photos(id) ON DELETE CASCADE,
+            file_size   INTEGER NOT NULL,
+            modified_at INTEGER NOT NULL,
+            faces       INTEGER NOT NULL,
+            scanned_at  INTEGER NOT NULL
+        );
+    ",
+    },
 ];
 
 /// How many times a file is tried before it is left alone.
@@ -163,6 +231,18 @@ const SEPARATOR: char = std::path::MAIN_SEPARATOR;
 const COLUMNS: &str = "id, path, folder, file_size, modified_at, taken_at, width, height, \
                        orientation, camera, lens, rating, label, flag, title, description, \
                        latitude, longitude, place_verdict, place_reason";
+
+/// The same list, each column under a table alias, for a query that joins.
+///
+/// Built from [`COLUMNS`] rather than written out again: two lists in the
+/// same order is one list plus a chance to get it wrong.
+pub(crate) fn qualified_columns(alias: &str) -> String {
+    COLUMNS
+        .split(',')
+        .map(|column| format!("{alias}.{}", column.trim()))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 
 /// **Every column here is one the disk owns.** The organisation — rating,
 /// label, flag, title, description — is deliberately absent from the update:
@@ -218,6 +298,18 @@ pub struct Catalog {
 }
 
 impl Catalog {
+    /// The connection, for the parts of the catalogue that live in another
+    /// module. [`crate::people`] is the face half of this same repository —
+    /// v1 split it the same way and for the same reason, that one file
+    /// holding everything is a file nobody reads.
+    pub(crate) fn connection(&self) -> &Connection {
+        &self.conn
+    }
+
+    pub(crate) fn connection_mut(&mut self) -> &mut Connection {
+        &mut self.conn
+    }
+
     pub fn open(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
@@ -590,6 +682,7 @@ impl Catalog {
             .query_map(params![now, MAX_ATTEMPTS, limit as i64], |row| {
                 Ok(Pending {
                     photo: read_photo(row)?,
+                    regions: None,
                     attempts: row.get(COLUMN_COUNT)?,
                 })
             })?
@@ -597,6 +690,7 @@ impl Catalog {
 
         for entry in &mut pending {
             entry.photo.organisation.keywords = self.keywords_of(entry.photo.id)?;
+            entry.regions = self.regions_of(entry.photo.id)?;
         }
 
         Ok(pending)
@@ -993,6 +1087,12 @@ impl Catalog {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Pending {
     pub photo: Photo,
+    /// The named face rectangles, rebuilt from the catalogue like everything
+    /// else here. `None` is "nobody has face-scanned this", and then another
+    /// program's frames in it are left alone; an empty list is "we looked
+    /// and nobody here is named", which is how a face taken off somebody
+    /// comes back out of the file.
+    pub regions: Option<Vec<crate::people::Region>>,
     pub attempts: i64,
 }
 
@@ -1078,7 +1178,7 @@ const UPSERT_PARAMS: usize = 14;
 /// Keywords are not here: they live in their own table, and asking for them
 /// per row would be one query per tile. Whoever wants them fills them in
 /// afterwards, for the whole folder at once.
-fn read_photo(row: &rusqlite::Row<'_>) -> rusqlite::Result<Photo> {
+pub(crate) fn read_photo(row: &rusqlite::Row<'_>) -> rusqlite::Result<Photo> {
     let path: String = row.get(1)?;
     let folder: String = row.get(2)?;
     Ok(Photo {
