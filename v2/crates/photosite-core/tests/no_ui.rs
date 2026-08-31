@@ -71,3 +71,8 @@ fn metadata_writing_does_not_depend_on_the_ui() {
 fn images_do_not_depend_on_the_ui() {
     check("photosite-image");
 }
+
+#[test]
+fn the_face_engine_does_not_depend_on_the_ui() {
+    check("photosite-faces");
+}

@@ -1,0 +1,20 @@
+[package]
+name = "photosite-faces"
+description = "Finding faces and telling them apart, on this machine and nowhere else."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+photosite-image.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tract-onnx.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

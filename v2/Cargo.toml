@@ -13,6 +13,7 @@ license = "MIT"
 photosite-core = { path = "crates/photosite-core" }
 photosite-image = { path = "crates/photosite-image" }
 photosite-meta = { path = "crates/photosite-meta" }
+photosite-faces = { path = "crates/photosite-faces" }
 
 anyhow = "1"
 thiserror = "2"
@@ -55,6 +56,11 @@ little_exif = "0.6"
 # builder cannot preserve what it never read.
 quick-xml = "0.38"
 fast_image_resize = "6"
+# ONNX inference in pure Rust. `ort` is faster and is what everybody reaches
+# for, but it is a native library to ship once per platform or to fetch at run
+# time; tract cross-compiles with everything else and needs no C toolchain.
+# The same trade this application makes about exiftool, and the same answer.
+tract-onnx = "0.23"
 # JPEG is here for the *encoder*: decoding goes through `jpeg-decoder`
 # directly, but the thumbnail cache has to write its tiles as something, and a
 # tile written as PNG is ten times the size for no benefit anybody can see.
