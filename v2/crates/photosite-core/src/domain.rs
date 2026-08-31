@@ -407,7 +407,22 @@ impl FileIdentity {
 }
 
 /// Extensions we treat as a photograph.
-pub const PHOTO_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp", "bmp", "tif", "tiff", "gif"];
+///
+/// The RAW formats here are the TIFF-based ones, which is nearly all of
+/// them. Canon's CR3 and Fuji's RAF are deliberately absent: their containers
+/// are something else entirely, and a file we cannot open at all is better
+/// left out of the folder than shown as a grey tile with no explanation.
+pub const PHOTO_EXTENSIONS: &[&str] = &[
+    "jpg", "jpeg", "png", "webp", "bmp", "tif", "tiff", "gif", //
+    "nef", "nrw", // Nikon
+    "cr2", // Canon, up to the R series
+    "arw", "srf", "sr2", // Sony
+    "rw2", // Panasonic
+    "orf", // Olympus
+    "pef", // Pentax
+    "srw", // Samsung
+    "dng", // Adobe, and everything that writes it
+];
 
 pub fn is_photo(path: &Path) -> bool {
     path.extension()

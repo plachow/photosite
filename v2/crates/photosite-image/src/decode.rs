@@ -136,6 +136,12 @@ pub fn sized(path: &Path, max: u32) -> Result<Rgb> {
 
     let source = if raw.starts_with(&[0xFF, 0xD8, 0xFF]) {
         jpeg_rgb(&raw, Some(max)).context("the JPEG cannot be decoded")?
+    } else if let Some(found) = crate::raw::preview(&raw) {
+        // A RAW. What gets drawn is the JPEG the camera put inside it — the
+        // rendering shown on the back of the camera — and not a demosaic of
+        // our own, which would need a decoder and a colour pipeline per
+        // manufacturer to look no better.
+        jpeg_rgb(&raw[found], Some(max)).context("the preview inside the RAW cannot be decoded")?
     } else {
         let decoded = image::load_from_memory(&raw)
             .context("the image cannot be decoded")?

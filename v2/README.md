@@ -6,7 +6,7 @@ A clean sheet. Rust, egui over wgpu, Windows / macOS / Linux from one source.
 cd v2
 cargo run --release -p photosite-ui              # the application
 cargo run --release -p photosite-cli -- doctor   # where everything lives
-cargo test --workspace                           # 276 tests, no window, no GPU
+cargo test --workspace                           # 280 tests, no window, no GPU
 ```
 
 ## Layout
@@ -442,17 +442,61 @@ The folder is watched, so what another program does to it shows here. Bursts
 are waited out rather than answered one at a time, and our own writing is
 ignored: a rescan for every star anybody presses would be a rescan a second.
 
+## RAW
+
+**Showing, and nothing more.** No demosaicing, no white balance, no colour
+science, no `rawler`. Every camera puts a finished JPEG inside the RAW file it
+writes — the rendering shown on the back of the camera — and that is what gets
+drawn. It is a better answer than a half-built pipeline of ours would give,
+and it costs a file read rather than a decoder per manufacturer.
+
+What that buys is that a folder straight off a card is never a grid of grey
+tiles. What it does not buy is editing a RAW, which is a different feature
+and deliberately absent.
+
+Nearly every RAW format is TIFF underneath — the file *is* the TIFF block,
+where a JPEG merely carries one in a segment — so the same reader serves both,
+and a RAW gives up its date, its camera and its orientation like anything
+else. Canon's CR3 and Fuji's RAF are not handled: their containers are
+something else entirely, and a file we cannot open is better left out of the
+folder than shown as a grey tile with no explanation.
+
+Two things worth knowing, both learned from real files rather than from a
+specification:
+
+**The largest preview, not the first.** A RAW carries several, from a 160x120
+thumbnail upwards, and the small ones are listed first as often as not.
+Drawing a 160-pixel thumbnail into a 400-pixel tile is the difference between
+a photograph and a smear. Every block is walked, including the sub-blocks —
+IFD0 of a Nikon file describes only its thumbnail — and the biggest one that
+actually begins `FFD8` wins.
+
+**Not every maker uses the ordinary tags.** Nikon, Canon, Sony and DNG name
+the preview with the usual pair; Panasonic uses a tag of its own and nowhere
+else, and gives the frame's size under two more that nobody else uses. Without
+that, an RW2 has no size at all and drops out of a sort by dimensions.
+
+Nothing here looks at a file's name: whether a file is a RAW is a question its
+first two bytes answer. The one list of what counts as a photograph is in the
+core, where the vocabulary lives, so it cannot come apart from a second copy.
+
+| on a real library | |
+|---|---|
+| Nikon NEF | camera, date and 3040x2014 read; preview drawn in 17 ms |
+| Panasonic RW2 | camera, date and 5480x3656 read; drawn in 10 ms |
+| Adobe DNG | the same as the NEF it came from |
+
 ## Where this stands
 
 The scaffolding is done and the photographic features are being brought over
 on top of it. Browsing, culling, organising, filtering, searching, writing
-metadata back into the files, getting about and the everyday file operations
-all work; editing, batch conversion, import, faces and the AI describer are
-still v1's alone.
+metadata back into the files, getting about, the everyday file operations and
+showing RAW all work; editing, batch conversion, import, faces and the AI
+describer are still v1's alone.
 
 | | |
 |---|---|
-| tests | 276 (including 6,000 fuzz cases over EXIF and 70 checked colour pairs) |
+| tests | 280 (including 6,000 fuzz cases over EXIF and 70 checked colour pairs) |
 | scan of 7,558 photographs | 0.3 s; 0.1 s on a repeat |
 | opening 134,990 photographs recursively | 727 ms |
 | `cargo clippy -D warnings` | clean |
@@ -467,17 +511,13 @@ done by CI**, where the runners are native.
 
 ## What is missing, and known to be
 
-Of v1's features, in the order they are being brought across: RAW, comparison,
+Of v1's features, in the order they are being brought across: comparison,
 import, the editor, batch conversion, faces, the AI describer. Of the file
 operations, copying and moving to a chosen folder are not done — the rest are.
 
 Three of the filter's facets are waiting on features that come later: people,
 the smiling and eyes-open scores, and the approximate-GPS verdict. All three
 need something to filter on first.
-
-RAW is deliberately small: the embedded JPEG every camera puts in the file, so
-a folder off a card is never a grid of grey tiles. No demosaicing, no colour
-science, no `rawler` — showing is all that is wanted of it.
 
 Writing metadata will be pure Rust — `little_exif` for EXIF and `xmp-writer`
 for XMP, rather than shipping exiftool and a copy of Perl. What PhotoSite

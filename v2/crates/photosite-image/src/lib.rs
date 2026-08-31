@@ -6,6 +6,7 @@
 
 pub mod decode;
 pub mod exif;
+pub mod raw;
 
 pub use decode::{Rgb, fit, quick, rotate, sized};
 

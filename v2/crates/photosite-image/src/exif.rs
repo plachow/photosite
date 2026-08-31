@@ -74,7 +74,36 @@ pub const HEADER_BYTES: usize = 128 << 10;
 /// The thumbnail offset is relative to `raw`, so it can be used to slice
 /// directly.
 pub fn read(raw: &[u8]) -> Exif {
+    // A RAW file *is* the TIFF block; a JPEG merely carries one in a
+    // segment. Same reader either way, and a JPEG never begins `II` or `MM`,
+    // so there is nothing to tell apart beyond the first two bytes.
+    if raw.starts_with(b"II") || raw.starts_with(b"MM") {
+        return from_tiff(raw).unwrap_or(Exif::NONE);
+    }
+
     parse(raw).unwrap_or(Exif::NONE)
+}
+
+/// What a TIFF-based file says about itself.
+///
+/// The frame comes from the largest image any of its blocks describes: a
+/// Nikon's first block describes its 160x120 thumbnail, so taking the first
+/// answer reports a thumbnail's dimensions for a twenty-four megapixel
+/// photograph.
+fn from_tiff(raw: &[u8]) -> Option<Exif> {
+    let reader = TiffReader::new(raw)?;
+    let (width, height) = crate::raw::frame(raw).unzip();
+    Some(Exif {
+        orientation: reader.orientation().unwrap_or(1),
+        // Not the EXIF thumbnail: a RAW keeps its previews elsewhere, and
+        // `crate::raw::preview` is what finds them.
+        thumbnail: None,
+        taken_at: reader.taken_at(),
+        width,
+        height,
+        camera: camera_name(reader.text(0, 0x010F), reader.text(0, 0x0110)),
+        lens: reader.sub_ifd().and_then(|ifd| reader.text(ifd, 0xA434)),
+    })
 }
 
 /// The same, straight from a file.
@@ -256,15 +285,19 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     era * 146_097 + day_of_era - 719_468
 }
 
-/// Reads the TIFF block inside APP1. Every access is checked, so a corrupt
-/// file ends at `None` rather than at a panic.
-struct TiffReader<'a> {
+/// Reads a TIFF block. Every access is checked, so a corrupt file ends at
+/// `None` rather than at a panic.
+///
+/// Shared with [`crate::raw`], where the whole file is the TIFF block rather
+/// than a segment carrying one — which is the only difference between a JPEG
+/// and nearly every RAW format there is.
+pub(crate) struct TiffReader<'a> {
     bytes: &'a [u8],
     little: bool,
 }
 
 impl<'a> TiffReader<'a> {
-    fn new(bytes: &'a [u8]) -> Option<Self> {
+    pub(crate) fn new(bytes: &'a [u8]) -> Option<Self> {
         let little = match bytes.get(0..2)? {
             b"II" => true,
             b"MM" => false,
@@ -297,6 +330,100 @@ impl<'a> TiffReader<'a> {
 
     fn entry(&self, ifd: usize, index: usize) -> Option<usize> {
         ifd.checked_add(2)?.checked_add(index.checked_mul(12)?)
+    }
+
+    /// Every IFD in the file: the chain from IFD0, and the sub-blocks any of
+    /// them point at.
+    ///
+    /// A RAW keeps its previews in sub-blocks — a Nikon's IFD0 describes only
+    /// the 160x120 thumbnail — so looking at IFD0 alone finds a smear where
+    /// the photograph should be.
+    ///
+    /// Bounded twice over. A corrupt file can point an IFD at itself, and a
+    /// walk that trusts the offsets never comes back.
+    pub(crate) fn every_ifd(&self) -> Vec<usize> {
+        const MOST: usize = 32;
+        let mut found: Vec<usize> = Vec::new();
+        let mut queue = vec![self.ifd0().unwrap_or(0)];
+
+        while let Some(at) = queue.pop() {
+            if at == 0 || found.len() >= MOST || found.contains(&at) {
+                continue;
+            }
+
+            let Some(count) = self.u16(at) else {
+                continue;
+            };
+
+            if count == 0 || count as usize > 4096 {
+                continue;
+            }
+
+            found.push(at);
+
+            // The next IFD in the chain sits after the last entry.
+            if let Some(end) = self.entry(at, count as usize)
+                && let Some(next) = self.u32(end)
+            {
+                queue.push(next as usize);
+            }
+
+            // And any sub-blocks this one names.
+            if let Some(entry) = self.entry_for(at, 0x014A) {
+                let sub_count = self.u32(entry + 4).unwrap_or(0) as usize;
+                if sub_count == 1 {
+                    if let Some(offset) = self.u32(entry + 8) {
+                        queue.push(offset as usize);
+                    }
+                } else if sub_count <= 16
+                    && let Some(list) = self.u32(entry + 8)
+                {
+                    for index in 0..sub_count {
+                        if let Some(offset) = self.u32(list as usize + index * 4) {
+                            queue.push(offset as usize);
+                        }
+                    }
+                }
+            }
+        }
+
+        found
+    }
+
+    /// The value field of an entry, read as a LONG.
+    pub(crate) fn value_offset(&self, entry: usize) -> Option<u32> {
+        self.u32(entry + 8)
+    }
+
+    /// How many items an entry holds.
+    pub(crate) fn count(&self, entry: usize) -> Option<u32> {
+        self.u32(entry + 4)
+    }
+
+    /// A LONG tag in the given IFD.
+    pub(crate) fn long(&self, ifd: usize, tag: u16) -> Option<u32> {
+        self.u32(self.entry_for(ifd, tag)? + 8)
+    }
+
+    /// A SHORT tag. A short stored in the four-byte value field sits in its
+    /// first two bytes, whichever way round the file is.
+    pub(crate) fn short(&self, ifd: usize, tag: u16) -> Option<u16> {
+        self.u16(self.entry_for(ifd, tag)? + 8)
+    }
+
+    /// A width or a height, which TIFF allows to be either size of integer.
+    pub(crate) fn dimension(&self, ifd: usize, tag: u16) -> Option<u32> {
+        let entry = self.entry_for(ifd, tag)?;
+        match self.u16(entry + 2)? {
+            3 => self.u16(entry + 8).map(u32::from),
+            4 => self.u32(entry + 8),
+            _ => None,
+        }
+    }
+
+    /// Where the entry for `tag` sits in the given IFD.
+    pub(crate) fn entry_for(&self, ifd: usize, tag: u16) -> Option<usize> {
+        self.find(ifd, tag)
     }
 
     /// Where the entry for `tag` sits in the given IFD.
