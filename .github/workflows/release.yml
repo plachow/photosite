@@ -1,9 +1,14 @@
-name: Release PhotoSite
+name: Release PhotoSite v1
 
+# v1 is frozen; see the tag v1-final. The trigger is deliberately manual only.
+# It used to fire on any v*.*.* tag, and the first release tag cut for v2 would
+# have quietly built the WPF application instead.
 on:
-  push:
-    tags:
-      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version, without the leading v (e.g. 0.9.3)"
+        required: true
 
 permissions:
   contents: write
@@ -25,21 +30,21 @@ jobs:
         id: version
         shell: pwsh
         run: |
-          $version = "${{ github.ref_name }}".TrimStart("v")
+          $version = "${{ inputs.version }}"
           if ($version -notmatch '^\d+\.\d+\.\d+$') {
-            throw "Tag '${{ github.ref_name }}' is not a supported release version."
+            throw "'$version' is not a supported release version."
           }
           "number=$version" >> $env:GITHUB_OUTPUT
 
       - name: Build
-        run: dotnet build PhotoSite.slnx -c Release
+        run: dotnet build v1/PhotoSite.slnx -c Release
 
       - name: Run smoke tests
-        run: dotnet run --project tests/PhotoSite.SmokeTests/PhotoSite.SmokeTests.csproj -c Release --no-build
+        run: dotnet run --project v1/tests/PhotoSite.SmokeTests/PhotoSite.SmokeTests.csproj -c Release --no-build
 
       - name: Publish self-contained application
         run: >
-          dotnet publish src/PhotoSite.App/PhotoSite.App.csproj
+          dotnet publish v1/src/PhotoSite.App/PhotoSite.App.csproj
           -c Release
           -r win-x64
           --self-contained true
@@ -73,4 +78,4 @@ jobs:
           --outputDir artifacts/releases
           --publish
           --releaseName "PhotoSite ${{ steps.version.outputs.number }}"
-          --tag ${{ github.ref_name }}
+          --tag v${{ steps.version.outputs.number }}
