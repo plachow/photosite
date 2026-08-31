@@ -77,7 +77,48 @@ pub fn quick(path: &Path) -> Result<Option<Rgb>> {
         return Ok(None);
     };
 
+    // Náhled z EXIFu má poměr stran, jaký se fotoaparátu zlíbilo, ne poměr
+    // snímku. Nikon do souboru 6000×4000 uloží náhled 160×120 a celou scénu
+    // do něj natlačí — nic se neořízne, jen se to zúží. Dokud nedorazí ostrá
+    // verze, kreslí se právě tenhle, takže by knihovna vypadala rozplácle.
+    let image = match dimensions(&head).and_then(|full| stretched_to(&image, full)) {
+        Some((width, height)) => resize(&image, width, height)?,
+        None => image,
+    };
+
     Ok(Some(rotate(image, meta.orientation)))
+}
+
+/// Rozměry snímku ze značky SOF, bez dekódování pixelů.
+///
+/// Hlavička, kterou už máme přečtenou, stačí: SOF leží hned za blokem EXIF.
+fn dimensions(raw: &[u8]) -> Option<(u32, u32)> {
+    let mut decoder = jpeg_decoder::Decoder::new(std::io::Cursor::new(raw));
+    decoder.read_info().ok()?;
+    let info = decoder.info()?;
+    Some((info.width as u32, info.height as u32))
+}
+
+/// Na jakou velikost náhled přepočítat, aby měl poměr snímku.
+///
+/// Zachová delší stranu — o rozlišení tu nejde, jen o tvar. Vrátí `None`,
+/// když poměr sedí; drtivá většina telefonů ukládá náhled správně a přepočítat
+/// ho by znamenalo rozmazat ho zadarmo.
+fn stretched_to(thumb: &Rgb, full: (u32, u32)) -> Option<(u32, u32)> {
+    let (full_w, full_h) = full;
+    if thumb.width == 0 || thumb.height == 0 || full_w == 0 || full_h == 0 {
+        return None;
+    }
+
+    let want = full_w as f64 / full_h as f64;
+    let have = thumb.width as f64 / thumb.height as f64;
+    // Jeden pixel zaokrouhlení na sto sem netahat; pod procento je to shoda.
+    if (want - have).abs() / want < 0.01 {
+        return None;
+    }
+
+    let longer = thumb.width.max(thumb.height);
+    Some(fit(full_w, full_h, longer))
 }
 
 /// Plnohodnotné dekódování zmenšené tak, aby se vešlo do čtverce `max`.
@@ -256,6 +297,48 @@ mod tests {
         assert_eq!(fit(3000, 4000, 320), (240, 320));
         assert_eq!(fit(100, 50, 320), (100, 50), "menší obrázek se nenafukuje");
         assert_eq!(fit(0, 0, 320), (1, 1));
+    }
+
+    /// Náhled z EXIFu, který má jiný tvar než snímek, se musí srovnat.
+    ///
+    /// Nikon ukládá k souboru 6000×4000 náhled 160×120 a celou scénu do něj
+    /// natlačí. Do dlaždice se pak kreslil rozplácle až do chvíle, než
+    /// dodekódovala ostrá verze — což je při rolování většina času.
+    #[test]
+    fn roztazeny_nahled_dostane_tvar_snimku() {
+        let thumb = stripes(160, 120);
+        assert_eq!(
+            stretched_to(&thumb, (6000, 4000)),
+            Some((160, 107)),
+            "3:2 snímek s náhledem 4:3"
+        );
+
+        let thumb = stripes(120, 160);
+        assert_eq!(stretched_to(&thumb, (4000, 6000)), Some((107, 160)));
+    }
+
+    #[test]
+    fn spravny_nahled_se_nesaha() {
+        // Telefony ukládají náhled ve správném poměru. Přepočítat ho by
+        // znamenalo rozmazat ho zadarmo.
+        assert_eq!(stretched_to(&stripes(160, 120), (4000, 3000)), None);
+        assert_eq!(
+            stretched_to(&stripes(159, 120), (4000, 3000)),
+            None,
+            "zaokrouhlení není roztažení"
+        );
+        assert_eq!(stretched_to(&stripes(160, 160), (4000, 4000)), None);
+    }
+
+    #[test]
+    fn nesmyslne_rozmery_nic_neprepocitavaji() {
+        assert_eq!(stretched_to(&stripes(1, 1), (0, 0)), None);
+        let prazdny = Rgb {
+            width: 0,
+            height: 0,
+            pixels: Vec::new(),
+        };
+        assert_eq!(stretched_to(&prazdny, (4000, 3000)), None);
     }
 
     #[test]

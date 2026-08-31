@@ -186,6 +186,22 @@ takže se zapsalo do tmavého — a jakmile dorazilo „světlo", egui přeplo n
 světlý slot se svými vlastními barvami a okno nastavení svítilo bíle uprostřed
 tmavé aplikace. Zapisuje se proto do obou.
 
+## Poměr stran
+
+Kreslí se vždycky s poměrem snímku, nikdy se nic nedeformuje. Letterbox ano,
+roztažení ne.
+
+Jedno místo to porušovalo a nebylo to vidět na první pohled: **náhled z EXIFu
+má poměr, jaký se zlíbil fotoaparátu.** Nikon uloží k souboru 6000×4000 náhled
+160×120 a celou scénu do něj natlačí — nic neořízne, jen to zúží. Dlaždice se
+plní nejdřív tímhle náhledem, takže než dodekódovala ostrá verze, byla fotka
+o dvanáct procent širší, než měla být. Při rolování rozsáhlé knihovny je to
+většina toho, co je na obrazovce.
+
+Náhled se proto přepočítá na poměr snímku, který se přečte ze značky SOF
+v hlavičce, co už stejně máme v paměti. Když poměr sedí — a telefony ho
+ukládají správně — nesahá se na něj, přepočet by ho jen rozmazal.
+
 ## Cache náhledů
 
 Strop `loading.texture_budget` je **přání, ne zákon**: pod to, co je právě na
@@ -218,7 +234,7 @@ jsou z prototypu, aby bylo co spustit.
 
 | | |
 |---|---|
-| testů | 111 (včetně 6 000 fuzz případů na EXIF a 70 kontrolovaných dvojic barev) |
+| testů | 114 (včetně 6 000 fuzz případů na EXIF a 70 kontrolovaných dvojic barev) |
 | sken 7 558 fotek | 0,3 s; opakovaně 0,1 s |
 | otevření složky v UI | 7 558 fotek, žádná prázdná dlaždice do 160 ms |
 | `cargo clippy -D warnings` | čisté |
