@@ -4,10 +4,12 @@
 //! plain RGB and leaves it to the caller what to make of it — a texture, a
 //! file, or both.
 
+pub mod cache;
 pub mod decode;
 pub mod exif;
 pub mod raw;
 
+pub use cache::Cache;
 pub use decode::{Rgb, fit, quick, rotate, sized};
 
 /// Longer edge of a tile in the grid.

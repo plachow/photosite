@@ -168,7 +168,7 @@ pub fn sized(path: &Path, max: u32) -> Result<Rgb> {
     Ok(rotate(scaled, meta.orientation))
 }
 
-fn jpeg_rgb(raw: &[u8], max: Option<u32>) -> Option<Rgb> {
+pub(crate) fn jpeg_rgb(raw: &[u8], max: Option<u32>) -> Option<Rgb> {
     let mut decoder = jpeg_decoder::Decoder::new(std::io::Cursor::new(raw));
     if let Some(max) = max {
         let want = max.min(u16::MAX as u32) as u16;

@@ -55,7 +55,11 @@ little_exif = "0.6"
 # builder cannot preserve what it never read.
 quick-xml = "0.38"
 fast_image_resize = "6"
+# JPEG is here for the *encoder*: decoding goes through `jpeg-decoder`
+# directly, but the thumbnail cache has to write its tiles as something, and a
+# tile written as PNG is ten times the size for no benefit anybody can see.
 image = { version = "0.25.10", default-features = false, features = [
+    "jpeg",
     "png",
     "webp",
     "bmp",

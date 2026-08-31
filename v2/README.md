@@ -6,7 +6,7 @@ A clean sheet. Rust, egui over wgpu, Windows / macOS / Linux from one source.
 cd v2
 cargo run --release -p photosite-ui              # the application
 cargo run --release -p photosite-cli -- doctor   # where everything lives
-cargo test --workspace                           # 349 tests, no window, no GPU
+cargo test --workspace                           # 353 tests, no window, no GPU
 ```
 
 ## Layout
@@ -228,6 +228,38 @@ matches — and phones store it correctly — it is left alone; rescaling would
 only blur it.
 
 ## The thumbnail cache
+
+Two of them, and they answer different questions.
+
+### On disk, so a folder opened before opens at once
+
+Decoding a folder's tiles is a tenth of a second per photograph for the
+eight-megabyte files a full-frame camera writes. Doing it again on every
+start, for a library nobody has changed, is work that was already done — so a
+finished tile is written beside the catalogue as a small JPEG and looked for
+before anything is decoded.
+
+| three hundred photographs, one thread | |
+|---|---|
+| the first time | 28.6 s (10 a second) |
+| the second | **0.23 s** (1,316 a second) |
+| kept | 6.9 MB, twenty-three kilobytes a tile |
+
+**A cached tile is never stale, and there is no invalidation rule to get
+wrong.** The name carries the file's length and write time along with its
+path, so a photograph that changed asks for a name that has never been
+written and is decoded. The old entry is not deleted; it simply stops being
+asked for.
+
+Every failure is a miss and never an error — an unwritable folder, a
+half-written file, a disk that filled up all end in the photograph being
+decoded, which is what would have happened anyway. Only tiles are kept: a
+preview is a megabyte and is wanted one photograph at a time. A whole library
+browsed through would be a few gigabytes, which is why
+`loading.cache_thumbnails` can turn it off.
+
+### In memory, so nothing is decoded twice in one sitting
+
 
 The `loading.texture_budget` ceiling is a **wish, not a law**: it must not go
 below what is on screen right now. A smaller ceiling does not mean "less
@@ -683,19 +715,20 @@ into a view, and a view turning into rectangles.
 ## Where this stands
 
 The scaffolding is done and the photographic features are being brought over
-on top of it. Browsing, culling, organising, filtering, searching, writing
-metadata back into the files, getting about, the everyday file operations,
-showing RAW and comparing all work; editing, batch conversion, import, faces
-and the AI describer are still v1's alone.
+on top of it. The **manager is complete**: browsing, culling, organising,
+filtering, searching, writing metadata back into the files, positions and the
+map, getting about, the file operations, showing RAW, comparing and the list
+view all work. The editor, batch conversion, faces and the AI describer are
+still v1's alone.
 
 | | |
 |---|---|
-| tests | 349 (including 6,000 fuzz cases over EXIF and 70 checked colour pairs) |
+| tests | 353 (including 6,000 fuzz cases over EXIF and 70 checked colour pairs) |
 | scan of 7,558 photographs | 0.3 s; 0.1 s on a repeat |
 | opening 134,990 photographs recursively | 727 ms |
 | `cargo clippy -D warnings` | clean |
 | themes | 5 plus following the system |
-| settings entries | 35, of which 26 are on the screen it generates |
+| settings entries | 36, of which 27 are on the screen it generates |
 | catalogue schema | 5 migrations |
 
 A cross-check from Windows passes for `photosite-image` against both targets.
@@ -710,8 +743,8 @@ The editor is deliberately last and will be rebuilt rather than ported.
 Importing from a memory card is **not** being brought across at all — this is
 a manager for files that are already on a disk.
 
-Of the manager itself, one thing is left: a thumbnail cache that survives a
-restart. Everything else v1 had is here.
+The manager is done: everything v1's manager did, v2 does, with the one
+exception of importing from a memory card — which is deliberate.
 
 Three of the filter's facets are waiting on features that come later: people,
 the smiling and eyes-open scores, and the approximate-GPS verdict. All three

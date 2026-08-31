@@ -392,6 +392,14 @@ impl App {
         let preview = settings.loading.preview_size.clamp(64, 16384) as u32;
         let close = settings.loading.compare_size.clamp(64, 16384) as u32;
         let embedded = settings.loading.use_embedded_thumbnails;
+        // Only the tiles are kept. A preview is a megabyte and is wanted for
+        // one photograph at a time; keeping those would be a library's worth
+        // of disk for something that is decoded in the time it takes to
+        // click.
+        let tiles = settings
+            .loading
+            .cache_thumbnails
+            .then(|| img::Cache::new(paths.thumbnails()));
         let waker: Arc<OnceLock<egui::Context>> = Arc::new(OnceLock::new());
         let wake = waker.clone();
 
@@ -400,7 +408,10 @@ impl App {
             let outcome = match want {
                 Want::Quick if !embedded => Ok(None),
                 Want::Quick => img::quick(path).map(|found| found.map(into_pixels)),
-                Want::Thumb => img::sized(path, thumb).map(|rgb| Some(into_pixels(rgb))),
+                Want::Thumb => match &tiles {
+                    Some(cache) => cache.thumb(path, thumb).map(|rgb| Some(into_pixels(rgb))),
+                    None => img::sized(path, thumb).map(|rgb| Some(into_pixels(rgb))),
+                },
                 Want::Preview => img::sized(path, preview).map(|rgb| Some(into_pixels(rgb))),
                 Want::Close => img::sized(path, close).map(|rgb| Some(into_pixels(rgb))),
             };

@@ -163,6 +163,10 @@ pub struct Loading {
     /// Use the thumbnail embedded in EXIF until the sharp one is decoded. It
     /// can be switched off mainly so that its benefit can be measured.
     pub use_embedded_thumbnails: bool,
+    /// Keep finished tiles on disk so a folder opened before opens at once.
+    /// Only the tiles: previews and comparisons are too large to be worth
+    /// keeping and are wanted too rarely to be worth finding.
+    pub cache_thumbnails: bool,
     /// A safety net: the longest pause between frames when nothing is
     /// happening. The decoding threads announce finished work themselves, so
     /// this only covers the case of a lost wake-up. A short interval means
@@ -180,6 +184,7 @@ impl Default for Loading {
             texture_budget: 900,
             worker_threads: 0,
             use_embedded_thumbnails: true,
+            cache_thumbnails: true,
             idle_repaint_ms: 1000,
         }
     }
@@ -629,6 +634,11 @@ pub const TUNABLES: &[Tunable] = &[
         path: "loading.worker_threads",
         label_key: "setting-worker-threads",
         kind: Kind::Int { min: 0, max: 128 },
+    },
+    Tunable {
+        path: "loading.cache_thumbnails",
+        label_key: "setting-cache-thumbnails",
+        kind: Kind::Bool,
     },
     Tunable {
         path: "loading.use_embedded_thumbnails",

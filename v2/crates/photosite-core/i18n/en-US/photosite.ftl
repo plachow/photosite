@@ -458,3 +458,4 @@ info-place-unreadable = Those are not coordinates
 command-view-fullscreen = Fullscreen
 command-view-as-list = List
 setting-as-list = Show the folder as a list
+setting-cache-thumbnails = Keep tiles on disk
