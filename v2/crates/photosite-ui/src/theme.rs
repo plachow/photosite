@@ -6,6 +6,7 @@
 
 use egui::{Color32, CornerRadius, FontId, Rect, Stroke, StrokeKind, Vec2};
 use photosite_core::domain::{Flag, Organisation};
+use photosite_core::place::Verdict;
 use photosite_core::settings::Gallery;
 use photosite_core::theme::{Color, Palette};
 
@@ -166,6 +167,38 @@ pub fn star(painter: &egui::Painter, centre: egui::Pos2, radius: f32, fill: Colo
     painter.add(egui::Shape::mesh(mesh));
 }
 
+/// The colour of a verdict about a position.
+///
+/// Its own colours and not the palette's, for the same reason the label
+/// swatch has its own: a traffic light that is not green, amber and red is
+/// not a traffic light. `None` for a verdict worth no mark at all.
+pub fn verdict_color(verdict: Verdict) -> Option<Color32> {
+    match verdict {
+        Verdict::Nowhere => None,
+        Verdict::Precise => Some(Color32::from_rgb(0x4C, 0xAF, 0x50)),
+        Verdict::Approximate => Some(Color32::from_rgb(0xF2, 0xA3, 0x3A)),
+        Verdict::Doubtful => Some(Color32::from_rgb(0xE0, 0x5A, 0x4C)),
+    }
+}
+
+/// A map pin, drawn rather than written.
+///
+/// v1 used an emoji and got away with it on one platform. A shape needs no
+/// font to be installed and no fallback to be right.
+pub fn pin(painter: &egui::Painter, centre: egui::Pos2, radius: f32, fill: Color32) {
+    let head = egui::pos2(centre.x, centre.y - radius * 0.25);
+    painter.circle_filled(head, radius * 0.75, fill);
+    painter.add(egui::Shape::convex_polygon(
+        vec![
+            egui::pos2(head.x - radius * 0.55, head.y + radius * 0.45),
+            egui::pos2(head.x + radius * 0.55, head.y + radius * 0.45),
+            egui::pos2(head.x, centre.y + radius),
+        ],
+        fill,
+        Stroke::NONE,
+    ));
+}
+
 /// What somebody said about a photograph, over the photograph.
 ///
 /// Everything sits on a dark plate rather than straight on the picture. A
@@ -175,19 +208,40 @@ pub fn star(painter: &egui::Painter, centre: egui::Pos2, radius: f32, fill: Colo
 ///
 /// A tile nobody has said anything about gets nothing drawn at all, which is
 /// most tiles in most libraries.
-pub fn badges(painter: &egui::Painter, well: Rect, palette: &Palette, organisation: &Organisation) {
+pub fn badges(
+    painter: &egui::Painter,
+    well: Rect,
+    palette: &Palette,
+    organisation: &Organisation,
+    verdict: Verdict,
+) {
     // A rejected photograph is still there — it only fades. Deleting is a
     // separate, deliberate step, and dimming is what says so.
     if organisation.flag == Flag::Rejected {
         painter.rect_filled(well, CornerRadius::ZERO, Color32::from_black_alpha(150));
     }
 
+    let size = (well.height() * 0.09).clamp(5.0, 11.0);
+    let pad = size * 0.6;
+
+    // A doubted position, and only a doubted one. A pin on every photograph
+    // that carries coordinates would be on most of a phone's library and
+    // would say nothing; this one means "worth a look".
+    if verdict.is_doubted()
+        && let Some(fill) = verdict_color(verdict)
+    {
+        let side = size * 2.0;
+        let spot = Rect::from_min_size(
+            egui::pos2(well.max.x - pad - side, well.max.y - pad - side),
+            Vec2::splat(side),
+        );
+        painter.rect_filled(spot, CornerRadius::same(2), Color32::from_black_alpha(120));
+        pin(painter, spot.center(), size * 0.8, fill);
+    }
+
     if organisation.is_empty() {
         return;
     }
-
-    let size = (well.height() * 0.09).clamp(5.0, 11.0);
-    let pad = size * 0.6;
 
     if organisation.rating > 0 {
         let width = size * 2.0 * Organisation::MAX_RATING as f32 + pad;

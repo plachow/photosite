@@ -34,6 +34,13 @@ pub struct Photo {
     /// they are columns rather than something read back out of the file.
     pub camera: Option<String>,
     pub lens: Option<String>,
+    /// Where it was taken, where the file says so.
+    pub place: Option<crate::place::Place>,
+    /// How much that position is to be trusted, and why. Worked out once,
+    /// when the header is read, from evidence that is in the file and is not
+    /// kept — so asking again later would mean opening the file again.
+    pub verdict: crate::place::Verdict,
+    pub reason: Option<crate::place::Reason>,
     /// What somebody has said about it, as opposed to what was read out of
     /// it. A scan never touches this.
     pub organisation: Organisation,
@@ -481,6 +488,9 @@ mod tests {
             camera: None,
             lens: None,
             organisation: Organisation::default(),
+            place: None,
+            verdict: crate::place::Verdict::Nowhere,
+            reason: None,
         }
     }
 

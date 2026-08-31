@@ -151,6 +151,26 @@ pub fn scan(path: &Path) -> Option<(NewPhoto, Xmp)> {
 
     let meta = photosite_image::exif::read(&header);
     let said = read_from_header(path, &header);
+
+    // Where it was taken, and how much of that to believe. The verdict is
+    // reached here, while the evidence is in hand: the error estimate, the
+    // method and the age of the fix are in the file and are not kept, so
+    // asking again later would mean opening the file again.
+    let (place, verdict, reason) = match &meta.gps {
+        Some(gps) => {
+            let judgement = photosite_core::place::judge(photosite_core::place::Evidence {
+                error_metres: gps.error_metres,
+                method: gps.method.as_deref(),
+                fixed_at: gps.fixed_at,
+                taken_at: utc_of(&meta),
+            });
+            match photosite_core::Place::new(gps.latitude, gps.longitude) {
+                Some(place) => (Some(place), judgement.verdict, judgement.because),
+                None => (None, photosite_core::Verdict::Nowhere, None),
+            }
+        }
+        None => (None, photosite_core::Verdict::Nowhere, None),
+    };
     Some((
         NewPhoto {
             path: identity.path,
@@ -162,9 +182,22 @@ pub fn scan(path: &Path) -> Option<(NewPhoto, Xmp)> {
             orientation: meta.orientation,
             camera: meta.camera,
             lens: meta.lens,
+            place,
+            verdict,
+            reason,
         },
         said,
     ))
+}
+
+/// When the shutter fired, in UTC, or nothing.
+///
+/// `DateTimeOriginal` is a wall clock and says nothing about which one, so it
+/// becomes a moment in time only when the file also recorded what the camera's
+/// clock was set to. Guessing instead read as a one-hour-stale fix on every
+/// photograph taken in this country.
+fn utc_of(meta: &photosite_image::exif::Exif) -> Option<i64> {
+    Some(meta.taken_at? - i64::from(meta.offset_seconds?))
 }
 
 /// Makes the file say what the catalogue says.

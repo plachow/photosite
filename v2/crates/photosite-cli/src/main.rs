@@ -235,6 +235,37 @@ fn info(file: &Path) -> Result<()> {
         meta.lens.clone().unwrap_or_else(|| t!("cli-info-none")),
     ));
     rows.push((
+        t!("cli-info-place"),
+        match &meta.gps {
+            Some(gps) => {
+                let judgement = photosite_core::place::judge(photosite_core::place::Evidence {
+                    error_metres: gps.error_metres,
+                    method: gps.method.as_deref(),
+                    fixed_at: gps.fixed_at,
+                    taken_at: meta
+                        .taken_at
+                        .zip(meta.offset_seconds)
+                        .map(|(taken, offset)| taken - i64::from(offset)),
+                });
+                match photosite_core::Place::new(gps.latitude, gps.longitude) {
+                    Some(place) => format!(
+                        "{place}  [{}]{}",
+                        photosite_core::i18n::t(judgement.verdict.title_key()),
+                        judgement
+                            .because
+                            .map(|reason| format!(
+                                "  {}",
+                                photosite_core::i18n::t(reason.title_key())
+                            ))
+                            .unwrap_or_default()
+                    ),
+                    None => t!("cli-info-none"),
+                }
+            }
+            None => t!("cli-info-none"),
+        },
+    ));
+    rows.push((
         t!("cli-info-frame"),
         match (meta.width, meta.height) {
             (Some(width), Some(height)) => format!("{width}x{height}"),

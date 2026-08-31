@@ -234,7 +234,8 @@ fn draw(
 fn caption(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, palette: &Palette, path: &Path) {
     if let Some(photo) = app.photo_named(path) {
         let organisation = photo.organisation.clone();
-        theme::badges(ui.painter(), rect, palette, &organisation);
+        let verdict = photo.verdict;
+        theme::badges(ui.painter(), rect, palette, &organisation, verdict);
     }
 
     let name = path

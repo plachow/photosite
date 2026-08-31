@@ -9,11 +9,11 @@
 //! once per frame, and only the file header is read. On a forty megabyte
 //! frame on a network drive, anything else would be felt on every click.
 
-use crate::{App, Want, theme};
+use crate::{App, Want, files, theme};
 use eframe::egui;
 use photosite_core::domain::{ColorLabel, Flag, Organisation, Photo};
-use photosite_core::t;
 use photosite_core::theme::Palette;
+use photosite_core::{i18n, t};
 
 pub fn pane(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
     let Some(index) = app.selected else {
@@ -102,6 +102,8 @@ fn said(app: &mut App, ui: &mut egui::Ui, palette: &Palette, photo: &Photo, many
     }
 
     ui.add_space(4.0);
+    place(app, ui, palette, photo);
+
     if field(ui, palette, &t!("info-title"), &mut app.edit_title, false) {
         app.commit_title();
     }
@@ -134,6 +136,55 @@ fn said(app: &mut App, ui: &mut egui::Ui, palette: &Palette, photo: &Photo, many
                 .color(theme::color(palette.dim)),
         );
     });
+}
+
+/// Where it was taken, how much of that to believe, and a way to go and look.
+///
+/// The verdict is a coloured dot on the button rather than a sentence: it has
+/// to be readable at a glance and it must not push the coordinates off the
+/// row. The sentence is there for whoever hovers, which is whoever wondered.
+fn place(app: &mut App, ui: &mut egui::Ui, palette: &Palette, photo: &Photo) {
+    ui.horizontal(|ui| {
+        ui.add_space(8.0);
+        ui.label(
+            egui::RichText::new(t!("info-place"))
+                .small()
+                .color(theme::color(palette.dim)),
+        );
+
+        match photo.place {
+            Some(place) => ui.label(egui::RichText::new(place.to_string())),
+            None => ui.label(
+                egui::RichText::new(t!("info-place-none")).color(theme::color(palette.disabled)),
+            ),
+        };
+
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            // Disabled without coordinates rather than hidden: a button that
+            // comes and goes is a button nobody learns the place of.
+            let button = ui.add_enabled(photo.place.is_some(), egui::Button::new(t!("info-map")));
+            let button = match photo.reason {
+                Some(reason) => button.on_hover_text(i18n::t(reason.title_key())),
+                None => button,
+            };
+            if button.clicked()
+                && let Some(place) = photo.place
+            {
+                let url = place.in_map(&app.settings.gallery.map_url);
+                tracing::info!(%url, "opening the map");
+                files::open_link(&url);
+            }
+
+            if let Some(colour) = theme::verdict_color(photo.verdict) {
+                let (rect, response) =
+                    ui.allocate_exact_size(egui::Vec2::splat(12.0), egui::Sense::hover());
+                ui.painter().circle_filled(rect.center(), 4.5, colour);
+                response.on_hover_text(i18n::t(photo.verdict.title_key()));
+            }
+        });
+    });
+
+    ui.add_space(4.0);
 }
 
 /// Five stars. Returns the one clicked, counting from one.

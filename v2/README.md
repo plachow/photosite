@@ -6,7 +6,7 @@ A clean sheet. Rust, egui over wgpu, Windows / macOS / Linux from one source.
 cd v2
 cargo run --release -p photosite-ui              # the application
 cargo run --release -p photosite-cli -- doctor   # where everything lives
-cargo test --workspace                           # 322 tests, no window, no GPU
+cargo test --workspace                           # 342 tests, no window, no GPU
 ```
 
 ## Layout
@@ -486,6 +486,54 @@ core, where the vocabulary lives, so it cannot come apart from a second copy.
 | Panasonic RW2 | camera, date and 5480x3656 read; drawn in 10 ms |
 | Adobe DNG | the same as the NEF it came from |
 
+## Where it was taken
+
+A position in a file looks like a fact and often is not. A phone that cannot
+see the sky asks the cell towers instead and writes the answer down with the
+same six decimal places it would use for a satellite fix; a camera holds the
+last fix it got and stamps it on a photograph taken twenty minutes later in
+the next valley. Both come out as coordinates, and neither says so.
+
+So the file's evidence is weighed rather than trusted, and the verdict is
+shown: a **traffic-light dot** beside the coordinates, and a **pin on the
+tile** for the ones worth a second look. It never refuses to place a
+photograph — it says how sure it is and lets somebody go and see. The
+**Position** rows in the filter then collect them, which is the only reason
+to mark them at all.
+
+Three things count against a position, and the worst one stands: the camera's
+own error estimate, a fix that came from the towers or the network instead of
+the sky, and a fix that was already old when the shutter fired.
+
+The **Map** button goes to an address from the settings holding `{lat}` and
+`{lon}`, so which map is not our decision — it differs by country, by habit
+and by whether somebody has an account anywhere. OpenStreetMap needs none of
+those and is what a new installation starts with. The numbers are written with
+a full stop and never by the locale's rules: a comma in a URL's coordinates
+takes you to the wrong continent.
+
+Two things came from real files rather than from the specification, and both
+would have made the badge worthless:
+
+**The shutter's clock and the satellites' clock are not the same clock.**
+`DateTimeOriginal` is a wall clock with no zone attached; a GPS stamp is UTC.
+Comparing them directly read as a one-hour-stale fix on **every** photograph
+taken in this country. So the age of a fix is judged only when the file also
+recorded what the camera's clock was set to, and otherwise not at all. A badge
+that fires on everything says nothing.
+
+**The method is written two different ways.** The specification says
+`UNDEFINED` with a seven-byte character-set header; phones write a plain ASCII
+string. Insisting on the specification read nothing from four hundred real
+photographs, nine of which were fixed off a cell tower and were being called
+precise for it.
+
+| on 4,195 photographs from one phone | |
+|---|---|
+| precise | 2,684 |
+| probably far off, fixed by cell tower | 1,460 |
+| no position at all | 51 |
+
 ## Copying and moving
 
 `Ctrl+C` and `Ctrl+V` mean the files themselves, not a list of their names —
@@ -594,13 +642,13 @@ and the AI describer are still v1's alone.
 
 | | |
 |---|---|
-| tests | 322 (including 6,000 fuzz cases over EXIF and 70 checked colour pairs) |
+| tests | 342 (including 6,000 fuzz cases over EXIF and 70 checked colour pairs) |
 | scan of 7,558 photographs | 0.3 s; 0.1 s on a repeat |
 | opening 134,990 photographs recursively | 727 ms |
 | `cargo clippy -D warnings` | clean |
 | themes | 5 plus following the system |
-| settings entries | 33, of which 24 are on the screen it generates |
-| catalogue schema | 4 migrations |
+| settings entries | 34, of which 25 are on the screen it generates |
+| catalogue schema | 5 migrations |
 
 A cross-check from Windows passes for `photosite-image` against both targets.
 The rest does not, because `libsqlite3-sys` with `bundled` compiles C and that
@@ -615,9 +663,9 @@ Importing from a memory card is **not** being brought across at all — this is
 a manager for files that are already on a disk.
 
 Of the manager itself, what is left is small and named: the exposure triangle
-in the details, GPS and the map, words on a whole selection at once, a
-compact list beside the grid, fullscreen, and a thumbnail cache that survives
-a restart.
+in the details, correcting a position by hand, words on a whole selection at
+once, a compact list beside the grid, fullscreen, and a thumbnail cache that
+survives a restart.
 
 Three of the filter's facets are waiting on features that come later: people,
 the smiling and eyes-open scores, and the approximate-GPS verdict. All three

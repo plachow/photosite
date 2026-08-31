@@ -17,6 +17,7 @@ pub mod history;
 pub mod i18n;
 pub mod jobs;
 pub mod paths;
+pub mod place;
 pub mod settings;
 pub mod theme;
 pub mod time;
@@ -31,6 +32,7 @@ pub use history::History;
 pub use i18n::{t, t_args};
 pub use jobs::{Cancel, Progress, TaskStatus, Tasks, Wishlist};
 pub use paths::Paths;
+pub use place::{Place, Verdict};
 pub use settings::Settings;
 pub use theme::{Palette, Theme};
 

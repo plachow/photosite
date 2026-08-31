@@ -137,18 +137,22 @@ fn main() -> Result<()> {
             app.shot = shot;
             app.show_settings = open_settings;
             app.show_filter = open_filter;
+            // The filter first: narrowing the gallery rebuilds the
+            // selection, so choosing tiles before it means choosing tiles
+            // that are about to be let go of.
+            if let Some(search) = search {
+                app.set_filter(photosite_core::filter::Filter {
+                    search,
+                    ..Default::default()
+                });
+            }
+
             if compare > 0 {
                 for at in 0..compare.min(app.count()) {
                     app.select_also(at);
                 }
 
                 app.run_for_shot("photo.compare");
-            }
-            if let Some(search) = search {
-                app.set_filter(photosite_core::filter::Filter {
-                    search,
-                    ..Default::default()
-                });
             }
             app.dress(&cc.egui_ctx);
             Ok(Box::new(app))
@@ -2075,7 +2079,6 @@ impl App {
             // any length at all: laid out first it pushed the count and the
             // task off the edge, and they drew on top of each other.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(egui::RichText::new(&self.status).color(theme::color(palette.dim)));
                 if self.count() != self.total() {
                     ui.label(
                         egui::RichText::new(t!(
@@ -2236,6 +2239,32 @@ impl App {
 
             ui.separator();
 
+            // What just happened goes on this row rather than the toolbar.
+            // The toolbar is a dozen buttons and a search box wide already,
+            // and a message of any length beside them draws straight over
+            // the count: that row is claimed from the right, and whatever
+            // does not fit overflows leftwards on top of everything else.
+            // Here it sits beside the folder it is about.
+            //
+            // Its room is taken **before** the trail, and the trail gets
+            // what is left. The other way round, a scroll area takes the
+            // whole row and the message has nowhere to go.
+            let said = std::mem::take(&mut self.status);
+            let width = ui
+                .painter()
+                .layout_no_wrap(
+                    said.clone(),
+                    egui::FontId::proportional(14.0),
+                    theme::color(palette.dim),
+                )
+                .size()
+                .x;
+            let room = ui.available_width();
+            // Never more than half the row: a long message must not squeeze
+            // the folder we are standing in down to nothing.
+            let for_message = width.min(room * 0.5).max(0.0);
+            let for_trail = (room - for_message - 12.0).max(60.0);
+
             // The trail, outermost first. Each part opens the folder it names.
             let mut pick = None;
             let trail = self
@@ -2244,34 +2273,49 @@ impl App {
                 .map(History::trail)
                 .unwrap_or_default();
             let last = trail.len().saturating_sub(1);
-            egui::ScrollArea::horizontal()
-                .auto_shrink([false, true])
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        for (at, part) in trail.iter().enumerate() {
-                            let name = part
-                                .file_name()
-                                .map(|name| name.to_string_lossy().into_owned())
-                                .unwrap_or_else(|| part.to_string_lossy().into_owned());
-                            let text =
-                                egui::RichText::new(name).color(theme::color(if at == last {
-                                    palette.text
-                                } else {
-                                    palette.dim
-                                }));
-                            if ui.add(egui::Button::new(text).frame(false)).clicked() {
-                                pick = Some(part.clone());
-                            }
+            ui.allocate_ui_with_layout(
+                egui::Vec2::new(for_trail, ui.available_height()),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    egui::ScrollArea::horizontal()
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                for (at, part) in trail.iter().enumerate() {
+                                    let name = part
+                                        .file_name()
+                                        .map(|name| name.to_string_lossy().into_owned())
+                                        .unwrap_or_else(|| part.to_string_lossy().into_owned());
+                                    let text = egui::RichText::new(name).color(theme::color(
+                                        if at == last {
+                                            palette.text
+                                        } else {
+                                            palette.dim
+                                        },
+                                    ));
+                                    if ui.add(egui::Button::new(text).frame(false)).clicked() {
+                                        pick = Some(part.clone());
+                                    }
 
-                            if at != last {
-                                ui.label(
-                                    egui::RichText::new(SEPARATOR_MARK)
-                                        .color(theme::color(palette.dim)),
-                                );
-                            }
-                        }
-                    });
-                });
+                                    if at != last {
+                                        ui.label(
+                                            egui::RichText::new(SEPARATOR_MARK)
+                                                .color(theme::color(palette.dim)),
+                                        );
+                                    }
+                                }
+                            });
+                        });
+                },
+            );
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add(
+                    egui::Label::new(egui::RichText::new(&said).color(theme::color(palette.dim)))
+                        .truncate(),
+                );
+            });
+            self.status = said;
 
             if let Some(folder) = pick {
                 self.open(folder);

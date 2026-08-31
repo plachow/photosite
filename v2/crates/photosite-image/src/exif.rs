@@ -13,7 +13,7 @@ pub struct Thumbnail {
     pub len: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Exif {
     /// EXIF orientation, 1..8; 1 when none was found.
     pub orientation: u8,
@@ -45,6 +45,41 @@ pub struct Exif {
     /// The lens, where the camera bothered to record one. Phones mostly do
     /// not; interchangeable-lens cameras do.
     pub lens: Option<String>,
+    /// What the camera's clock was set to, against UTC, in seconds.
+    ///
+    /// The one thing that turns [`Self::taken_at`] from a wall clock into a
+    /// moment. Newer cameras and phones write it; older ones do not, and for
+    /// those there is no honest way to work it out.
+    pub offset_seconds: Option<i32>,
+    /// Where it was taken, and everything the file says about how well the
+    /// camera knew that. What to make of it is not decided here — see
+    /// [`Gps`].
+    pub gps: Option<Gps>,
+}
+
+/// What the file says about where it was taken.
+///
+/// Raw, and deliberately so: whether a position is to be trusted is a
+/// judgement, and judgements belong where they can be read and argued with
+/// rather than buried in a parser. This is the evidence; the verdict is
+/// reached in the core.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Gps {
+    /// Degrees, north and east positive, as everything from a map to a URL
+    /// expects. EXIF keeps the sign in a separate letter.
+    pub latitude: f64,
+    pub longitude: f64,
+    /// Metres above sea level, negative below it.
+    pub altitude: Option<f64>,
+    /// What the camera itself thought its horizontal error was, in metres.
+    /// Phones write it; cameras with a GPS chip mostly do not.
+    pub error_metres: Option<f64>,
+    /// `GPS`, `CELLID`, `WLAN`, `MANUAL` — how the position was arrived at.
+    pub method: Option<String>,
+    /// When the fix was taken, which is not always when the shutter fired.
+    /// Seconds since the epoch, and genuinely UTC: unlike `DateTimeOriginal`,
+    /// the GPS stamp is the satellites' own clock.
+    pub fixed_at: Option<i64>,
 }
 
 impl Exif {
@@ -56,6 +91,8 @@ impl Exif {
         height: None,
         camera: None,
         lens: None,
+        offset_seconds: None,
+        gps: None,
     };
 }
 
@@ -103,6 +140,8 @@ fn from_tiff(raw: &[u8]) -> Option<Exif> {
         height,
         camera: camera_name(reader.text(0, 0x010F), reader.text(0, 0x0110)),
         lens: reader.sub_ifd().and_then(|ifd| reader.text(ifd, 0xA434)),
+        offset_seconds: reader.offset_seconds(),
+        gps: reader.gps(),
     })
 }
 
@@ -182,6 +221,8 @@ fn parse(raw: &[u8]) -> Option<Exif> {
                 found.taken_at = reader.taken_at();
                 found.camera = camera_name(reader.text(0, 0x010F), reader.text(0, 0x0110));
                 found.lens = reader.sub_ifd().and_then(|ifd| reader.text(ifd, 0xA434));
+                found.offset_seconds = reader.offset_seconds();
+                found.gps = reader.gps();
             }
         }
 
@@ -472,6 +513,189 @@ impl<'a> TiffReader<'a> {
     }
 
     /// The EXIF sub-block, where everything about the exposure lives.
+    /// What the camera's clock was set to, against UTC.
+    ///
+    /// `OffsetTimeOriginal` is the one that belongs to the shutter; the other
+    /// two are the file's write time and the digitising time, and either is a
+    /// better guess than nothing. Written as `+01:00`, or `-05:00`.
+    fn offset_seconds(&self) -> Option<i32> {
+        let ifd = self.sub_ifd()?;
+        let text = self
+            .text(ifd, 0x9011)
+            .or_else(|| self.text(ifd, 0x9010))
+            .or_else(|| self.text(ifd, 0x9012))?;
+
+        let sign = match text.chars().next()? {
+            '+' => 1,
+            '-' => -1,
+            _ => return None,
+        };
+        let mut parts = text[1..].split(':');
+        let hours: i32 = parts.next()?.trim().parse().ok()?;
+        let minutes: i32 = parts.next().unwrap_or("0").trim().parse().unwrap_or(0);
+        let seconds = sign * (hours * 3_600 + minutes * 60);
+        (-14 * 3_600..=14 * 3_600)
+            .contains(&seconds)
+            .then_some(seconds)
+    }
+
+    /// Where the photograph says it was taken.
+    ///
+    /// GPS lives in a block of its own, hung off IFD0 under 0x8825. Nothing
+    /// in it is required, and phones and cameras disagree about which parts
+    /// they write, so every piece is read on its own and missing ones are
+    /// simply missing.
+    fn gps(&self) -> Option<Gps> {
+        let ifd = self.u32(self.find(self.ifd0()?, 0x8825)? + 8)? as usize;
+        let latitude = self.degrees(ifd, 0x0002, self.letter(ifd, 0x0001), b'S')?;
+        let longitude = self.degrees(ifd, 0x0004, self.letter(ifd, 0x0003), b'W')?;
+
+        // A camera with no fix writes zeroes rather than nothing at all.
+        // Null Island is in the Gulf of Guinea and nobody's holiday was
+        // there.
+        if latitude == 0.0 && longitude == 0.0 {
+            return None;
+        }
+
+        // Above or below the sea: 1 means below, and the number itself is
+        // never negative.
+        let below = self.short(ifd, 0x0005) == Some(1);
+        let altitude = self
+            .rational(ifd, 0x0006)
+            .map(|metres| if below { -metres } else { metres });
+
+        Some(Gps {
+            latitude,
+            longitude,
+            altitude,
+            error_metres: self.rational(ifd, 0x001F),
+            method: self.method(ifd),
+            fixed_at: self.fixed_at(ifd),
+        })
+    }
+
+    /// One coordinate: degrees, minutes and seconds, and the letter that
+    /// says which side of nothing it is on.
+    fn degrees(&self, ifd: usize, tag: u16, letter: Option<u8>, negative: u8) -> Option<f64> {
+        let parts = self.rationals(ifd, tag)?;
+        let degrees = *parts.first()?;
+        let minutes = parts.get(1).copied().unwrap_or(0.0);
+        let seconds = parts.get(2).copied().unwrap_or(0.0);
+        let value = degrees + minutes / 60.0 + seconds / 3600.0;
+        if !value.is_finite() || value > 180.0 {
+            return None;
+        }
+
+        Some(if letter == Some(negative) {
+            -value
+        } else {
+            value
+        })
+    }
+
+    /// The first letter of a one-character ASCII tag: `N`, `S`, `E`, `W`.
+    fn letter(&self, ifd: usize, tag: u16) -> Option<u8> {
+        let at = self.find(ifd, tag)?;
+        self.ascii_long(at)?
+            .iter()
+            .copied()
+            .find(|byte| byte.is_ascii_alphabetic())
+            .map(|byte| byte.to_ascii_uppercase())
+    }
+
+    /// How the position was arrived at.
+    ///
+    /// **Written two different ways in the wild.** The specification says
+    /// UNDEFINED with a seven-byte character-set header — `ASCII\0\0\0` for
+    /// the only one anybody writes — and phones write a plain ASCII string
+    /// instead. Insisting on the specification read nothing at all from four
+    /// hundred real photographs, nine of which were fixed off a cell tower
+    /// and were being called precise for it.
+    fn method(&self, ifd: usize) -> Option<String> {
+        let at = self.find(ifd, 0x001B)?;
+        let bytes = self.value_bytes(at)?;
+        let text = bytes
+            .strip_prefix(b"ASCII\0\0\0")
+            .or_else(|| bytes.strip_prefix(b"ASCII\0\0"))
+            .unwrap_or(bytes);
+        let text = std::str::from_utf8(text).ok()?;
+        let text = text.trim_end_matches('\0').trim();
+        (!text.is_empty()).then(|| text.to_ascii_uppercase())
+    }
+
+    /// When the fix was taken, from the date and the time, which are two
+    /// tags of two different types and neither is worth anything alone.
+    fn fixed_at(&self, ifd: usize) -> Option<i64> {
+        let date = self.text(ifd, 0x001D)?;
+        let mut parts = date.split([':', '-', '/']).filter_map(|p| p.parse().ok());
+        let (year, month, day) = (parts.next()?, parts.next()?, parts.next()?);
+
+        let time = self.rationals(ifd, 0x0007).unwrap_or_default();
+        let hour = time.first().copied().unwrap_or(0.0);
+        let minute = time.get(1).copied().unwrap_or(0.0);
+        let second = time.get(2).copied().unwrap_or(0.0);
+
+        Some(
+            days_from_civil(year, month, day) * 86_400
+                + (hour * 3_600.0 + minute * 60.0 + second) as i64,
+        )
+    }
+
+    /// The RATIONAL values of a tag: pairs of longs, a numerator and then a
+    /// denominator, held wherever the entry points.
+    fn rationals(&self, ifd: usize, tag: u16) -> Option<Vec<f64>> {
+        let at = self.find(ifd, tag)?;
+        // Type 5 is RATIONAL and 10 is its signed twin. Nothing else is a
+        // number of this shape, and reading one as if it were gives nonsense
+        // rather than an error.
+        let kind = self.u16(at + 2)?;
+        if kind != 5 && kind != 10 {
+            return None;
+        }
+
+        let count = (self.u32(at + 4)? as usize).min(8);
+        let start = self.u32(at + 8)? as usize;
+        let mut found = Vec::with_capacity(count);
+        for index in 0..count {
+            let pair = start.checked_add(index.checked_mul(8)?)?;
+            let numerator = self.u32(pair)?;
+            let denominator = self.u32(pair.checked_add(4)?)?;
+            found.push(if denominator == 0 {
+                0.0
+            } else if kind == 10 {
+                numerator as i32 as f64 / denominator as i32 as f64
+            } else {
+                numerator as f64 / denominator as f64
+            });
+        }
+
+        Some(found)
+    }
+
+    /// A tag holding one rational.
+    fn rational(&self, ifd: usize, tag: u16) -> Option<f64> {
+        self.rationals(ifd, tag)?.first().copied()
+    }
+
+    /// The bytes of a tag that holds bytes, in the entry or out of it.
+    ///
+    /// BYTE, ASCII and UNDEFINED are one byte per item and are read the same
+    /// way; nothing else is, and reading a rational as text gives rubbish
+    /// rather than an error.
+    fn value_bytes(&self, at: usize) -> Option<&'a [u8]> {
+        if !matches!(self.u16(at.checked_add(2)?)?, 1 | 2 | 7) {
+            return None;
+        }
+
+        let count = (self.u32(at.checked_add(4)?)? as usize).min(256);
+        if count <= 4 {
+            return self.bytes.get(at + 8..at + 8 + count);
+        }
+
+        let start = self.u32(at.checked_add(8)?)? as usize;
+        self.bytes.get(start..start.checked_add(count)?)
+    }
+
     fn sub_ifd(&self) -> Option<usize> {
         let at = self.find(self.ifd0()?, 0x8769)?;
         Some(self.u32(at + 8)? as usize)
@@ -574,6 +798,160 @@ mod tests {
         raw.extend_from_slice(b"Exif\x00\x00");
         raw.extend_from_slice(tiff);
         raw
+    }
+
+    /// A TIFF whose IFD0 points at a GPS block holding the given entries.
+    /// Each entry is a tag, a type and its bytes, laid out after the blocks.
+    fn tiff_with_gps(entries: &[(u16, u16, Vec<u8>)]) -> Vec<u8> {
+        let ifd0_at = 8usize;
+        let gps_at = ifd0_at + 2 + 12 + 4;
+        let data_at = gps_at + 2 + entries.len() * 12 + 4;
+
+        let mut data = Vec::new();
+        let mut placed = Vec::new();
+        for (tag, kind, bytes) in entries {
+            // Four bytes or fewer live in the entry itself; the count is a
+            // count of items, and for a rational an item is eight bytes.
+            let items = match kind {
+                5 | 10 => bytes.len() / 8,
+                _ => bytes.len(),
+            } as u32;
+            if bytes.len() <= 4 {
+                let mut inline = bytes.clone();
+                inline.resize(4, 0);
+                placed.push((
+                    *tag,
+                    *kind,
+                    items,
+                    u32::from_le_bytes([inline[0], inline[1], inline[2], inline[3]]),
+                ));
+            } else {
+                placed.push((*tag, *kind, items, (data_at + data.len()) as u32));
+                data.extend_from_slice(bytes);
+            }
+        }
+
+        let mut tiff = Vec::new();
+        tiff.extend_from_slice(b"II");
+        tiff.extend_from_slice(&42u16.to_le_bytes());
+        tiff.extend_from_slice(&(ifd0_at as u32).to_le_bytes());
+
+        // IFD0: one entry, the pointer to the GPS block.
+        tiff.extend_from_slice(&1u16.to_le_bytes());
+        tiff.extend_from_slice(&0x8825u16.to_le_bytes());
+        tiff.extend_from_slice(&4u16.to_le_bytes());
+        tiff.extend_from_slice(&1u32.to_le_bytes());
+        tiff.extend_from_slice(&(gps_at as u32).to_le_bytes());
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+
+        tiff.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        for (tag, kind, count, value) in &placed {
+            tiff.extend_from_slice(&tag.to_le_bytes());
+            tiff.extend_from_slice(&kind.to_le_bytes());
+            tiff.extend_from_slice(&count.to_le_bytes());
+            tiff.extend_from_slice(&value.to_le_bytes());
+        }
+
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+        assert_eq!(
+            tiff.len(),
+            data_at,
+            "the data does not start where the entries say"
+        );
+        tiff.extend_from_slice(&data);
+        tiff
+    }
+
+    /// Degrees, minutes and seconds as three rationals.
+    fn dms(degrees: u32, minutes: u32, seconds: u32) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        for (numerator, denominator) in [(degrees, 1u32), (minutes, 1), (seconds, 1)] {
+            bytes.extend_from_slice(&numerator.to_le_bytes());
+            bytes.extend_from_slice(&denominator.to_le_bytes());
+        }
+
+        bytes
+    }
+
+    #[test]
+    fn a_position_is_read_as_degrees_with_the_letter_for_a_sign() {
+        // 50 deg 4' 32" N, 14 deg 26' 16" E, which is Prague.
+        let tiff = tiff_with_gps(&[
+            (0x0001, 2, b"N\0".to_vec()),
+            (0x0002, 5, dms(50, 4, 32)),
+            (0x0003, 2, b"E\0".to_vec()),
+            (0x0004, 5, dms(14, 26, 16)),
+        ]);
+        let gps = read(&with_tiff(&tiff)).gps.expect("no position");
+        assert!((gps.latitude - 50.075_555).abs() < 1e-5, "{gps:?}");
+        assert!((gps.longitude - 14.437_777).abs() < 1e-5, "{gps:?}");
+
+        // And the southern, western half of the world, where the numbers are
+        // the same and the letters are not.
+        let tiff = tiff_with_gps(&[
+            (0x0001, 2, b"S\0".to_vec()),
+            (0x0002, 5, dms(50, 4, 32)),
+            (0x0003, 2, b"W\0".to_vec()),
+            (0x0004, 5, dms(14, 26, 16)),
+        ]);
+        let gps = read(&with_tiff(&tiff)).gps.expect("no position");
+        assert!(gps.latitude < 0.0 && gps.longitude < 0.0, "{gps:?}");
+    }
+
+    /// The one real files taught us. The specification says UNDEFINED with a
+    /// character-set header; phones write a plain ASCII string. Reading only
+    /// the specification called nine cell-tower fixes precise.
+    #[test]
+    fn the_method_is_read_however_the_camera_spelled_it() {
+        let position = |method: (u16, Vec<u8>)| {
+            let tiff = tiff_with_gps(&[
+                (0x0001, 2, b"N\0".to_vec()),
+                (0x0002, 5, dms(50, 0, 0)),
+                (0x0003, 2, b"E\0".to_vec()),
+                (0x0004, 5, dms(14, 0, 0)),
+                (0x001B, method.0, method.1),
+            ]);
+            read(&with_tiff(&tiff)).gps.expect("no position").method
+        };
+
+        assert_eq!(
+            position((2, b"CELLID\0".to_vec())),
+            Some("CELLID".to_owned())
+        );
+        assert_eq!(position((2, b"GPS\0".to_vec())), Some("GPS".to_owned()));
+        assert_eq!(
+            position((7, b"ASCII\0\0\0CELLID".to_vec())),
+            Some("CELLID".to_owned()),
+            "the character-set header was left in the answer"
+        );
+    }
+
+    #[test]
+    fn a_camera_with_no_fix_is_not_placed_in_the_gulf_of_guinea() {
+        let tiff = tiff_with_gps(&[
+            (0x0001, 2, b"N\0".to_vec()),
+            (0x0002, 5, dms(0, 0, 0)),
+            (0x0003, 2, b"E\0".to_vec()),
+            (0x0004, 5, dms(0, 0, 0)),
+        ]);
+        assert_eq!(read(&with_tiff(&tiff)).gps, None);
+    }
+
+    #[test]
+    fn a_photograph_with_no_gps_block_says_so() {
+        assert_eq!(read(&with_tiff(&tiff_with_orientation(1, 0))).gps, None);
+    }
+
+    #[test]
+    fn a_gps_block_pointing_at_nothing_does_not_panic() {
+        let mut tiff = tiff_with_gps(&[
+            (0x0001, 2, b"N\0".to_vec()),
+            (0x0002, 5, dms(50, 0, 0)),
+            (0x0003, 2, b"E\0".to_vec()),
+            (0x0004, 5, dms(14, 0, 0)),
+        ]);
+        tiff.truncate(tiff.len() - 20);
+        let _ = read(&with_tiff(&tiff));
     }
 
     fn tiff_with_orientation(value: u16, next_ifd: u32) -> Vec<u8> {

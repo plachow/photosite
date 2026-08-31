@@ -97,6 +97,17 @@ pub fn window(app: &mut App, ctx: &egui::Context, palette: &Palette) {
                         });
                     }
 
+                    // Only when there is something to review. A folder
+                    // where every position is precise — or where nothing
+                    // carries one at all — has nothing to ask about.
+                    if facets.places.iter().any(|verdict| verdict.is_doubted()) {
+                        section(ui, palette, &t!("filter-places"), |ui| {
+                            chips(ui, &mut filter.places, &facets.places, |verdict| {
+                                i18n::t(verdict.title_key())
+                            });
+                        });
+                    }
+
                     if facets.taken.is_some() {
                         section(ui, palette, &t!("filter-section-taken"), |ui| {
                             ui.horizontal(|ui| {

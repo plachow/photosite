@@ -52,6 +52,9 @@ fn write(catalog: &mut Catalog, files: &[std::path::PathBuf]) {
             orientation: 1,
             camera: None,
             lens: None,
+            place: None,
+            verdict: photosite_core::Verdict::Nowhere,
+            reason: None,
         })
         .collect();
     catalog.upsert_many(&batch).unwrap();

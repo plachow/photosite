@@ -195,6 +195,44 @@ pub fn new_folder(inside: &Path, name: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
+/// Hands a web address to whatever the system opens them with.
+///
+/// The one place this application reaches outside itself, and it is a link
+/// somebody clicked. A failure is logged and nothing more: not being able to
+/// open a browser is not a reason to interrupt anybody.
+pub fn open_link(url: &str) {
+    if let Err(error) = browse(url) {
+        tracing::warn!(%url, %error, "cannot open the link");
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn browse(url: &str) -> std::io::Result<()> {
+    // Through the shell, because a URL is not a program. The empty string is
+    // the window title `start` insists on eating first, or an address in
+    // quotation marks becomes one.
+    std::process::Command::new("cmd")
+        .args(["/C", "start", "", url])
+        .spawn()
+        .map(|_| ())
+}
+
+#[cfg(target_os = "macos")]
+fn browse(url: &str) -> std::io::Result<()> {
+    std::process::Command::new("open")
+        .arg(url)
+        .spawn()
+        .map(|_| ())
+}
+
+#[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+fn browse(url: &str) -> std::io::Result<()> {
+    std::process::Command::new("xdg-open")
+        .arg(url)
+        .spawn()
+        .map(|_| ())
+}
+
 /// Hands the photograph to the system's own file manager.
 ///
 /// Every platform spells this differently and none of them can be relied on,

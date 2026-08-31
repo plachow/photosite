@@ -6,6 +6,7 @@
 //! nothing does.
 
 use crate::domain::{ColorLabel, FileIdentity, Flag, Organisation, Photo, PhotoId};
+use crate::place::{Place, Reason, Verdict};
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension as _, params};
 use std::path::{Path, PathBuf};
@@ -124,6 +125,20 @@ const MIGRATIONS: &[Migration] = &[
         CREATE INDEX metadata_outbox_due ON metadata_outbox(not_before);
     ",
     },
+    Migration {
+        name: "0005-where-it-was-taken",
+        // The position and what we make of it. The verdict is stored rather
+        // than worked out on every tile because the evidence it rests on —
+        // the error estimate, the method, the age of the fix — is in the
+        // file and not in the catalogue, and re-reading a file to draw a
+        // badge is a file open per photograph per frame.
+        sql: "
+        ALTER TABLE photos ADD COLUMN latitude  REAL;
+        ALTER TABLE photos ADD COLUMN longitude REAL;
+        ALTER TABLE photos ADD COLUMN place_verdict INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE photos ADD COLUMN place_reason  INTEGER NOT NULL DEFAULT 0;
+    ",
+    },
 ];
 
 /// How many times a file is tried before it is left alone.
@@ -146,7 +161,8 @@ const SEPARATOR: char = std::path::MAIN_SEPARATOR;
 /// The columns [`read_photo`] expects, in its order. Written once so a column
 /// added to one query and not the other cannot happen.
 const COLUMNS: &str = "id, path, folder, file_size, modified_at, taken_at, width, height, \
-                       orientation, camera, lens, rating, label, flag, title, description";
+                       orientation, camera, lens, rating, label, flag, title, description, \
+                       latitude, longitude, place_verdict, place_reason";
 
 /// **Every column here is one the disk owns.** The organisation — rating,
 /// label, flag, title, description — is deliberately absent from the update:
@@ -154,8 +170,9 @@ const COLUMNS: &str = "id, path, folder, file_size, modified_at, taken_at, width
 /// about it. Touching a photograph on disk would otherwise clear its stars.
 const UPSERT: &str = "
     INSERT INTO photos(path, folder, file_size, modified_at, taken_at, width, height,
-                       orientation, camera, lens, indexed)
-    VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1)
+                       orientation, camera, lens, latitude, longitude, place_verdict,
+                       place_reason, indexed)
+    VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 1)
     ON CONFLICT(path) DO UPDATE SET
         folder = excluded.folder,
         file_size = excluded.file_size,
@@ -166,6 +183,10 @@ const UPSERT: &str = "
         orientation = excluded.orientation,
         camera = excluded.camera,
         lens = excluded.lens,
+        latitude = excluded.latitude,
+        longitude = excluded.longitude,
+        place_verdict = excluded.place_verdict,
+        place_reason = excluded.place_reason,
         indexed = 1
 ";
 
@@ -276,26 +297,8 @@ impl Catalog {
 
     /// Writes a photograph, or updates the one already at that path.
     pub fn upsert(&self, photo: &NewPhoto) -> Result<PhotoId> {
-        let folder = photo
-            .path
-            .parent()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        self.conn.execute(
-            UPSERT,
-            params![
-                photo.path.to_string_lossy(),
-                folder,
-                photo.file_size as i64,
-                photo.modified_at,
-                photo.taken_at,
-                photo.width,
-                photo.height,
-                photo.orientation,
-                photo.camera,
-                photo.lens,
-            ],
-        )?;
+        self.conn
+            .execute(UPSERT, rusqlite::params_from_iter(upsert_params(photo)))?;
         Ok(PhotoId(self.conn.query_row(
             "SELECT id FROM photos WHERE path = ?1",
             params![photo.path.to_string_lossy()],
@@ -313,23 +316,7 @@ impl Catalog {
         {
             let mut statement = transaction.prepare(UPSERT)?;
             for photo in photos {
-                let folder = photo
-                    .path
-                    .parent()
-                    .map(|p| p.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                statement.execute(params![
-                    photo.path.to_string_lossy(),
-                    folder,
-                    photo.file_size as i64,
-                    photo.modified_at,
-                    photo.taken_at,
-                    photo.width,
-                    photo.height,
-                    photo.orientation,
-                    photo.camera,
-                    photo.lens,
-                ])?;
+                statement.execute(rusqlite::params_from_iter(upsert_params(photo)))?;
             }
         }
 
@@ -962,7 +949,7 @@ pub struct Pending {
 }
 
 /// How many columns [`COLUMNS`] names, so a query can add its own after them.
-const COLUMN_COUNT: usize = 16;
+const COLUMN_COUNT: usize = 20;
 
 /// What gets written into the catalogue. No `id`, because the database
 /// hands that out.
@@ -977,7 +964,66 @@ pub struct NewPhoto {
     pub orientation: u8,
     pub camera: Option<String>,
     pub lens: Option<String>,
+    /// Where the file says it was taken, and how much of that to believe.
+    /// Both come off the disk, so both are overwritten by a rescan — which
+    /// is right: a correction is written into the file, and read back from
+    /// it, exactly the way a rating is.
+    pub place: Option<Place>,
+    pub verdict: Verdict,
+    pub reason: Option<Reason>,
 }
+
+/// Everything [`UPSERT`] wants, in its order.
+///
+/// **One list, used by both the single write and the batch.** They each had
+/// their own and it went exactly as one would expect: a column added to one
+/// and not the other, and a batch that failed with "got 10, needed 14" only
+/// once a test happened to use it.
+fn upsert_params(photo: &NewPhoto) -> [rusqlite::types::Value; UPSERT_PARAMS] {
+    use rusqlite::types::Value;
+
+    let folder = photo
+        .path
+        .parent()
+        .map(|parent| parent.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let number = |value: Option<u32>| match value {
+        Some(value) => Value::Integer(i64::from(value)),
+        None => Value::Null,
+    };
+    let degrees = |value: Option<f64>| match value {
+        Some(value) => Value::Real(value),
+        None => Value::Null,
+    };
+    let text = |value: Option<&String>| match value {
+        Some(value) => Value::Text(value.clone()),
+        None => Value::Null,
+    };
+
+    [
+        Value::Text(photo.path.to_string_lossy().into_owned()),
+        Value::Text(folder),
+        Value::Integer(photo.file_size as i64),
+        Value::Integer(photo.modified_at),
+        match photo.taken_at {
+            Some(taken) => Value::Integer(taken),
+            None => Value::Null,
+        },
+        number(photo.width),
+        number(photo.height),
+        Value::Integer(i64::from(photo.orientation)),
+        text(photo.camera.as_ref()),
+        text(photo.lens.as_ref()),
+        degrees(photo.place.map(|place| place.latitude)),
+        degrees(photo.place.map(|place| place.longitude)),
+        Value::Integer(photo.verdict.as_number()),
+        Value::Integer(photo.reason.map(Reason::as_number).unwrap_or(0)),
+    ]
+}
+
+/// How many values [`UPSERT`] binds. Guarded by a test against the statement
+/// itself, so the two cannot drift.
+const UPSERT_PARAMS: usize = 14;
 
 /// Builds a photograph out of one row of [`COLUMNS`].
 ///
@@ -999,6 +1045,12 @@ fn read_photo(row: &rusqlite::Row<'_>) -> rusqlite::Result<Photo> {
         orientation: row.get(8)?,
         camera: row.get(9)?,
         lens: row.get(10)?,
+        place: row
+            .get::<_, Option<f64>>(16)?
+            .zip(row.get::<_, Option<f64>>(17)?)
+            .and_then(|(latitude, longitude)| Place::new(latitude, longitude)),
+        verdict: Verdict::from_number(row.get(18)?),
+        reason: Reason::from_number(row.get(19)?),
         organisation: Organisation {
             rating: row
                 .get::<_, i64>(11)?
@@ -1062,6 +1114,9 @@ mod tests {
             orientation: 6,
             camera: Some("NIKON Z 6".to_owned()),
             lens: None,
+            place: None,
+            verdict: crate::place::Verdict::Nowhere,
+            reason: None,
         }
     }
 
@@ -1162,6 +1217,36 @@ mod tests {
     #[test]
     fn the_column_count_matches_the_column_list() {
         assert_eq!(COLUMNS.split(',').count(), COLUMN_COUNT);
+    }
+
+    /// The write side of the same worry, and the one that actually bit: the
+    /// single upsert and the batch each had their own parameter list, and a
+    /// column went into one of them.
+    #[test]
+    fn the_upsert_binds_as_many_values_as_it_asks_for() {
+        let highest = (1..=64)
+            .filter(|number| UPSERT.contains(&format!("?{number}")))
+            .max()
+            .expect("the statement binds nothing at all");
+        assert_eq!(highest, UPSERT_PARAMS, "{UPSERT}");
+        assert_eq!(
+            upsert_params(&NewPhoto {
+                path: PathBuf::from("/a/b.jpg"),
+                file_size: 1,
+                modified_at: 2,
+                taken_at: None,
+                width: None,
+                height: None,
+                orientation: 1,
+                camera: None,
+                lens: None,
+                place: None,
+                verdict: crate::place::Verdict::Nowhere,
+                reason: None,
+            })
+            .len(),
+            UPSERT_PARAMS
+        );
     }
 
     #[test]

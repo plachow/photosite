@@ -22,6 +22,7 @@
 
 use crate::domain::{ColorLabel, Flag, Photo};
 use crate::i18n::t;
+use crate::place::Verdict;
 use std::collections::BTreeSet;
 
 /// The shape of the frame, which is not the same as its orientation tag: a
@@ -81,6 +82,10 @@ pub struct Filter {
     pub cameras: BTreeSet<String>,
     pub lenses: BTreeSet<String>,
     pub shape: Shape,
+    /// How much a photograph's position is to be trusted. This is what
+    /// collects the doubtful ones for a look, which is the only reason to
+    /// mark them in the first place.
+    pub places: BTreeSet<Verdict>,
     /// Seconds since the epoch, both ends inclusive.
     pub taken_from: Option<i64>,
     pub taken_to: Option<i64>,
@@ -101,6 +106,7 @@ impl Filter {
             || !self.cameras.is_empty()
             || !self.lenses.is_empty()
             || self.shape != Shape::Any
+            || !self.places.is_empty()
             || self.taken_from.is_some()
             || self.taken_to.is_some()
             || self.hide_rejected
@@ -146,6 +152,10 @@ impl Filter {
         }
 
         if self.shape != Shape::Any && Shape::of(photo) != Some(self.shape) {
+            return false;
+        }
+
+        if !self.places.is_empty() && !self.places.contains(&photo.verdict) {
             return false;
         }
 
@@ -254,6 +264,12 @@ impl Filter {
             parts.push(t(self.shape.title_key()));
         }
 
+        if !self.places.is_empty() {
+            parts.push(join(
+                self.places.iter().map(|verdict| t(verdict.title_key())),
+            ));
+        }
+
         if self.taken_from.is_some() || self.taken_to.is_some() {
             parts.push(t("filter-date"));
         }
@@ -297,6 +313,10 @@ pub struct Facets {
     pub labels: Vec<ColorLabel>,
     pub flags: Vec<Flag>,
     pub shapes: Vec<Shape>,
+    /// Which verdicts this folder actually holds. A folder where every
+    /// position is precise has nothing to review, and says so by offering
+    /// nothing.
+    pub places: Vec<Verdict>,
     /// The highest rating anything here carries. Offering "four stars and up"
     /// in a folder where nothing has more than two is offering an empty
     /// gallery.
@@ -315,6 +335,7 @@ impl Facets {
         let mut labels = BTreeSet::new();
         let mut flags = BTreeSet::new();
         let mut shapes = BTreeSet::new();
+        let mut places = BTreeSet::new();
         let mut highest_rating = 0u8;
         let mut taken: Option<(i64, i64)> = None;
 
@@ -340,6 +361,7 @@ impl Facets {
             // half way through a cull.
             labels.insert(photo.organisation.label);
             flags.insert(photo.organisation.flag);
+            places.insert(photo.verdict);
             highest_rating = highest_rating.max(photo.organisation.rating);
 
             if let Some(at) = photo.taken_at {
@@ -357,6 +379,7 @@ impl Facets {
             labels: labels.into_iter().collect(),
             flags: flags.into_iter().collect(),
             shapes: shapes.into_iter().collect(),
+            places: places.into_iter().collect(),
             highest_rating,
             taken,
         }
@@ -368,6 +391,36 @@ mod tests {
     use super::*;
     use crate::domain::{Organisation, PhotoId};
     use std::path::PathBuf;
+
+    /// The point of marking a doubtful position is being able to collect
+    /// them afterwards. A mark nobody can act on is decoration.
+    #[test]
+    fn the_doubted_positions_can_be_collected() {
+        let mut folder = vec![photo("a.jpg"), photo("b.jpg"), photo("c.jpg")];
+        folder[0].verdict = Verdict::Precise;
+        folder[0].place = crate::place::Place::new(50.0, 14.0);
+        folder[1].verdict = Verdict::Doubtful;
+        folder[1].place = crate::place::Place::new(50.0, 14.0);
+        // And one that says nothing about where it was.
+
+        let filter = Filter {
+            places: [Verdict::Doubtful, Verdict::Approximate]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        let kept: Vec<&str> = folder
+            .iter()
+            .filter(|photo| filter.keeps(photo))
+            .map(|photo| photo.path.file_name().unwrap().to_str().unwrap())
+            .collect();
+        assert_eq!(kept, ["b.jpg"]);
+
+        // And a folder with nothing to review offers nothing to review with.
+        let facets = Facets::of(&folder);
+        assert!(facets.places.contains(&Verdict::Doubtful));
+        assert!(facets.places.contains(&Verdict::Nowhere));
+    }
 
     fn photo(name: &str) -> Photo {
         Photo {
@@ -383,6 +436,9 @@ mod tests {
             camera: None,
             lens: None,
             organisation: Organisation::default(),
+            place: None,
+            verdict: crate::place::Verdict::Nowhere,
+            reason: None,
         }
     }
 

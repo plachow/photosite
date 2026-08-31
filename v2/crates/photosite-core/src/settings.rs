@@ -97,6 +97,13 @@ pub struct Gallery {
     pub sort_field: String,
     pub sort_descending: bool,
     pub last_folder: Option<String>,
+    /// Where the Map button goes, as an address holding `{lat}` and `{lon}`.
+    ///
+    /// A template rather than a fixed map, because which one somebody wants
+    /// is not ours to decide: it differs by country, by habit and by whether
+    /// they have an account anywhere. OpenStreetMap is the one that needs
+    /// none of those.
+    pub map_url: String,
     /// Where the last copy or move went. Remembered so that sorting a folder
     /// into piles is one dialog and then a key, rather than one dialog for
     /// every photograph.
@@ -120,6 +127,7 @@ impl Default for Gallery {
             sort_descending: false,
             last_folder: None,
             last_destination: None,
+            map_url: crate::place::OPENSTREETMAP.to_owned(),
         }
     }
 }
@@ -562,6 +570,11 @@ pub const TUNABLES: &[Tunable] = &[
         path: "gallery.sort_descending",
         label_key: "setting-sort-descending",
         kind: Kind::Bool,
+    },
+    Tunable {
+        path: "gallery.map_url",
+        label_key: "setting-map-url",
+        kind: Kind::Text,
     },
     Tunable {
         path: "gallery.last_folder",

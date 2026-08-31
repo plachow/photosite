@@ -118,7 +118,8 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
 
                     if let Some(photo) = app.photo(index) {
                         let organisation = photo.organisation.clone();
-                        theme::badges(ui.painter(), well, palette, &organisation);
+                        let verdict = photo.verdict;
+                        theme::badges(ui.painter(), well, palette, &organisation, verdict);
                     }
                 }
             }
