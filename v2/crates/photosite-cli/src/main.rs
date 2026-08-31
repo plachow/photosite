@@ -8,7 +8,6 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use photosite_core::catalog::NewPhoto;
 use photosite_core::{Catalog, Paths, diagnostics, domain, i18n, jobs, t};
 use std::path::{Path, PathBuf};
 
@@ -129,25 +128,42 @@ fn scan(paths: &Paths, folder: &Path, recursive: bool) -> Result<()> {
     catalog.upsert_identities(&files)?;
     let waiting = catalog.unindexed(folder, recursive)?;
     let skipped = files.len().saturating_sub(waiting.len()) as u64;
-    let (mut added, mut failed) = (0u64, 0u64);
+    let (mut added, mut failed, mut seeded) = (0u64, 0u64, 0u64);
 
     // In batches: one write to the catalogue per thousand files, not per
     // file.
     for chunk in waiting.chunks(1000) {
         let mut batch = Vec::with_capacity(chunk.len());
+        let mut said = Vec::with_capacity(chunk.len());
         for path in chunk {
-            match read_one(path) {
-                Ok(photo) => batch.push(photo),
-                Err(error) => {
+            match photosite_meta::scan(path) {
+                Some((photo, what)) => {
+                    said.push((photo.path.clone(), what));
+                    batch.push(photo);
+                }
+                None => {
                     // Failing on one file is normal. Saying nothing is not.
                     failed += 1;
-                    tracing::warn!(path = %path.display(), error = %format!("{error:#}"), "file skipped");
+                    tracing::warn!(path = %path.display(), "file skipped");
                 }
             }
         }
 
         added += batch.len() as u64;
         catalog.upsert_many(&batch)?;
+
+        // What the files already say fills in what the catalogue does not.
+        for (path, what) in said {
+            if what.is_empty() {
+                continue;
+            }
+
+            if let Some(id) = catalog.id_of(&path)?
+                && catalog.seed(id, &what.as_organisation())?
+            {
+                seeded += 1;
+            }
+        }
     }
 
     let seconds = started.elapsed().as_secs_f64();
@@ -162,26 +178,12 @@ fn scan(paths: &Paths, folder: &Path, recursive: bool) -> Result<()> {
             rate = files.len() as f64 / seconds.max(0.001)
         )
     );
+    if seeded > 0 {
+        println!("{}", t!("cli-scan-seeded", count = seeded as i64));
+    }
+
     println!("{}", t!("cli-catalog-total", count = catalog.count()?));
     Ok(())
-}
-
-/// Reads out of one file what belongs in the catalogue. Only the header is
-/// read, not the whole photograph — nobody here cares about pixels.
-fn read_one(path: &Path) -> Result<NewPhoto> {
-    let identity = domain::FileIdentity::read(path)?;
-    let meta = photosite_image::exif::read_file(path);
-    Ok(NewPhoto {
-        path: identity.path,
-        file_size: identity.file_size,
-        modified_at: identity.modified_at,
-        taken_at: meta.taken_at,
-        width: meta.width,
-        height: meta.height,
-        orientation: meta.orientation,
-        camera: meta.camera,
-        lens: meta.lens,
-    })
 }
 
 fn list(paths: &Paths, folder: &Path, recursive: bool) -> Result<()> {

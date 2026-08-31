@@ -228,6 +228,8 @@ pub struct App {
     pub selection: BTreeSet<usize>,
     /// The background pass reading this folder's headers, while one runs.
     indexing: Option<u64>,
+    /// The background pass writing what somebody said into the files.
+    writing: Option<u64>,
 
     textures: HashMap<Key, egui::TextureHandle>,
     order: Vec<Key>,
@@ -366,6 +368,7 @@ impl App {
             filter: Filter::default(),
             facets: Facets::default(),
             show_filter: false,
+            writing: None,
             filter_from: String::new(),
             filter_to: String::new(),
             selected: None,
@@ -455,6 +458,8 @@ impl App {
         self.selection.clear();
         self.relist();
         self.start_indexing();
+        // Anything left unwritten from last time goes now.
+        self.start_writing();
 
         self.status = t!(
             "gallery-count",
@@ -647,9 +652,29 @@ impl App {
                     break;
                 }
 
-                let batch: Vec<NewPhoto> =
-                    chunk.iter().filter_map(|path| read_header(path)).collect();
+                let read: Vec<(NewPhoto, photosite_meta::xmp::Xmp)> = chunk
+                    .iter()
+                    .filter_map(|path| photosite_meta::scan(path))
+                    .collect();
+                let batch: Vec<NewPhoto> = read.iter().map(|(photo, _)| photo.clone()).collect();
                 catalog.upsert_many(&batch)?;
+
+                // A library that has been used before arrives with ratings
+                // and titles already in the files. Taking them is what makes
+                // an old library look like itself the first time it is
+                // opened here — and `seed` never overwrites anything already
+                // said in the catalogue.
+                for (photo, said) in &read {
+                    if said.is_empty() {
+                        continue;
+                    }
+
+                    if let Some(id) = catalog.id_of(&photo.path)?
+                        && catalog.seed(id, &said.as_organisation())?
+                    {
+                        tracing::debug!(path = %photo.path.display(), "took what the file said");
+                    }
+                }
                 done += chunk.len() as u64;
                 progress.report(done, Some(total), message.clone());
 
@@ -899,6 +924,138 @@ impl App {
         }
     }
 
+    /// Queues the selection to be written into the files themselves.
+    ///
+    /// Always in the same breath as the catalogue change, so the two cannot
+    /// come apart: the queue names the photograph and the write reads the
+    /// catalogue, so whatever order things happen in, what lands in the file
+    /// is what the catalogue says.
+    fn queue_write(&mut self, photos: &[PhotoId]) {
+        if photos.is_empty() {
+            return;
+        }
+
+        let now = now();
+        self.write_catalog(|catalog| catalog.enqueue(photos, now));
+        self.start_writing();
+    }
+
+    /// Drains the queue on a thread of its own.
+    ///
+    /// Writing metadata means rewriting a six megabyte file. Doing that on
+    /// the way to the next frame would stall the window for as long as the
+    /// disk takes, and somebody culling a folder makes one of these every
+    /// time they press a key.
+    fn start_writing(&mut self) {
+        if self.writing.is_some() {
+            return;
+        }
+
+        // Nothing waiting means no thread. Opening a folder asks every time,
+        // and spawning one to find out there is nothing to do is a thread
+        // per folder for no reason.
+        let Some(catalog) = self.catalog.as_ref() else {
+            return;
+        };
+
+        match catalog.outbox() {
+            Ok((0, _)) => return,
+            Ok(_) => {}
+            Err(error) => {
+                tracing::error!(error = %format!("{error:#}"), "cannot tell what is unwritten");
+                return;
+            }
+        }
+
+        let path = self.paths.catalog();
+        let waker = self.waker.clone();
+        let title = t!("task-writing-metadata");
+        self.writing = Some(self.tasks.spawn(title, move |cancel, progress| {
+            let mut catalog = Catalog::open(&path)?;
+            let mut done = 0u64;
+
+            loop {
+                if cancel.cancelled() {
+                    break;
+                }
+
+                let due = catalog.due(now(), 64)?;
+                if due.is_empty() {
+                    // Anything left is waiting out a backoff or has given up.
+                    // Waiting here rather than finishing is what makes a file
+                    // that was open elsewhere get written once it is closed,
+                    // without somebody having to touch it again.
+                    let (waiting, given_up) = catalog.outbox()?;
+                    if waiting <= given_up {
+                        break;
+                    }
+
+                    for _ in 0..30 {
+                        if cancel.cancelled() {
+                            return Ok(());
+                        }
+
+                        std::thread::sleep(std::time::Duration::from_secs(1));
+                    }
+
+                    continue;
+                }
+
+                for entry in due {
+                    if cancel.cancelled() {
+                        break;
+                    }
+
+                    let path = entry.photo.path.clone();
+                    match photosite_meta::write(&path, &entry.photo.organisation) {
+                        Ok(_) => match photosite_core::FileIdentity::read(&path) {
+                            Ok(identity) => catalog.written(entry.photo.id, &identity)?,
+                            // Written but we cannot see it any more: the
+                            // entry stays so the row is brought up to date
+                            // on another go.
+                            Err(error) => catalog.write_failed(
+                                entry.photo.id,
+                                now(),
+                                &format!("written, but cannot be read back: {error}"),
+                            )?,
+                        },
+                        Err(error) => {
+                            let error = format!("{error:#}");
+                            tracing::warn!(path = %path.display(), %error, "the metadata could not be written");
+                            catalog.write_failed(entry.photo.id, now(), &error)?;
+                        }
+                    }
+
+                    done += 1;
+                    progress.report(done, None, path.display().to_string());
+                }
+
+                if let Some(ctx) = waker.get() {
+                    ctx.request_repaint();
+                }
+            }
+
+            Ok(())
+        }));
+    }
+
+    /// Notices that the drain has finished.
+    fn collect_writing(&mut self) {
+        let Some(id) = self.writing else {
+            return;
+        };
+
+        if self
+            .tasks
+            .snapshot()
+            .into_iter()
+            .any(|task| task.id == id && task.finished)
+        {
+            self.writing = None;
+            self.tasks.forget_finished();
+        }
+    }
+
     /// Writes through to the catalogue, and says so when it cannot.
     ///
     /// A change that reached the screen and not the disk is the worst of the
@@ -930,6 +1087,7 @@ impl App {
         }
 
         self.write_catalog(|catalog| catalog.set_rating(&chosen, stars));
+        self.queue_write(&chosen);
         let stars = stars.min(photosite_core::domain::Organisation::MAX_RATING);
         for at in self.selection.clone() {
             if let Some(photo) = self.photo_mut(at) {
@@ -945,6 +1103,7 @@ impl App {
         }
 
         self.write_catalog(|catalog| catalog.set_label(&chosen, label));
+        self.queue_write(&chosen);
         for at in self.selection.clone() {
             if let Some(photo) = self.photo_mut(at) {
                 photo.organisation.label = label;
@@ -970,6 +1129,10 @@ impl App {
             .all(|photo| photo.organisation.flag == flag);
         let wanted = if already { Flag::None } else { flag };
 
+        // The verdict is not an XMP property and nothing is written into
+        // the file for it — but the queue is still nudged, because the file
+        // is rewritten from the catalogue as a whole and this keeps one code
+        // path rather than two.
         self.write_catalog(|catalog| catalog.set_flag(&chosen, wanted));
         for at in self.selection.clone() {
             if let Some(photo) = self.photo_mut(at) {
@@ -1001,6 +1164,7 @@ impl App {
         let text = self.edit_title.clone();
         let value = (!text.trim().is_empty()).then(|| text.trim().to_owned());
         self.write_catalog(|catalog| catalog.set_title(photo, value.as_deref()));
+        self.queue_write(&[photo]);
         if let Some(at) = self.selected
             && let Some(photo) = self.photo_mut(at)
         {
@@ -1013,6 +1177,7 @@ impl App {
         let text = self.edit_description.clone();
         let value = (!text.trim().is_empty()).then(|| text.trim().to_owned());
         self.write_catalog(|catalog| catalog.set_description(photo, value.as_deref()));
+        self.queue_write(&[photo]);
         if let Some(at) = self.selected
             && let Some(photo) = self.photo_mut(at)
         {
@@ -1033,6 +1198,7 @@ impl App {
             .filter(|word| !word.is_empty())
             .collect();
         self.write_catalog(|catalog| catalog.set_keywords(photo, &words));
+        self.queue_write(&[photo]);
 
         // Read back what the catalogue made of it, so the field shows the
         // tidied list rather than what was typed.
@@ -1176,6 +1342,17 @@ fn effective_budget(configured: i64, needed: usize) -> usize {
     configured.max(floor)
 }
 
+/// Seconds since the epoch.
+///
+/// The queue needs a clock for its backoff, and this is the only place the
+/// application asks for one.
+fn now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 /// Every photograph in a folder, with what the directory listing already
 /// says about it.
 ///
@@ -1208,23 +1385,6 @@ fn walk(folder: &Path, recursive: bool) -> Vec<FileIdentity> {
     files
 }
 
-/// What one file's header says, as a row for the catalogue.
-fn read_header(path: &Path) -> Option<NewPhoto> {
-    let identity = FileIdentity::read(path).ok()?;
-    let meta = img::exif::read_file(path);
-    Some(NewPhoto {
-        path: identity.path,
-        file_size: identity.file_size,
-        modified_at: identity.modified_at,
-        taken_at: meta.taken_at,
-        width: meta.width,
-        height: meta.height,
-        orientation: meta.orientation,
-        camera: meta.camera,
-        lens: meta.lens,
-    })
-}
-
 fn into_pixels(rgb: img::Rgb) -> Pixels {
     Pixels {
         size: [rgb.width as usize, rgb.height as usize],
@@ -1237,6 +1397,7 @@ impl eframe::App for App {
         let ctx = ui.ctx().clone();
         let delivered = self.collect(&ctx);
         self.collect_indexing();
+        self.collect_writing();
         self.take_picked_folder();
         self.shortcuts(&ctx);
 
@@ -2106,6 +2267,41 @@ mod culling {
             .expect("cannot read")
             .expect("no row");
         assert_eq!(written.organisation.rating, 4);
+    }
+
+    /// The catalogue and the queue move together, or the file and the
+    /// catalogue come apart.
+    #[test]
+    fn saying_something_queues_the_file_to_be_written() {
+        let (mut app, _data, _photos) = three();
+        let catalog = app.catalog.as_ref().expect("no catalogue");
+        assert_eq!(catalog.outbox().unwrap(), (0, 0));
+
+        app.select_only(0);
+        app.select_through(1);
+        app.run_for_test("photo.rate_4");
+
+        let catalog = app.catalog.as_ref().expect("no catalogue");
+        assert_eq!(
+            catalog.outbox().unwrap().0,
+            2,
+            "the stars went into the catalogue but nowhere near the files"
+        );
+    }
+
+    /// The verdict is ours alone — there is no XMP property for it and
+    /// inventing one would be a private dialect nothing else reads.
+    #[test]
+    fn a_verdict_is_kept_here_and_not_pushed_into_the_file() {
+        let (mut app, _data, _photos) = three();
+        app.select_only(0);
+        app.run_for_test("photo.pick");
+        assert_eq!(app.photo(0).unwrap().organisation.flag, Flag::Picked);
+        assert_eq!(
+            app.catalog.as_ref().unwrap().outbox().unwrap().0,
+            0,
+            "a verdict has nothing to write"
+        );
     }
 
     #[test]

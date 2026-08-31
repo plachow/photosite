@@ -12,6 +12,7 @@ license = "MIT"
 [workspace.dependencies]
 photosite-core = { path = "crates/photosite-core" }
 photosite-image = { path = "crates/photosite-image" }
+photosite-meta = { path = "crates/photosite-meta" }
 
 anyhow = "1"
 thiserror = "2"
@@ -35,6 +36,14 @@ rfd = "0.17"
 pollster = "1"
 clap = { version = "4", features = ["derive"] }
 jpeg-decoder = "0.3"
+# Writing metadata without shipping exiftool and a copy of Perl. little_exif
+# is the only pure-Rust crate that writes EXIF as well as reads it.
+little_exif = "0.6"
+# XMP goes through a plain XML reader and writer rather than through a
+# dedicated XMP crate. The packet has to be *merged* — a photograph already
+# carrying somebody else's properties must keep them — and a write-only
+# builder cannot preserve what it never read.
+quick-xml = "0.38"
 fast_image_resize = "6"
 image = { version = "0.25.10", default-features = false, features = [
     "png",

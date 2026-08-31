@@ -6,7 +6,7 @@ A clean sheet. Rust, egui over wgpu, Windows / macOS / Linux from one source.
 cd v2
 cargo run --release -p photosite-ui              # the application
 cargo run --release -p photosite-cli -- doctor   # where everything lives
-cargo test --workspace                           # 204 tests, no window, no GPU
+cargo test --workspace                           # 253 tests, no window, no GPU
 ```
 
 ## Layout
@@ -15,6 +15,7 @@ cargo test --workspace                           # 204 tests, no window, no GPU
 crates/
   photosite-core     domain, catalogue + migrations, paths, settings, log, tasks, commands
   photosite-image    decoding, downscaling, EXIF
+  photosite-meta     what a photograph says about itself: XMP and EXIF, read and written
   photosite-ui       egui — the only crate that knows about the GPU
   photosite-cli      headless: runs the whole pipeline without a window
 ```
@@ -350,22 +351,81 @@ typing in the search box costs one pass over memory rather than one query.
 Over a hundred thousand photographs that is the difference between a search
 box and a stutter.
 
+## Writing into the photographs
+
+The stars, the label and the words go into the files themselves, so Lightroom,
+digiKam, darktable and Explorer all see the same thing — **without exiftool**.
+What PhotoSite writes is five XMP properties and two EXIF numbers; exiftool's
+worth is its breadth, and its cost is a 35 MB binary with its own copy of Perl,
+once per platform.
+
+It reads them too, which turned out to matter more than expected: a library
+that has been used before arrives with metadata already in the files. On one
+real folder of 2,861 photographs, **700 came with a rating and 267 with a
+title** — put there by v1. A first scan takes them, and never overwrites
+anything already said here.
+
+Three rules, and every one of them is something that goes wrong quietly.
+
+**Read before writing.** Handing a metadata writer a fresh, empty set means
+"this is the whole of the file's metadata". A spike did exactly that to a real
+photograph and turned 5,484 bytes of EXIF into 48 — capture date, camera,
+exposure and orientation gone in one call. That spike is the reason this rule
+is written down rather than assumed.
+
+**Merge, never replace.** A packet holds other people's properties too. Ours
+are taken out of wherever they were — child elements or attributes, under any
+prefix — and written back as one block; everything else is copied through.
+Properties are matched by namespace URI and never by prefix, because the same
+namespace is `xmp:` to most tools and `xap:` to older ones, v1 included.
+
+**Prove the photograph is untouched.** The compressed image is compared before
+and after, in memory, and the write is refused if a single byte differs. On a
+6.4 MB photograph the file grows by a few hundred bytes, settles on the second
+write, and the picture is byte-identical.
+
+Only JPEG is written into. Everything else — RAW above all — gets a `.xmp`
+beside it: a sidecar cannot damage a photograph, and a format we cannot walk
+segment by segment is one we cannot promise to preserve.
+
+### The outbox
+
+Writing a six megabyte file cannot happen on the way to the next frame, and
+somebody culling a folder makes one of these on every keypress. So a change
+goes into the catalogue and a queue in the same breath, and a thread drains it.
+
+**The queue holds no payload.** v1 queued the change; this queues the
+*photograph*, and what gets written is whatever the catalogue says at the
+moment of writing. A retry therefore writes the truth as it stands rather than
+a change that may since have been undone, rating a photograph twice leaves one
+entry rather than two, and there is no way for the queue and the catalogue to
+disagree. One row per photograph, so the primary key does the collapsing.
+
+A file that cannot be written — open elsewhere, on a drive that is not there —
+backs off and is tried again, eight times, and then stays in the queue with its
+error rather than being thrown away. A fresh change clears the attempts,
+because whatever stopped the last write may well be over.
+
+The verdict is deliberately **not** written anywhere. There is no standard XMP
+property for pick and reject; Lightroom keeps it in its own catalogue and so do
+we, rather than inventing a private dialect nothing else reads.
+
 ## Where this stands
 
 The scaffolding is done and the photographic features are being brought over
-on top of it. Browsing, culling, organising, filtering and searching work;
-editing, batch conversion, import, faces and the AI describer are still v1's
-alone.
+on top of it. Browsing, culling, organising, filtering, searching and writing
+metadata back into the files all work; editing, batch conversion, import,
+faces and the AI describer are still v1's alone.
 
 | | |
 |---|---|
-| tests | 204 (including 6,000 fuzz cases over EXIF and 70 checked colour pairs) |
+| tests | 253 (including 6,000 fuzz cases over EXIF and 70 checked colour pairs) |
 | scan of 7,558 photographs | 0.3 s; 0.1 s on a repeat |
 | opening 134,990 photographs recursively | 727 ms |
 | `cargo clippy -D warnings` | clean |
 | themes | 5 plus following the system |
 | settings entries | 29, screen generated from the descriptions |
-| catalogue schema | 3 migrations |
+| catalogue schema | 4 migrations |
 
 A cross-check from Windows passes for `photosite-image` against both targets.
 The rest does not, because `libsqlite3-sys` with `bundled` compiles C and that
@@ -374,9 +434,9 @@ done by CI**, where the runners are native.
 
 ## What is missing, and known to be
 
-Of v1's features, in the order they are being brought across: writing metadata
-into the files themselves, file operations and navigation, RAW, comparison,
-import, the editor, batch conversion, faces, the AI describer.
+Of v1's features, in the order they are being brought across: file operations
+and navigation, RAW, comparison, import, the editor, batch conversion, faces,
+the AI describer.
 
 Three of the filter's facets are waiting on features that come later: people,
 the smiling and eyes-open scores, and the approximate-GPS verdict. All three

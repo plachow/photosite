@@ -16,6 +16,7 @@ workspace = true
 [dependencies]
 photosite-core.workspace = true
 photosite-image.workspace = true
+photosite-meta.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 serde.workspace = true

@@ -338,3 +338,13 @@ filter-any = Any
 filter-from = from
 filter-to = to
 filter-taken-range = this folder spans { $from } to { $to }
+
+task-writing-metadata = Writing into the photographs
+diagnostics-unwritten = waiting to be written
+diagnostics-unwritable = could not be written
+
+cli-scan-seeded =
+    { $count ->
+        [one] took what { $count } photograph already said
+       *[other] took what { $count } photographs already said
+    }

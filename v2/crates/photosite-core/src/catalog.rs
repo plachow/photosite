@@ -101,7 +101,38 @@ const MIGRATIONS: &[Migration] = &[
         UPDATE photos SET indexed = 0;
     ",
     },
+    Migration {
+        name: "0004-metadata-outbox",
+        // What still has to be written into the files themselves.
+        //
+        // There is no payload here, and that is the point. v1 queued the
+        // change; this queues the *photograph*, and what gets written is
+        // whatever the catalogue says at the moment the write happens. A
+        // retry therefore writes the truth as it stands rather than a change
+        // that may since have been undone, rating a photograph twice leaves
+        // one entry rather than two, and there is no way for the queue and
+        // the catalogue to disagree.
+        //
+        // One row per photograph, so the primary key does the collapsing.
+        sql: "
+        CREATE TABLE metadata_outbox (
+            photo_id   INTEGER PRIMARY KEY REFERENCES photos(id) ON DELETE CASCADE,
+            not_before INTEGER NOT NULL,
+            attempts   INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT
+        );
+        CREATE INDEX metadata_outbox_due ON metadata_outbox(not_before);
+    ",
+    },
 ];
+
+/// How many times a file is tried before it is left alone.
+///
+/// It stays in the queue with its error afterwards rather than being thrown
+/// away: a photograph on a disconnected drive should be written when the
+/// drive comes back, and one that can never be written is something somebody
+/// needs to be told about.
+pub const MAX_ATTEMPTS: i64 = 8;
 
 /// Which schema version this build is built for.
 pub fn latest_version() -> i64 {
@@ -470,6 +501,194 @@ impl Catalog {
         Ok(photos)
     }
 
+    /// Takes what the file says, but only where the catalogue says nothing.
+    ///
+    /// A library that has been used before arrives with ratings and titles
+    /// already in the files — v1 put them there, and so did whatever anybody
+    /// used before that. Showing a photograph as unrated when the file says
+    /// five stars is wrong, and so is overwriting what somebody has since
+    /// said here. So the file seeds an empty field and never touches a full
+    /// one; the condition is in the statement rather than in a read followed
+    /// by a write, so two of these cannot race.
+    ///
+    /// Returns whether anything was taken.
+    pub fn seed(&mut self, photo: PhotoId, from: &Organisation) -> Result<bool> {
+        let transaction = self.conn.transaction()?;
+        let mut taken = transaction.execute(
+            "UPDATE photos SET
+                 rating = CASE WHEN rating = 0 THEN ?2 ELSE rating END,
+                 label  = CASE WHEN label  = 0 THEN ?3 ELSE label  END,
+                 title  = CASE WHEN title  IS NULL THEN ?4 ELSE title END,
+                 description = CASE WHEN description IS NULL THEN ?5 ELSE description END
+             WHERE id = ?1
+               AND (   (rating = 0 AND ?2 <> 0)
+                    OR (label  = 0 AND ?3 <> 0)
+                    OR (title  IS NULL AND ?4 IS NOT NULL)
+                    OR (description IS NULL AND ?5 IS NOT NULL))",
+            params![
+                photo.0,
+                from.rating.min(Organisation::MAX_RATING) as i64,
+                from.label.as_i64(),
+                blank_to_none(from.title.as_deref()),
+                blank_to_none(from.description.as_deref()),
+            ],
+        )?;
+
+        // Keywords are all or nothing: a photograph that already carries some
+        // has been spoken about, and merging a file's list into it would put
+        // back whatever somebody has just taken off.
+        if !from.keywords.is_empty() {
+            let has: i64 = transaction.query_row(
+                "SELECT COUNT(*) FROM keywords WHERE photo_id = ?1",
+                params![photo.0],
+                |row| row.get(0),
+            )?;
+            if has == 0 {
+                let mut statement = transaction
+                    .prepare("INSERT OR IGNORE INTO keywords(photo_id, keyword) VALUES(?1, ?2)")?;
+                for keyword in tidy_keywords(&from.keywords) {
+                    statement.execute(params![photo.0, keyword])?;
+                    taken += 1;
+                }
+            }
+        }
+
+        transaction.commit()?;
+        Ok(taken > 0)
+    }
+
+    /// Queues photographs to be written into.
+    ///
+    /// Called with the same selection the change was applied to, in the same
+    /// breath, so the queue and the catalogue move together.
+    pub fn enqueue(&mut self, photos: &[PhotoId], now: i64) -> Result<()> {
+        if photos.is_empty() {
+            return Ok(());
+        }
+
+        let transaction = self.conn.transaction()?;
+        {
+            // A fresh change clears the attempts: whatever stopped the last
+            // write — a file open elsewhere, a drive not there — may well be
+            // over, and making somebody wait out a backoff they cannot see
+            // is not reasonable.
+            let mut statement = transaction.prepare(
+                "INSERT INTO metadata_outbox(photo_id, not_before, attempts, last_error)
+                 VALUES(?1, ?2, 0, NULL)
+                 ON CONFLICT(photo_id) DO UPDATE SET
+                     not_before = ?2, attempts = 0, last_error = NULL",
+            )?;
+            for photo in photos {
+                statement.execute(params![photo.0, now])?;
+            }
+        }
+
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// What is due to be written, and what to write.
+    ///
+    /// The organisation comes out of the catalogue here and not out of the
+    /// queue, which is what makes a retry write the truth as it stands.
+    pub fn due(&self, now: i64, limit: usize) -> Result<Vec<Pending>> {
+        let mut statement = self.conn.prepare(&format!(
+            "SELECT {COLUMNS}, o.attempts FROM metadata_outbox o
+             JOIN photos p ON p.id = o.photo_id
+             WHERE o.not_before <= ?1 AND o.attempts < ?2
+             ORDER BY o.not_before
+             LIMIT ?3"
+        ))?;
+        let mut pending = statement
+            .query_map(params![now, MAX_ATTEMPTS, limit as i64], |row| {
+                Ok(Pending {
+                    photo: read_photo(row)?,
+                    attempts: row.get(COLUMN_COUNT)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        for entry in &mut pending {
+            entry.photo.organisation.keywords = self.keywords_of(entry.photo.id)?;
+        }
+
+        Ok(pending)
+    }
+
+    /// The file now says what the catalogue says.
+    ///
+    /// The row's length and write time are brought up to date in the same
+    /// breath. Writing metadata changes both, and leaving them stale would
+    /// have the next scan read the whole file again to learn what we just
+    /// put there ourselves.
+    pub fn written(&mut self, photo: PhotoId, identity: &FileIdentity) -> Result<()> {
+        let transaction = self.conn.transaction()?;
+        transaction.execute(
+            "DELETE FROM metadata_outbox WHERE photo_id = ?1",
+            params![photo.0],
+        )?;
+        transaction.execute(
+            "UPDATE photos SET file_size = ?2, modified_at = ?3 WHERE id = ?1",
+            params![photo.0, identity.file_size as i64, identity.modified_at],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// It could not be written. Says why, and when to try again.
+    pub fn write_failed(&self, photo: PhotoId, now: i64, error: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE metadata_outbox
+             SET attempts = attempts + 1,
+                 last_error = ?3,
+                 not_before = ?2 + (attempts + 1) * 120
+             WHERE photo_id = ?1",
+            params![photo.0, now, error],
+        )?;
+        Ok(())
+    }
+
+    /// How many photographs are waiting, and how many have given up.
+    pub fn outbox(&self) -> Result<(i64, i64)> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*), COALESCE(SUM(attempts >= ?1), 0) FROM metadata_outbox",
+            params![MAX_ATTEMPTS],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?)
+    }
+
+    /// What went wrong, for whoever has to be told.
+    pub fn outbox_failures(&self, limit: usize) -> Result<Vec<(PathBuf, String)>> {
+        let mut statement = self.conn.prepare(
+            "SELECT p.path, o.last_error FROM metadata_outbox o
+             JOIN photos p ON p.id = o.photo_id
+             WHERE o.attempts >= ?1 AND o.last_error IS NOT NULL
+             ORDER BY p.path LIMIT ?2",
+        )?;
+        Ok(statement
+            .query_map(params![MAX_ATTEMPTS, limit as i64], |row| {
+                Ok((PathBuf::from(row.get::<_, String>(0)?), row.get(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// The number a path lives under, and nothing else.
+    ///
+    /// Cheaper than [`Catalog::by_path`] where only the identity is wanted:
+    /// that one fetches the row and then its keywords, which is two queries
+    /// for an answer of one number.
+    pub fn id_of(&self, path: &Path) -> Result<Option<PhotoId>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id FROM photos WHERE path = ?1",
+                params![path.to_string_lossy()],
+                |row| row.get(0),
+            )
+            .optional()?
+            .map(PhotoId))
+    }
+
     /// Every keyword on one photograph, in order.
     pub fn keywords_of(&self, photo: PhotoId) -> Result<Vec<String>> {
         let mut statement = self
@@ -650,6 +869,16 @@ impl Catalog {
             .unwrap_or(false))
     }
 }
+
+/// A photograph waiting to be written into, and what to write.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Pending {
+    pub photo: Photo,
+    pub attempts: i64,
+}
+
+/// How many columns [`COLUMNS`] names, so a query can add its own after them.
+const COLUMN_COUNT: usize = 16;
 
 /// What gets written into the catalogue. No `id`, because the database
 /// hands that out.
@@ -841,6 +1070,203 @@ mod tests {
         catalog.set_setting("x", "1").unwrap();
         catalog.set_setting("x", "2").unwrap();
         assert_eq!(catalog.setting("x").unwrap().as_deref(), Some("2"));
+    }
+
+    /// The count is used to reach past the photograph's own columns in a
+    /// query that adds its own. Getting it wrong reads the wrong column, and
+    /// nothing else would notice.
+    #[test]
+    fn the_column_count_matches_the_column_list() {
+        assert_eq!(COLUMNS.split(',').count(), COLUMN_COUNT);
+    }
+
+    #[test]
+    fn queueing_the_same_photograph_twice_leaves_one_entry() {
+        let mut catalog = Catalog::in_memory().unwrap();
+        let id = catalog.upsert(&sample("/a/b.jpg")).unwrap();
+        catalog.enqueue(&[id], 100).unwrap();
+        catalog.enqueue(&[id], 200).unwrap();
+        assert_eq!(catalog.outbox().unwrap(), (1, 0));
+    }
+
+    /// The reason there is no payload. A retry writes what the catalogue says
+    /// at the moment of writing, not what it said when the change was made.
+    #[test]
+    fn what_is_due_carries_what_the_catalogue_says_now() {
+        let mut catalog = Catalog::in_memory().unwrap();
+        let id = catalog.upsert(&sample("/a/b.jpg")).unwrap();
+        catalog.set_rating(&[id], 2).unwrap();
+        catalog.enqueue(&[id], 100).unwrap();
+
+        // Somebody changes their mind before the write ever happens.
+        catalog.set_rating(&[id], 5).unwrap();
+        catalog.add_keywords(&[id], &["holiday"]).unwrap();
+
+        let due = catalog.due(200, 10).unwrap();
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].photo.organisation.rating, 5);
+        assert_eq!(due[0].photo.organisation.keywords, ["holiday"]);
+        assert_eq!(due[0].attempts, 0);
+    }
+
+    #[test]
+    fn nothing_is_due_before_its_time() {
+        let mut catalog = Catalog::in_memory().unwrap();
+        let id = catalog.upsert(&sample("/a/b.jpg")).unwrap();
+        catalog.enqueue(&[id], 500).unwrap();
+        assert!(catalog.due(499, 10).unwrap().is_empty());
+        assert_eq!(catalog.due(500, 10).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_written_photograph_leaves_the_queue_and_its_row_is_brought_up_to_date() {
+        let mut catalog = Catalog::in_memory().unwrap();
+        let id = catalog.upsert(&sample("/a/b.jpg")).unwrap();
+        catalog.enqueue(&[id], 100).unwrap();
+
+        // Writing metadata changes the file's length and write time; leaving
+        // them stale would have the next scan read the whole file again to
+        // learn what we put there ourselves.
+        let after = FileIdentity {
+            path: PathBuf::from("/a/b.jpg"),
+            file_size: 9999,
+            modified_at: 1_800_000_000,
+        };
+        catalog.written(id, &after).unwrap();
+
+        assert_eq!(catalog.outbox().unwrap(), (0, 0));
+        let photo = catalog.by_path(Path::new("/a/b.jpg")).unwrap().unwrap();
+        assert_eq!(photo.file_size, 9999);
+        assert!(catalog.is_current(&after).unwrap());
+    }
+
+    #[test]
+    fn a_failure_says_why_and_waits_before_trying_again() {
+        let mut catalog = Catalog::in_memory().unwrap();
+        let id = catalog.upsert(&sample("/a/b.jpg")).unwrap();
+        catalog.enqueue(&[id], 100).unwrap();
+        catalog
+            .write_failed(id, 100, "the file is open elsewhere")
+            .unwrap();
+
+        assert!(catalog.due(150, 10).unwrap().is_empty(), "no backoff");
+        let due = catalog.due(1000, 10).unwrap();
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].attempts, 1);
+    }
+
+    #[test]
+    fn a_photograph_that_keeps_failing_stops_being_offered_but_is_not_forgotten() {
+        let mut catalog = Catalog::in_memory().unwrap();
+        let id = catalog.upsert(&sample("/a/b.jpg")).unwrap();
+        catalog.enqueue(&[id], 0).unwrap();
+        for _ in 0..MAX_ATTEMPTS {
+            catalog.write_failed(id, 0, "no").unwrap();
+        }
+
+        assert!(catalog.due(i64::MAX / 2, 10).unwrap().is_empty());
+        assert_eq!(catalog.outbox().unwrap(), (1, 1), "it was thrown away");
+        let failures = catalog.outbox_failures(10).unwrap();
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].1, "no");
+    }
+
+    /// A drive that was not there may be there now. Making somebody wait out
+    /// a backoff they cannot see would be unreasonable.
+    #[test]
+    fn a_fresh_change_gives_a_given_up_photograph_another_go() {
+        let mut catalog = Catalog::in_memory().unwrap();
+        let id = catalog.upsert(&sample("/a/b.jpg")).unwrap();
+        catalog.enqueue(&[id], 0).unwrap();
+        for _ in 0..MAX_ATTEMPTS {
+            catalog.write_failed(id, 0, "no").unwrap();
+        }
+
+        catalog.enqueue(&[id], 1000).unwrap();
+        assert_eq!(catalog.due(1000, 10).unwrap().len(), 1);
+        assert_eq!(catalog.outbox().unwrap(), (1, 0));
+    }
+
+    #[test]
+    fn a_deleted_photograph_takes_its_queue_entry_with_it() {
+        let mut catalog = Catalog::in_memory().unwrap();
+        let id = catalog.upsert(&sample("/a/b.jpg")).unwrap();
+        catalog.enqueue(&[id], 0).unwrap();
+        catalog
+            .conn
+            .execute("DELETE FROM photos WHERE id = ?1", params![id.0])
+            .unwrap();
+        assert_eq!(catalog.outbox().unwrap(), (0, 0));
+    }
+
+    #[test]
+    fn what_the_file_says_fills_in_what_the_catalogue_does_not() {
+        let mut catalog = Catalog::in_memory().unwrap();
+        let id = catalog.upsert(&sample("/a/b.jpg")).unwrap();
+
+        let from_file = Organisation {
+            rating: 5,
+            label: ColorLabel::Red,
+            flag: Flag::None,
+            title: Some("From the file".to_owned()),
+            description: None,
+            keywords: vec!["Prague".to_owned()],
+        };
+        assert!(catalog.seed(id, &from_file).unwrap());
+
+        let photo = catalog.by_path(Path::new("/a/b.jpg")).unwrap().unwrap();
+        assert_eq!(photo.organisation.rating, 5);
+        assert_eq!(photo.organisation.label, ColorLabel::Red);
+        assert_eq!(photo.organisation.title.as_deref(), Some("From the file"));
+        assert_eq!(photo.organisation.keywords, ["Prague"]);
+    }
+
+    /// The other half, and the one that would be expensive to get wrong:
+    /// what somebody said here beats what the file says.
+    #[test]
+    fn what_the_catalogue_already_says_is_not_overwritten_by_the_file() {
+        let mut catalog = Catalog::in_memory().unwrap();
+        let id = catalog.upsert(&sample("/a/b.jpg")).unwrap();
+        catalog.set_rating(&[id], 1).unwrap();
+        catalog.set_title(id, Some("Mine")).unwrap();
+        catalog.add_keywords(&[id], &["mine"]).unwrap();
+
+        let from_file = Organisation {
+            rating: 5,
+            label: ColorLabel::Red,
+            flag: Flag::None,
+            title: Some("From the file".to_owned()),
+            description: Some("Also from the file".to_owned()),
+            keywords: vec!["Prague".to_owned()],
+        };
+        catalog.seed(id, &from_file).unwrap();
+
+        let photo = catalog.by_path(Path::new("/a/b.jpg")).unwrap().unwrap();
+        assert_eq!(photo.organisation.rating, 1, "the rating was overwritten");
+        assert_eq!(photo.organisation.title.as_deref(), Some("Mine"));
+        assert_eq!(photo.organisation.keywords, ["mine"]);
+        // What was empty is still filled in: the label and the description
+        // had nothing to lose.
+        assert_eq!(photo.organisation.label, ColorLabel::Red);
+        assert_eq!(
+            photo.organisation.description.as_deref(),
+            Some("Also from the file")
+        );
+    }
+
+    #[test]
+    fn seeding_from_a_file_that_says_nothing_changes_nothing() {
+        let mut catalog = Catalog::in_memory().unwrap();
+        let id = catalog.upsert(&sample("/a/b.jpg")).unwrap();
+        assert!(!catalog.seed(id, &Organisation::default()).unwrap());
+        assert!(
+            catalog
+                .by_path(Path::new("/a/b.jpg"))
+                .unwrap()
+                .unwrap()
+                .organisation
+                .is_empty()
+        );
     }
 
     /// The one that matters most in this whole file. Somebody rates a

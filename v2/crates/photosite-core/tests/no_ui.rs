@@ -63,6 +63,11 @@ fn the_core_does_not_depend_on_the_ui() {
 }
 
 #[test]
+fn metadata_writing_does_not_depend_on_the_ui() {
+    check("photosite-meta");
+}
+
+#[test]
 fn images_do_not_depend_on_the_ui() {
     check("photosite-image");
 }
