@@ -348,3 +348,36 @@ cli-scan-seeded =
         [one] took what { $count } photograph already said
        *[other] took what { $count } photographs already said
     }
+
+## Getting about and doing things to files
+
+group-go = Go
+
+command-go-back = Back
+command-go-forward = Forward
+command-go-up = Up one folder
+
+command-file-rename = Rename…
+command-file-duplicate = Duplicate
+command-file-delete = Move to the recycle bin
+command-file-new-folder = New folder…
+command-file-reveal = Show in the file manager
+
+ask-rename = Rename
+ask-new-folder = New folder
+ask-name = Name
+ask-confirm = OK
+ask-cancel = Cancel
+
+files-nothing-selected = Nothing is selected
+files-renamed = Renamed
+files-duplicated =
+    { $count ->
+        [one] { $count } copy made
+       *[other] { $count } copies made
+    }
+files-deleted =
+    { $count ->
+        [one] { $count } photograph moved to the recycle bin
+       *[other] { $count } photographs moved to the recycle bin
+    }

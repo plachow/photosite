@@ -6,7 +6,7 @@ A clean sheet. Rust, egui over wgpu, Windows / macOS / Linux from one source.
 cd v2
 cargo run --release -p photosite-ui              # the application
 cargo run --release -p photosite-cli -- doctor   # where everything lives
-cargo test --workspace                           # 253 tests, no window, no GPU
+cargo test --workspace                           # 276 tests, no window, no GPU
 ```
 
 ## Layout
@@ -410,16 +410,49 @@ The verdict is deliberately **not** written anywhere. There is no standard XMP
 property for pick and reject; Lightroom keeps it in its own catalogue and so do
 we, rather than inventing a private dialect nothing else reads.
 
+## Getting about, and doing things to files
+
+Back, forward and up with a clickable trail, on their own row rather than
+crowded onto the toolbar — the path is the one thing there of no fixed width,
+and a folder twelve deep would push everything else off the edge. Going back
+and then somewhere new throws the forward trail away, the way a browser does:
+a forward that leads somewhere nobody was heading is worse than none.
+
+Rename, duplicate, a new folder, show in the file manager, and delete — which
+means **the recycle bin, never `remove_file`**. The one place in this
+application that could destroy a photograph for good is the one place that
+should not exist.
+
+Two rules hold across all of it.
+
+**The catalogue follows the file.** A rename moves the row rather than
+forgetting one and writing another, because the rating, the label and the
+words all hang off its number. People rename files constantly and would never
+think to be careful about it, so
+`a_renamed_photograph_keeps_everything_said_about_it` is a test in the
+catalogue and again over the whole application. A moved folder is done in the
+catalogue rather than by rescanning both ends: five thousand photographs need
+not give up their headers again to have been moved.
+
+**The sidecar is part of the photograph.** A `.xmp` left behind under the old
+name is everything that file held, lost — so it is renamed and deleted
+alongside.
+
+The folder is watched, so what another program does to it shows here. Bursts
+are waited out rather than answered one at a time, and our own writing is
+ignored: a rescan for every star anybody presses would be a rescan a second.
+
 ## Where this stands
 
 The scaffolding is done and the photographic features are being brought over
-on top of it. Browsing, culling, organising, filtering, searching and writing
-metadata back into the files all work; editing, batch conversion, import,
-faces and the AI describer are still v1's alone.
+on top of it. Browsing, culling, organising, filtering, searching, writing
+metadata back into the files, getting about and the everyday file operations
+all work; editing, batch conversion, import, faces and the AI describer are
+still v1's alone.
 
 | | |
 |---|---|
-| tests | 253 (including 6,000 fuzz cases over EXIF and 70 checked colour pairs) |
+| tests | 276 (including 6,000 fuzz cases over EXIF and 70 checked colour pairs) |
 | scan of 7,558 photographs | 0.3 s; 0.1 s on a repeat |
 | opening 134,990 photographs recursively | 727 ms |
 | `cargo clippy -D warnings` | clean |
@@ -434,9 +467,9 @@ done by CI**, where the runners are native.
 
 ## What is missing, and known to be
 
-Of v1's features, in the order they are being brought across: file operations
-and navigation, RAW, comparison, import, the editor, batch conversion, faces,
-the AI describer.
+Of v1's features, in the order they are being brought across: RAW, comparison,
+import, the editor, batch conversion, faces, the AI describer. Of the file
+operations, copying and moving to a chosen folder are not done — the rest are.
 
 Three of the filter's facets are waiting on features that come later: people,
 the smiling and eyes-open scores, and the approximate-GPS verdict. All three
@@ -455,7 +488,6 @@ while Lightroom reads `xmp:Rating`, so both get written; and the offline
 reverse geocoding the AI describer used came out of exiftool's database and
 needs a GeoNames extract in its place.
 
-Beyond the features: watching the disk for changes (`notify`), a single
-instance, accessibility, signing and notarisation for macOS, automatic
-updates. Of the languages, only English so far — cs-CZ is first in line.
+Beyond the features: a single instance, accessibility, signing and
+notarisation for macOS, automatic updates. Of the languages, only English so far — cs-CZ is first in line.
 None of it requires rewriting what is done.

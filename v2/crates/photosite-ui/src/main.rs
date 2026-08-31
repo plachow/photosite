@@ -9,6 +9,7 @@
 //! what cannot be configured gets rewritten sooner or later.
 
 mod docks;
+mod files;
 mod filter;
 mod grid;
 mod info;
@@ -21,6 +22,7 @@ use photosite_core::catalog::NewPhoto;
 use photosite_core::commands::{Bindings, Group, Shortcut};
 use photosite_core::domain::{ColorLabel, Flag, Photo, PhotoId, Sort, SortField};
 use photosite_core::filter::{Facets, Filter};
+use photosite_core::history::History;
 use photosite_core::settings::{Gallery, Kind, Settings, TUNABLES, Tunable};
 use photosite_core::{
     Catalog, FileIdentity, Paths, commands, diagnostics, docks as layout, i18n, jobs, t,
@@ -197,6 +199,19 @@ pub struct App {
 
     pub roots: Vec<Node>,
     pub folder: Option<PathBuf>,
+    /// Where somebody has been, so back and forward mean something.
+    history: History,
+    /// A name being typed, when one is.
+    pub asking: Option<files::Asking>,
+    /// Kept alive so it keeps watching; dropping it stops the watch.
+    watcher: Option<notify::RecommendedWatcher>,
+    /// Set by the watcher when something in the folder changed. Read on the
+    /// UI thread, which is the only place that may touch the rest.
+    disturbed: Arc<std::sync::atomic::AtomicBool>,
+    /// When the last disturbance was noticed. A folder being written to by
+    /// something else produces a burst of these, and rereading on each one
+    /// would be a rescan a millisecond.
+    disturbed_at: Option<std::time::Instant>,
     /// The folder as the catalogue holds it, in the chosen order —
     /// everything, whether the filter lets it through or not.
     ///
@@ -363,6 +378,11 @@ impl App {
             catalog,
             roots: roots(),
             folder: None,
+            history: History::new(),
+            asking: None,
+            watcher: None,
+            disturbed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            disturbed_at: None,
             all: Vec::new(),
             visible: Vec::new(),
             filter: Filter::default(),
@@ -461,6 +481,8 @@ impl App {
         // Anything left unwritten from last time goes now.
         self.start_writing();
 
+        self.history.went(folder.clone());
+        self.watch(&folder);
         self.status = t!(
             "gallery-count",
             count = count as i64,
@@ -477,6 +499,114 @@ impl App {
         reveal(&mut roots, &folder);
         self.roots = roots;
         self.scroll_tree_to = Some(folder);
+    }
+
+    /// Goes wherever the history says, without recording it again.
+    fn go(&mut self, folder: Option<PathBuf>) {
+        let Some(folder) = folder else {
+            return;
+        };
+
+        if folder.is_dir() {
+            self.open(folder);
+        } else {
+            // A folder that has been renamed or unplugged since. Saying so
+            // beats opening nothing and leaving somebody wondering.
+            self.status = t!("error-not-a-folder", path = folder.display().to_string());
+        }
+    }
+
+    /// Watches the open folder, so that what another program does to it
+    /// shows here.
+    ///
+    /// One folder at a time: the old watcher is dropped, which is what stops
+    /// it. Watching every folder ever visited would hold handles on drives
+    /// somebody has finished with.
+    fn watch(&mut self, folder: &Path) {
+        use notify::Watcher as _;
+
+        self.watcher = None;
+        let disturbed = self.disturbed.clone();
+        let waker = self.waker.clone();
+        let mut watcher = match notify::recommended_watcher(move |outcome| match outcome {
+            Ok(_) => {
+                disturbed.store(true, std::sync::atomic::Ordering::Relaxed);
+                if let Some(ctx) = waker.get() {
+                    ctx.request_repaint();
+                }
+            }
+            Err(error) => tracing::warn!(%error, "the folder watch reported an error"),
+        }) {
+            Ok(watcher) => watcher,
+            Err(error) => {
+                // Not being able to watch is a smaller thing than not being
+                // able to browse; F5 still works.
+                tracing::warn!(%error, "the folder cannot be watched");
+                return;
+            }
+        };
+
+        let depth = if self.settings.gallery.recursive {
+            notify::RecursiveMode::Recursive
+        } else {
+            notify::RecursiveMode::NonRecursive
+        };
+        match watcher.watch(folder, depth) {
+            Ok(()) => self.watcher = Some(watcher),
+            Err(error) => tracing::warn!(folder = %folder.display(), %error, "cannot watch"),
+        }
+    }
+
+    /// Rereads the folder once whatever was happening to it has stopped.
+    fn collect_disturbance(&mut self) {
+        if self
+            .disturbed
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
+            self.disturbed_at = Some(std::time::Instant::now());
+        }
+
+        let Some(since) = self.disturbed_at else {
+            return;
+        };
+
+        // Our own writing disturbs the folder, and rereading on the back of
+        // it would mean a rescan for every star anybody presses.
+        if self.writing.is_some() {
+            self.disturbed_at = None;
+            return;
+        }
+
+        if since.elapsed() < std::time::Duration::from_millis(600) {
+            return;
+        }
+
+        self.disturbed_at = None;
+        if let Some(folder) = self.folder.clone() {
+            tracing::debug!(folder = %folder.display(), "the folder changed underneath us");
+            self.open(folder);
+        }
+    }
+
+    /// The photographs the file operations act on.
+    fn chosen_paths(&self) -> Vec<PathBuf> {
+        self.selection
+            .iter()
+            .filter_map(|at| self.photo(*at))
+            .map(|photo| photo.path.clone())
+            .collect()
+    }
+
+    /// Runs a file operation and says what came of it, whichever way it went.
+    fn did<T>(&mut self, outcome: anyhow::Result<T>, said: impl FnOnce(T) -> String) {
+        match outcome {
+            Ok(value) => self.status = said(value),
+            Err(error) => {
+                let error = format!("{error:#}");
+                tracing::error!(%error, "the file operation failed");
+                self.status = error;
+            }
+        }
     }
 
     /// How the gallery is ordered right now.
@@ -690,6 +820,13 @@ impl App {
         }));
     }
 
+    /// Reads the folder again after something happened to it on disk.
+    fn reopen(&mut self) {
+        if let Some(folder) = self.folder.clone() {
+            self.open(folder);
+        }
+    }
+
     /// Notices that the background pass has finished and takes the rows
     /// again. Polled every frame, which costs one lock and nothing else.
     fn collect_indexing(&mut self) {
@@ -844,6 +981,64 @@ impl App {
                 self.settings.window.docks_hidden = String::new();
                 self.layout = layout::parse_or_default(layout::DEFAULT);
                 self.hidden.clear();
+            }
+            "go.back" => {
+                let to = self.history.back().map(Path::to_path_buf);
+                self.go(to);
+            }
+            "go.forward" => {
+                let to = self.history.forward().map(Path::to_path_buf);
+                self.go(to);
+            }
+            "go.up" => {
+                let to = self.folder.as_deref().and_then(History::up_from);
+                self.go(to);
+            }
+            "file.rename" => {
+                if let Some(photo) = self.photo_at_cursor() {
+                    let path = photo.path.clone();
+                    let name = path
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    self.asking = Some(files::Asking::Rename { path, name });
+                }
+            }
+            "file.duplicate" => {
+                let chosen = self.chosen_paths();
+                if chosen.is_empty() {
+                    self.status = t!("files-nothing-selected");
+                } else {
+                    let made = files::duplicate(&chosen);
+                    self.did(made, |made| {
+                        t!("files-duplicated", count = made.len() as i64)
+                    });
+                    self.reopen();
+                }
+            }
+            "file.delete" => {
+                let chosen = self.chosen_paths();
+                if chosen.is_empty() {
+                    self.status = t!("files-nothing-selected");
+                } else {
+                    let count = chosen.len() as i64;
+                    let outcome = files::delete(self, &chosen);
+                    self.did(outcome, move |()| t!("files-deleted", count = count));
+                    self.reopen();
+                }
+            }
+            "file.new_folder" => {
+                if let Some(folder) = self.folder.clone() {
+                    self.asking = Some(files::Asking::NewFolder {
+                        inside: folder,
+                        name: String::new(),
+                    });
+                }
+            }
+            "file.reveal" => {
+                if let Some(photo) = self.photo_at_cursor() {
+                    files::reveal(&photo.path.clone());
+                }
             }
             "photo.rate_0" => self.rate(0),
             "photo.rate_1" => self.rate(1),
@@ -1342,6 +1537,11 @@ fn effective_budget(configured: i64, needed: usize) -> usize {
     configured.max(floor)
 }
 
+/// What stands between the parts of the trail. Punctuation rather than a
+/// word, so it needs no translation — and a single angle quote rather than
+/// the greater-than sign, which reads as an operator.
+const SEPARATOR_MARK: &str = "\u{203a}";
+
 /// Seconds since the epoch.
 ///
 /// The queue needs a clock for its backoff, and this is the only place the
@@ -1398,6 +1598,7 @@ impl eframe::App for App {
         let delivered = self.collect(&ctx);
         self.collect_indexing();
         self.collect_writing();
+        self.collect_disturbance();
         self.take_picked_folder();
         self.shortcuts(&ctx);
 
@@ -1417,6 +1618,10 @@ impl eframe::App for App {
             .frame(egui::Frame::NONE.fill(panel).inner_margin(6.0))
             .show(ui, |ui| self.toolbar(ui, &palette, &ctx));
 
+        egui::Panel::top("where")
+            .frame(egui::Frame::NONE.fill(panel).inner_margin(4.0))
+            .show(ui, |ui| self.where_we_are(ui, &palette, &ctx));
+
         egui::CentralPanel::no_frame()
             .frame(egui::Frame::NONE.fill(window))
             .show(ui, |ui| docks::show(self, ui, &palette));
@@ -1424,6 +1629,7 @@ impl eframe::App for App {
         self.diagnostics_window(&ctx);
         self.settings_window(&ctx);
         filter::window(self, &ctx, &palette);
+        self.ask_window(&ctx);
 
         // The wishlist is overwritten only here, once it is clear what is
         // visible and what is selected. Anything not on it stops being
@@ -1636,6 +1842,167 @@ impl App {
                     );
                 });
             });
+        });
+    }
+
+    /// Asks for a name — for a rename, or for a new folder.
+    ///
+    /// One dialog for both, because they ask the same question and a second
+    /// one would be a second place for Enter and Escape to behave slightly
+    /// differently.
+    fn ask_window(&mut self, ctx: &egui::Context) {
+        let Some(asking) = self.asking.clone() else {
+            return;
+        };
+
+        let (title, mut name) = match &asking {
+            files::Asking::Rename { name, .. } => (t!("ask-rename"), name.clone()),
+            files::Asking::NewFolder { name, .. } => (t!("ask-new-folder"), name.clone()),
+        };
+
+        let mut open = true;
+        let mut go = false;
+        // The window's own close button and the Cancel button both mean the
+        // same thing, but egui already holds `open` while the contents are
+        // drawn, so the button says so through a second flag.
+        let mut cancelled = false;
+        egui::Window::new(title)
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(t!("ask-name"));
+                    let field = ui.add(egui::TextEdit::singleline(&mut name).desired_width(260.0));
+                    field.request_focus();
+                    if field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
+                        go = true;
+                    }
+                });
+
+                ui.horizontal(|ui| {
+                    if ui.button(t!("ask-confirm")).clicked() {
+                        go = true;
+                    }
+
+                    if ui.button(t!("ask-cancel")).clicked() {
+                        cancelled = true;
+                    }
+                });
+            });
+
+        if !open || cancelled {
+            self.asking = None;
+            return;
+        }
+
+        if !go {
+            // Keep what has been typed so far.
+            self.asking = Some(match asking {
+                files::Asking::Rename { path, .. } => files::Asking::Rename { path, name },
+                files::Asking::NewFolder { inside, .. } => {
+                    files::Asking::NewFolder { inside, name }
+                }
+            });
+            return;
+        }
+
+        self.asking = None;
+        match asking {
+            files::Asking::Rename { path, .. } => {
+                let outcome = files::rename(self, &path, &name);
+                self.did(outcome, |_| t!("files-renamed"));
+                self.reopen();
+            }
+            files::Asking::NewFolder { inside, .. } => match files::new_folder(&inside, &name) {
+                // Straight into it: making a folder and staying put means
+                // hunting for it in the tree afterwards.
+                Ok(made) => self.open(made),
+                Err(error) => {
+                    let error = format!("{error:#}");
+                    tracing::error!(%error, "the folder could not be made");
+                    self.status = error;
+                }
+            },
+        }
+    }
+
+    /// Where we are, and how to get somewhere else.
+    ///
+    /// Its own row rather than more on the toolbar: the path is the one thing
+    /// here of no fixed width, and a folder twelve deep would push everything
+    /// else off the edge.
+    fn where_we_are(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: &palettes::Palette,
+        ctx: &egui::Context,
+    ) {
+        ui.horizontal(|ui| {
+            for (id, backwards) in [("go.back", true), ("go.forward", false)] {
+                let allowed = if backwards {
+                    self.history.can_go_back()
+                } else {
+                    self.history.can_go_forward()
+                };
+                let title = commands::command(id)
+                    .map(|command| command.title())
+                    .unwrap_or_default();
+                if ui.add_enabled(allowed, egui::Button::new(title)).clicked() {
+                    self.run(id, ctx);
+                }
+            }
+
+            let can_go_up = self.folder.as_deref().and_then(History::up_from).is_some();
+            let up = commands::command("go.up")
+                .map(|command| command.title())
+                .unwrap_or_default();
+            if ui.add_enabled(can_go_up, egui::Button::new(up)).clicked() {
+                self.run("go.up", ctx);
+            }
+
+            ui.separator();
+
+            // The trail, outermost first. Each part opens the folder it names.
+            let mut pick = None;
+            let trail = self
+                .folder
+                .as_deref()
+                .map(History::trail)
+                .unwrap_or_default();
+            let last = trail.len().saturating_sub(1);
+            egui::ScrollArea::horizontal()
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        for (at, part) in trail.iter().enumerate() {
+                            let name = part
+                                .file_name()
+                                .map(|name| name.to_string_lossy().into_owned())
+                                .unwrap_or_else(|| part.to_string_lossy().into_owned());
+                            let text =
+                                egui::RichText::new(name).color(theme::color(if at == last {
+                                    palette.text
+                                } else {
+                                    palette.dim
+                                }));
+                            if ui.add(egui::Button::new(text).frame(false)).clicked() {
+                                pick = Some(part.clone());
+                            }
+
+                            if at != last {
+                                ui.label(
+                                    egui::RichText::new(SEPARATOR_MARK)
+                                        .color(theme::color(palette.dim)),
+                                );
+                            }
+                        }
+                    });
+                });
+
+            if let Some(folder) = pick {
+                self.open(folder);
+            }
         });
     }
 
@@ -2346,6 +2713,91 @@ mod culling {
                 .iter()
                 .all(|at| app.all[*at].organisation.rating == 0)
         );
+    }
+
+    #[test]
+    fn back_and_forward_walk_the_folders_visited() {
+        let (mut app, _data, photos) = three();
+        let first = photos.path().to_path_buf();
+        let deeper = first.join("deeper");
+        std::fs::create_dir(&deeper).unwrap();
+
+        app.open(deeper.clone());
+        assert_eq!(app.folder.as_deref(), Some(deeper.as_path()));
+
+        app.run_for_test("go.back");
+        assert_eq!(app.folder.as_deref(), Some(first.as_path()));
+        assert_eq!(app.count(), 3, "the folder came back without its contents");
+
+        app.run_for_test("go.forward");
+        assert_eq!(app.folder.as_deref(), Some(deeper.as_path()));
+    }
+
+    #[test]
+    fn up_goes_up_and_stops_at_the_top() {
+        let (mut app, _data, photos) = three();
+        let deeper = photos.path().join("deeper");
+        std::fs::create_dir(&deeper).unwrap();
+        app.open(deeper);
+
+        app.run_for_test("go.up");
+        assert_eq!(app.folder.as_deref(), Some(photos.path()));
+    }
+
+    /// The one this slice is for. People rename files constantly and would
+    /// never think to be careful about it.
+    #[test]
+    fn renaming_a_photograph_keeps_everything_said_about_it() {
+        let (mut app, _data, photos) = three();
+        app.select_only(0);
+        app.run_for_test("photo.rate_5");
+        let before = app.photo(0).unwrap().path.clone();
+
+        files::rename(&mut app, &before, "renamed.jpg").expect("cannot rename");
+        app.reopen();
+
+        assert!(!before.exists(), "the old file is still there");
+        let renamed = photos.path().join("renamed.jpg");
+        assert!(renamed.exists());
+
+        let photo = app
+            .all
+            .iter()
+            .find(|photo| photo.path == renamed)
+            .expect("the renamed photograph is not in the folder");
+        assert_eq!(photo.organisation.rating, 5, "the stars did not follow");
+        assert_eq!(app.total(), 3, "a second row was started");
+    }
+
+    #[test]
+    fn a_rename_that_cannot_happen_leaves_the_file_alone() {
+        let (mut app, _data, photos) = three();
+        let path = photos.path().join("a.jpg");
+
+        // Onto a name already taken, and onto something that is a path.
+        assert!(files::rename(&mut app, &path, "b.jpg").is_err());
+        assert!(files::rename(&mut app, &path, "../elsewhere.jpg").is_err());
+        assert!(files::rename(&mut app, &path, "   ").is_err());
+        assert!(path.exists(), "the file was moved anyway");
+    }
+
+    #[test]
+    fn duplicating_leaves_the_original_where_it_was() {
+        let (mut app, _data, photos) = three();
+        app.select_only(0);
+        app.run_for_test("file.duplicate");
+
+        assert!(photos.path().join("a.jpg").exists());
+        assert!(photos.path().join("a (2).jpg").exists());
+        assert_eq!(app.total(), 4, "the copy is not in the folder");
+    }
+
+    #[test]
+    fn a_file_operation_with_nothing_selected_says_so_rather_than_guessing() {
+        let (mut app, _data, photos) = three();
+        app.run_for_test("file.duplicate");
+        assert_eq!(app.total(), 3);
+        assert!(!photos.path().join("a (2).jpg").exists());
     }
 
     /// The one worth having. Rate something, change the order, and the stars

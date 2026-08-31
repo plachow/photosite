@@ -27,6 +27,11 @@ crossbeam-channel = "0.5"
 fluent-bundle = "0.16"
 unic-langid = { version = "0.9", features = ["macros"] }
 walkdir = "2"
+# The recycle bin on all three, rather than deleting outright. Deleting a
+# photograph is not something to be brave about.
+trash = "5"
+# Watching a folder, so that what another program does to it shows here.
+notify = "8"
 # Native dialogs. On Linux through the XDG portal rather than GTK: the portal
 # handles Wayland and Flatpak and needs no extra C headers to build.
 rfd = "0.17"

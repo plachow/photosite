@@ -17,6 +17,7 @@ use std::str::FromStr;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Group {
     File,
+    Go,
     Photo,
     Sort,
     View,
@@ -26,12 +27,20 @@ pub enum Group {
 impl Group {
     /// Every group there is. Listing the variants a second time in a test or
     /// a menu is how one of them ends up forgotten.
-    pub const ALL: [Self; 5] = [Self::File, Self::Photo, Self::Sort, Self::View, Self::Help];
+    pub const ALL: [Self; 6] = [
+        Self::File,
+        Self::Go,
+        Self::Photo,
+        Self::Sort,
+        Self::View,
+        Self::Help,
+    ];
 
     /// A translation key, not text. The core must hold nothing that is seen.
     pub fn title_key(self) -> &'static str {
         match self {
             Group::File => "group-file",
+            Group::Go => "group-go",
             Group::Photo => "group-photo",
             Group::Sort => "group-sort",
             Group::View => "group-view",
@@ -80,10 +89,67 @@ pub const COMMANDS: &[Command] = &[
         toolbar: true,
     },
     Command {
+        id: "file.rename",
+        title_key: "command-file-rename",
+        group: Group::File,
+        default_shortcut: Some("F2"),
+        toolbar: false,
+    },
+    Command {
+        id: "file.duplicate",
+        title_key: "command-file-duplicate",
+        group: Group::File,
+        default_shortcut: Some("Ctrl+D"),
+        toolbar: false,
+    },
+    Command {
+        id: "file.delete",
+        title_key: "command-file-delete",
+        group: Group::File,
+        default_shortcut: Some("Delete"),
+        toolbar: false,
+    },
+    Command {
+        id: "file.new_folder",
+        title_key: "command-file-new-folder",
+        group: Group::File,
+        default_shortcut: None,
+        toolbar: false,
+    },
+    Command {
+        id: "file.reveal",
+        title_key: "command-file-reveal",
+        group: Group::File,
+        default_shortcut: None,
+        toolbar: false,
+    },
+    Command {
         id: "file.quit",
         title_key: "command-file-quit",
         group: Group::File,
         default_shortcut: Some("Ctrl+Q"),
+        toolbar: false,
+    },
+    // Where we are, which is not the same group as what is in front of us.
+    Command {
+        id: "go.back",
+        title_key: "command-go-back",
+        group: Group::Go,
+        default_shortcut: Some("Alt+Left"),
+        toolbar: false,
+    },
+    Command {
+        id: "go.forward",
+        title_key: "command-go-forward",
+        group: Group::Go,
+        default_shortcut: Some("Alt+Right"),
+        toolbar: false,
+    },
+    Command {
+        id: "go.up",
+        title_key: "command-go-up",
+        group: Group::Go,
+        default_shortcut: Some("Alt+Up"),
         toolbar: false,
     },
     // What somebody says about a photograph. None of these is on the

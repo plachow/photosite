@@ -672,6 +672,90 @@ impl Catalog {
             .collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    /// A photograph is now somewhere else.
+    ///
+    /// **The row moves with the file.** The rating, the label, the words and
+    /// the keywords all hang off its number, so forgetting the old path and
+    /// writing a new row would quietly lose an afternoon of culling to a
+    /// rename — which is a thing people do constantly and would never think
+    /// to be careful about.
+    ///
+    /// Anything already sitting at the destination is forgotten first: the
+    /// file there has been replaced, and so has whatever was said about it.
+    pub fn moved(&mut self, from: &Path, to: &Path) -> Result<()> {
+        let folder = to
+            .parent()
+            .map(|parent| parent.to_string_lossy().into_owned())
+            .unwrap_or_default();
+
+        let transaction = self.conn.transaction()?;
+        transaction.execute(
+            "DELETE FROM photos WHERE path = ?1 AND path <> ?2",
+            params![to.to_string_lossy(), from.to_string_lossy()],
+        )?;
+        transaction.execute(
+            "UPDATE photos SET path = ?2, folder = ?3 WHERE path = ?1",
+            params![from.to_string_lossy(), to.to_string_lossy(), folder],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// A whole folder is now somewhere else, and everything under it with it.
+    ///
+    /// Returns how many rows followed. Done in the catalogue rather than by
+    /// rescanning both places, so that moving a folder of five thousand
+    /// photographs does not mean reading five thousand headers again — and
+    /// so that nothing said about them is lost on the way.
+    pub fn moved_folder(&mut self, from: &Path, to: &Path) -> Result<usize> {
+        let from_text = from.to_string_lossy().into_owned();
+        let to_text = to.to_string_lossy().into_owned();
+        let under = format!("{}{}", from_text.trim_end_matches(SEPARATOR), SEPARATOR);
+        let cut = under.chars().count() as i64;
+
+        let transaction = self.conn.transaction()?;
+        let moved = transaction.execute(
+            "UPDATE photos SET
+                 path   = ?2 || ?4 || substr(path, ?5),
+                 folder = ?2 || CASE
+                     WHEN length(folder) <= ?6 THEN ''
+                     ELSE ?4 || substr(folder, ?5)
+                 END
+             WHERE folder = ?1 OR substr(folder, 1, ?6) = ?3",
+            params![
+                from_text,
+                to_text,
+                under,
+                SEPARATOR.to_string(),
+                cut + 1,
+                cut,
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(moved)
+    }
+
+    /// These photographs are gone.
+    ///
+    /// The keywords and any pending write go with them, which the foreign
+    /// keys do on their own.
+    pub fn forget(&mut self, paths: &[PathBuf]) -> Result<()> {
+        if paths.is_empty() {
+            return Ok(());
+        }
+
+        let transaction = self.conn.transaction()?;
+        {
+            let mut statement = transaction.prepare("DELETE FROM photos WHERE path = ?1")?;
+            for path in paths {
+                statement.execute(params![path.to_string_lossy()])?;
+            }
+        }
+
+        transaction.commit()?;
+        Ok(())
+    }
+
     /// The number a path lives under, and nothing else.
     ///
     /// Cheaper than [`Catalog::by_path`] where only the identity is wanted:
@@ -1197,6 +1281,143 @@ mod tests {
             .execute("DELETE FROM photos WHERE id = ?1", params![id.0])
             .unwrap();
         assert_eq!(catalog.outbox().unwrap(), (0, 0));
+    }
+
+    /// The one this is all for. People rename files constantly and would
+    /// never think to be careful about it.
+    #[test]
+    fn a_renamed_photograph_keeps_everything_said_about_it() {
+        let mut catalog = Catalog::in_memory().unwrap();
+        let id = catalog.upsert(&sample("/a/old.jpg")).unwrap();
+        catalog.set_rating(&[id], 5).unwrap();
+        catalog.set_label(&[id], ColorLabel::Purple).unwrap();
+        catalog.set_title(id, Some("Sunrise")).unwrap();
+        catalog.add_keywords(&[id], &["Hawaii"]).unwrap();
+
+        catalog
+            .moved(Path::new("/a/old.jpg"), Path::new("/a/new.jpg"))
+            .unwrap();
+
+        assert!(catalog.by_path(Path::new("/a/old.jpg")).unwrap().is_none());
+        let photo = catalog.by_path(Path::new("/a/new.jpg")).unwrap().unwrap();
+        assert_eq!(photo.id, id, "a new row was started");
+        assert_eq!(photo.organisation.rating, 5);
+        assert_eq!(photo.organisation.label, ColorLabel::Purple);
+        assert_eq!(photo.organisation.title.as_deref(), Some("Sunrise"));
+        assert_eq!(photo.organisation.keywords, ["Hawaii"]);
+    }
+
+    #[test]
+    fn moving_a_photograph_to_another_folder_takes_its_folder_with_it() {
+        let mut catalog = Catalog::in_memory().unwrap();
+        let sep = SEPARATOR;
+        catalog
+            .upsert(&sample(&format!("{sep}a{sep}one.jpg")))
+            .unwrap();
+        catalog
+            .moved(
+                Path::new(&format!("{sep}a{sep}one.jpg")),
+                Path::new(&format!("{sep}b{sep}one.jpg")),
+            )
+            .unwrap();
+
+        assert!(
+            catalog
+                .in_folder(Path::new(&format!("{sep}a")), false)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            catalog
+                .in_folder(Path::new(&format!("{sep}b")), false)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn moving_onto_something_replaces_what_was_there() {
+        let mut catalog = Catalog::in_memory().unwrap();
+        let keep = catalog.upsert(&sample("/a/one.jpg")).unwrap();
+        let gone = catalog.upsert(&sample("/a/two.jpg")).unwrap();
+        catalog.set_rating(&[gone], 5).unwrap();
+
+        catalog
+            .moved(Path::new("/a/one.jpg"), Path::new("/a/two.jpg"))
+            .unwrap();
+
+        assert_eq!(catalog.count().unwrap(), 1);
+        let photo = catalog.by_path(Path::new("/a/two.jpg")).unwrap().unwrap();
+        assert_eq!(photo.id, keep);
+        assert_eq!(photo.organisation.rating, 0, "the replaced row won");
+    }
+
+    #[test]
+    fn a_moved_folder_takes_everything_under_it() {
+        let mut catalog = Catalog::in_memory().unwrap();
+        let sep = SEPARATOR;
+        let id = catalog
+            .upsert(&sample(&format!("{sep}a{sep}one.jpg")))
+            .unwrap();
+        catalog.set_rating(&[id], 4).unwrap();
+        catalog
+            .upsert(&sample(&format!("{sep}a{sep}deeper{sep}two.jpg")))
+            .unwrap();
+        // A sibling that merely starts the same way stays where it is.
+        catalog
+            .upsert(&sample(&format!("{sep}a_side{sep}three.jpg")))
+            .unwrap();
+
+        let moved = catalog
+            .moved_folder(
+                Path::new(&format!("{sep}a")),
+                Path::new(&format!("{sep}moved")),
+            )
+            .unwrap();
+        assert_eq!(moved, 2);
+
+        let there = catalog
+            .in_folder(Path::new(&format!("{sep}moved")), true)
+            .unwrap();
+        assert_eq!(there.len(), 2);
+        assert_eq!(
+            there
+                .iter()
+                .find(|photo| photo.path.ends_with("one.jpg"))
+                .unwrap()
+                .organisation
+                .rating,
+            4
+        );
+        assert!(
+            there
+                .iter()
+                .any(|photo| photo.path.ends_with(format!("deeper{sep}two.jpg"))),
+            "the subfolder did not follow: {:?}",
+            there.iter().map(|p| p.path.clone()).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            catalog
+                .in_folder(Path::new(&format!("{sep}a_side")), false)
+                .unwrap()
+                .len(),
+            1,
+            "a folder that merely starts the same way was moved too"
+        );
+    }
+
+    #[test]
+    fn a_forgotten_photograph_takes_its_keywords_and_its_pending_write() {
+        let mut catalog = Catalog::in_memory().unwrap();
+        let id = catalog.upsert(&sample("/a/b.jpg")).unwrap();
+        catalog.add_keywords(&[id], &["Hawaii"]).unwrap();
+        catalog.enqueue(&[id], 0).unwrap();
+
+        catalog.forget(&[PathBuf::from("/a/b.jpg")]).unwrap();
+        assert_eq!(catalog.count().unwrap(), 0);
+        assert_eq!(catalog.outbox().unwrap(), (0, 0));
+        assert!(catalog.keywords_of(id).unwrap().is_empty());
     }
 
     #[test]
