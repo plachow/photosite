@@ -717,7 +717,7 @@ tile_size = 'sto'
     }
 
     #[test]
-    fn uklada_se_jen_to_co_je_jinak() {
+    fn only_what_differs_is_saved() {
         let (_dir, paths) = scratch();
         let mut settings = Settings::default();
         settings.save(&paths).unwrap();
@@ -738,7 +738,7 @@ tile_size = 'sto'
     }
 
     #[test]
-    fn zmena_vychozi_hodnoty_dorazi_i_ke_stavajicimu_uzivateli() {
+    fn a_new_default_reaches_somebody_who_has_already_run_it() {
         // When only the difference is saved, a new default reaches somebody
         // who has already run the application. That is the whole point.
         let (_dir, paths) = scratch();
@@ -755,7 +755,7 @@ tile_size = 'sto'
     }
 
     #[test]
-    fn ulozene_se_nacte_zpatky_stejne() {
+    fn what_was_saved_comes_back_the_same() {
         let (_dir, paths) = scratch();
         let mut settings = Settings::default();
         settings.gallery.tile_size = 333.0;
@@ -767,7 +767,7 @@ tile_size = 'sto'
     }
 
     #[test]
-    fn poskozene_nastaveni_se_odlozi_a_neztrati() {
+    fn a_damaged_file_is_set_aside_and_not_lost() {
         let (_dir, paths) = scratch();
         std::fs::write(paths.config_file(), "this = is not { toml").unwrap();
         assert_eq!(Settings::load(&paths), Settings::default());
@@ -775,7 +775,7 @@ tile_size = 'sto'
     }
 
     #[test]
-    fn cestou_lze_cist_i_psat() {
+    fn a_path_can_be_read_and_written() {
         let mut settings = Settings::default();
         assert_eq!(
             settings.get("gallery.tile_size"),
@@ -793,11 +793,11 @@ tile_size = 'sto'
     }
 
     #[test]
-    fn neznama_cesta_nebo_spatny_typ_je_chyba() {
+    fn an_unknown_path_or_the_wrong_type_is_an_error() {
         let mut settings = Settings::default();
         assert!(
             settings
-                .set("gallery.neexistuje", toml::Value::Integer(1))
+                .set("gallery.no_such_thing", toml::Value::Integer(1))
                 .is_err()
         );
         assert!(
@@ -814,7 +814,7 @@ tile_size = 'sto'
     }
 
     #[test]
-    fn reset_vraci_polozku_i_skupinu() {
+    fn a_reset_returns_one_entry_or_a_whole_group() {
         let mut settings = Settings::default();
         settings.gallery.tile_size = 999.0;
         settings.reset("gallery.tile_size").unwrap();
