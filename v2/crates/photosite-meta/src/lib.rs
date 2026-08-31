@@ -69,7 +69,10 @@ pub fn target_for(path: &Path) -> Target {
 /// `photo.nef` keeps its sidecar at `photo.xmp`, which is where every
 /// cataloguer looks for it.
 pub fn sidecar_of(path: &Path) -> PathBuf {
-    path.with_extension("xmp")
+    // The rule itself lives in the core, with the rest of the vocabulary:
+    // file operations have to honour it too, and two copies of it would part
+    // company the first time either was touched.
+    photosite_core::sidecar_of(path)
 }
 
 /// What a photograph already says about itself.

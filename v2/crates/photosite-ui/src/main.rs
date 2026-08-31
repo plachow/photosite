@@ -8,6 +8,7 @@
 //! from [`Settings`], because what is hard-wired cannot be configured — and
 //! what cannot be configured gets rewritten sooner or later.
 
+mod clipboard;
 mod compare;
 mod docks;
 mod files;
@@ -26,6 +27,7 @@ use photosite_core::domain::{ColorLabel, Flag, Photo, PhotoId, Sort, SortField};
 use photosite_core::filter::{Facets, Filter};
 use photosite_core::history::History;
 use photosite_core::settings::{Gallery, Kind, Settings, TUNABLES, Tunable};
+use photosite_core::transfer::Mode;
 use photosite_core::{
     Catalog, FileIdentity, Paths, commands, diagnostics, docks as layout, i18n, jobs, t,
     theme as palettes,
@@ -153,6 +155,15 @@ fn main() -> Result<()> {
         }),
     )
     .map_err(|error| anyhow::anyhow!("the window could not be opened: {error}"))
+}
+
+/// What the folder dialog is being asked for. The dialog is the same one;
+/// only what becomes of the answer differs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Wanted {
+    ToOpen,
+    ToCopyInto,
+    ToMoveInto,
 }
 
 /// A node of the folder tree. Children are loaded only on expansion.
@@ -305,8 +316,12 @@ pub struct App {
     pub edit_title: String,
     pub edit_description: String,
     pub edit_keywords: String,
-    /// The open folder dialog, at most one.
-    folder_dialog: Option<picker::Picker>,
+    /// The folder dialog, at most one — and what it is being asked for. The
+    /// same dialog serves opening a folder and choosing where files go; only
+    /// what happens to the answer differs.
+    folder_dialog: Option<(picker::Picker, Wanted)>,
+    /// What was last copied here, and whether it was a cut.
+    clipboard: clipboard::Held,
     /// The folder the tree on the left should scroll to. Set on opening, and
     /// taken by the tree straight away.
     pub scroll_tree_to: Option<PathBuf>,
@@ -443,6 +458,7 @@ impl App {
             edit_description: String::new(),
             edit_keywords: String::new(),
             folder_dialog: None,
+            clipboard: clipboard::Held::default(),
             scroll_tree_to: None,
             selftest: false,
             shot: None,
@@ -861,9 +877,22 @@ impl App {
     }
 
     /// Reads the folder again after something happened to it on disk.
+    /// Reads the open folder again, keeping whatever was just said about
+    /// what happened.
+    ///
+    /// Opening a folder reports how many photographs it holds and how long
+    /// it took, which is right when somebody opened it and wrong when they
+    /// deleted something: "3 photographs in 2 ms" is not an answer to "did
+    /// that delete work?". So the message survives the reload.
     fn reopen(&mut self) {
-        if let Some(folder) = self.folder.clone() {
-            self.open(folder);
+        let Some(folder) = self.folder.clone() else {
+            return;
+        };
+
+        let said = std::mem::take(&mut self.status);
+        self.open(folder);
+        if !said.is_empty() {
+            self.status = said;
         }
     }
 
@@ -887,33 +916,74 @@ impl App {
     }
 
     /// Asks for a folder with the native dialog.
-    fn ask_for_folder(&mut self, ctx: &egui::Context) {
+    fn ask_for_folder(&mut self, ctx: &egui::Context, wanted: Wanted) {
         if self.folder_dialog.is_some() {
             return;
         }
 
-        let start = picker::start_dir(
-            self.folder.as_deref(),
-            self.settings.gallery.last_folder.as_deref(),
-        );
-        self.folder_dialog = Some(picker::ask(ctx, t!("dialog-pick-folder"), start));
+        // A destination dialog opens where the last one went, not where the
+        // gallery is: sorting into piles means going back to the same place.
+        let remembered = match wanted {
+            Wanted::ToOpen => self.settings.gallery.last_folder.as_deref(),
+            _ => self.settings.gallery.last_destination.as_deref().or(self
+                .settings
+                .gallery
+                .last_folder
+                .as_deref()),
+        };
+        let start = picker::start_dir(self.folder.as_deref(), remembered);
+        let title = match wanted {
+            Wanted::ToOpen => t!("dialog-pick-folder"),
+            Wanted::ToCopyInto => t!("copy-into"),
+            Wanted::ToMoveInto => t!("move-into"),
+        };
+        self.folder_dialog = Some((picker::ask(ctx, title, start), wanted));
     }
 
     /// Collects whatever the dialog returned. A cancelled dialog is reported
     /// nowhere — closing it is an answer like any other, not a failure.
     fn take_picked_folder(&mut self) {
-        let Some(dialog) = &self.folder_dialog else {
+        let Some((dialog, wanted)) = &self.folder_dialog else {
             return;
         };
 
+        let wanted = *wanted;
         match dialog.answer() {
             picker::Answer::Waiting => {}
             picker::Answer::Cancelled => self.folder_dialog = None,
             picker::Answer::Picked(folder) => {
                 self.folder_dialog = None;
-                self.open(folder);
+                match wanted {
+                    Wanted::ToOpen => self.open(folder),
+                    Wanted::ToCopyInto => self.send_to(&folder, Mode::Copy),
+                    Wanted::ToMoveInto => self.send_to(&folder, Mode::Move),
+                }
             }
         }
+    }
+
+    /// Copies or moves what is chosen into a folder, and remembers it as the
+    /// place the next `Ctrl+Shift+C` means.
+    fn send_to(&mut self, folder: &Path, mode: Mode) {
+        let chosen = self.chosen_paths();
+        if chosen.is_empty() {
+            self.status = t!("files-nothing-selected");
+            return;
+        }
+
+        let outcome = files::transfer(self, &chosen, folder, mode);
+        if outcome.is_ok() {
+            self.settings.gallery.last_destination = Some(folder.display().to_string());
+        }
+
+        self.did(outcome, move |count| match mode {
+            Mode::Copy => t!("files-copied", count = count as i64),
+            Mode::Move => t!("files-moved", count = count as i64),
+        });
+
+        // A move takes photographs out of this folder and a copy can land in
+        // it, so either way what is on screen may no longer be the truth.
+        self.reopen();
     }
 
     pub fn texture(&self, key: &Key) -> Option<&egui::TextureHandle> {
@@ -1120,9 +1190,69 @@ impl App {
                 self.relist();
             }
             "help.diagnostics" => self.show_diagnostics = !self.show_diagnostics,
-            "file.open_folder" => self.ask_for_folder(ctx),
+            "file.open_folder" => self.ask_for_folder(ctx, Wanted::ToOpen),
+            "file.copy" => self.onto_clipboard(ctx, false),
+            "file.cut" => self.onto_clipboard(ctx, true),
+            "file.paste" => self.paste(),
+            "file.copy_to" => self.ask_for_folder(ctx, Wanted::ToCopyInto),
+            "file.move_to" => self.ask_for_folder(ctx, Wanted::ToMoveInto),
+            "file.copy_again" => match self.settings.gallery.last_destination.clone() {
+                Some(folder) => self.send_to(Path::new(&folder), Mode::Copy),
+                None => self.status = t!("files-nowhere-yet"),
+            },
             other => tracing::warn!(command = other, "command with no handler"),
         }
+    }
+
+    /// Puts what is chosen on the clipboard, ours and the system's both.
+    fn onto_clipboard(&mut self, ctx: &egui::Context, cut: bool) {
+        let chosen = clipboard::existing(&self.chosen_paths());
+        if chosen.is_empty() {
+            self.status = t!("files-nothing-selected");
+            return;
+        }
+
+        let count = chosen.len() as i64;
+        self.clipboard = clipboard::put(ctx, &chosen, cut);
+        self.status = if cut {
+            t!("files-cut-to-the-clipboard", count = count)
+        } else {
+            t!("files-on-the-clipboard", count = count)
+        };
+    }
+
+    /// Brings whatever is on the clipboard into the open folder.
+    fn paste(&mut self) {
+        let Some(folder) = self.folder.clone() else {
+            self.status = t!("files-nowhere-to-paste");
+            return;
+        };
+
+        let held = clipboard::take(&self.clipboard);
+        let files = clipboard::pastable(&held);
+        if files.is_empty() {
+            self.status = t!("files-clipboard-empty");
+            return;
+        }
+
+        let mode = held.mode();
+        let outcome = files::transfer(self, &files, &folder, mode);
+        // A cut is spent once it is pasted. Leaving it on would move the
+        // same photographs again on the next Ctrl+V, from a folder they are
+        // no longer in.
+        if outcome.is_ok() && held.cut {
+            self.clipboard = clipboard::Held::default();
+        }
+
+        match outcome {
+            Ok(0) => self.status = t!("files-already-there"),
+            outcome => self.did(outcome, move |count| match mode {
+                Mode::Copy => t!("files-copied", count = count as i64),
+                Mode::Move => t!("files-moved", count = count as i64),
+            }),
+        }
+
+        self.reopen();
     }
 
     /// The photographs the next rating lands on.
@@ -2647,7 +2777,7 @@ mod culling {
     /// care what is inside a file, and building real JPEGs would be testing
     /// the decoder instead. The length is what the sort has to tell them
     /// apart by.
-    fn app_over(files: &[(&str, usize)]) -> (App, tempfile::TempDir, tempfile::TempDir) {
+    pub fn app_over(files: &[(&str, usize)]) -> (App, tempfile::TempDir, tempfile::TempDir) {
         let data = tempfile::tempdir().expect("no temp folder");
         let photos = tempfile::tempdir().expect("no temp folder");
         for (name, size) in files {
@@ -2664,7 +2794,7 @@ mod culling {
         (app, data, photos)
     }
 
-    fn three() -> (App, tempfile::TempDir, tempfile::TempDir) {
+    pub fn three() -> (App, tempfile::TempDir, tempfile::TempDir) {
         app_over(&[("a.jpg", 30), ("b.jpg", 20), ("c.jpg", 10)])
     }
 
@@ -2988,6 +3118,111 @@ mod culling {
             .map(|photo| photo.path.file_name().unwrap().to_str().unwrap())
             .collect();
         assert_eq!(rated, ["c.jpg"], "the stars went on the wrong photograph");
+    }
+
+    /// Copy here, paste there. The originals stay where they were — that is
+    /// the whole difference between a copy and a move, and getting it the
+    /// wrong way round loses photographs.
+    #[test]
+    fn copying_and_pasting_brings_the_files_and_leaves_the_originals() {
+        let (mut app, _data, photos) = three();
+        let elsewhere = tempfile::tempdir().unwrap();
+        app.select_only(0);
+        app.select_also(1);
+        app.run_for_test("file.copy");
+
+        app.open(elsewhere.path().to_owned());
+        app.run_for_test("file.paste");
+
+        assert!(elsewhere.path().join("a.jpg").exists());
+        assert!(elsewhere.path().join("b.jpg").exists());
+        assert!(
+            photos.path().join("a.jpg").exists(),
+            "the original was taken"
+        );
+        assert_eq!(app.total(), 2, "the folder does not show what arrived");
+    }
+
+    #[test]
+    fn cutting_and_pasting_moves_them_and_spends_the_clipboard() {
+        let (mut app, _data, photos) = three();
+        let elsewhere = tempfile::tempdir().unwrap();
+        app.select_only(0);
+        app.run_for_test("file.cut");
+
+        app.open(elsewhere.path().to_owned());
+        app.run_for_test("file.paste");
+
+        assert!(elsewhere.path().join("a.jpg").exists());
+        assert!(!photos.path().join("a.jpg").exists(), "the original stayed");
+
+        // A cut is spent. Pressing Ctrl+V again would otherwise try to move
+        // the same photograph out of a folder it is no longer in.
+        app.run_for_test("file.paste");
+        assert!(!app.status.is_empty());
+        assert_eq!(app.total(), 1, "it was pasted twice");
+    }
+
+    /// The catalogue follows a move, or the stars are left on a row pointing
+    /// at a file that is not there any more.
+    #[test]
+    fn what_was_said_about_a_photograph_survives_a_move() {
+        let (mut app, _data, _photos) = three();
+        let elsewhere = tempfile::tempdir().unwrap();
+        app.select_only(0);
+        app.run_for_test("photo.rate_5");
+        app.run_for_test("file.cut");
+
+        app.open(elsewhere.path().to_owned());
+        app.run_for_test("file.paste");
+
+        assert_eq!(app.count(), 1);
+        assert_eq!(
+            app.photo(0).unwrap().organisation.rating,
+            5,
+            "the stars did not travel with the photograph"
+        );
+    }
+
+    #[test]
+    fn copying_to_the_last_folder_needs_a_last_folder() {
+        let (mut app, _data, photos) = three();
+        app.select_only(0);
+        app.run_for_test("file.copy_again");
+        assert!(
+            !app.status.is_empty(),
+            "nothing was said about having nowhere to go"
+        );
+
+        let elsewhere = tempfile::tempdir().unwrap();
+        app.settings.gallery.last_destination = Some(elsewhere.path().display().to_string());
+        app.run_for_test("file.copy_again");
+        assert!(elsewhere.path().join("a.jpg").exists());
+        assert!(photos.path().join("a.jpg").exists());
+    }
+
+    /// Reloading the folder used to say "3 photographs in 2 ms" over the top
+    /// of whatever had just happened, which is not an answer to "did that
+    /// work?".
+    #[test]
+    fn what_happened_survives_the_folder_being_read_again() {
+        let (mut app, _data, _photos) = three();
+        app.select_only(0);
+        app.run_for_test("file.duplicate");
+        assert!(
+            !app.status.contains("ms"),
+            "the reload spoke over the operation: {}",
+            app.status
+        );
+        assert_eq!(app.total(), 4);
+    }
+
+    #[test]
+    fn pasting_with_nothing_held_says_so_rather_than_doing_nothing() {
+        let (mut app, _data, _photos) = three();
+        app.run_for_test("file.paste");
+        assert!(!app.status.is_empty());
+        assert_eq!(app.total(), 3);
     }
 
     #[test]

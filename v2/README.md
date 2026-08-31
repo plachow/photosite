@@ -6,7 +6,7 @@ A clean sheet. Rust, egui over wgpu, Windows / macOS / Linux from one source.
 cd v2
 cargo run --release -p photosite-ui              # the application
 cargo run --release -p photosite-cli -- doctor   # where everything lives
-cargo test --workspace                           # 303 tests, no window, no GPU
+cargo test --workspace                           # 322 tests, no window, no GPU
 ```
 
 ## Layout
@@ -486,6 +486,64 @@ core, where the vocabulary lives, so it cannot come apart from a second copy.
 | Panasonic RW2 | camera, date and 5480x3656 read; drawn in 10 ms |
 | Adobe DNG | the same as the NEF it came from |
 
+## Copying and moving
+
+`Ctrl+C` and `Ctrl+V` mean the files themselves, not a list of their names —
+they are the file manager's own keys and it would be strange for them to mean
+anything else here. `Ctrl+X` cuts, `Alt+C` and `Alt+X` copy or move into a
+folder chosen there and then, and `Ctrl+Shift+C` goes to wherever the last one
+went, because sorting a folder into three piles is otherwise three dialogs and
+two of them say the same thing.
+
+**Nothing at a destination is ever written over.** A photograph landing on a
+name already in use takes a number instead — `holiday (2).jpg` — and where
+every file is going is worked out before a single byte moves. Two photographs
+of the same name chosen from different folders do not land on each other
+either: the plan claims each name as it goes. This is the one thing here that
+could quietly destroy somebody's work, so it is decided in the core, where a
+test can watch, and none of the deciding touches a disk.
+
+A name whose **sidecar** belongs to somebody else is not free either. Dropping
+`holiday.nef` into a folder that already holds a `holiday.xmp` would mean
+reading a stranger's stars as this photograph's own, so that name is passed
+over the same as a taken one. The sidecar travels with the photograph in every
+operation — copy, move, rename, duplicate, delete — because it is part of it as
+far as anybody is concerned, and for a RAW it is the only place its stars live.
+
+A move across drives is not a rename. `std::fs::rename` refuses to cross a
+volume and moving photographs between disks is exactly that, so a refused
+rename becomes a copy and then a delete — in that order, since the other way
+round loses the file when the copy fails. The catalogue follows a move the same
+way it follows a rename: the row travels, and the stars with it.
+
+### Two clipboards
+
+**Ours** is a list of paths held in the application. It works on every
+platform and it is what `Ctrl+V` reads when the system has nothing to say.
+
+**The system's** is what makes a copy here paste in the file manager, and a
+copy there paste here. Windows has one agreed way to put files on a clipboard
+— `CF_HDROP`, with `Preferred DropEffect` alongside to say whether it was a
+copy or a cut — and every other platform has several disagreeing ones. So the
+system clipboard is spoken to on Windows and left alone elsewhere, where the
+paths go on as text instead: pasting them into a terminal is a real use, and
+claiming more than that would be pretending.
+
+The system's answer wins when it has one. Somebody who copied a file in
+Explorer and pressed `Ctrl+V` here means that file, not what they copied in
+PhotoSite ten minutes ago. And a cut is spent once pasted, or the next `Ctrl+V`
+would try to move the same photographs out of a folder they have left.
+
+Under test the system clipboard is left alone entirely: a test that wrote to it
+would take it out of the hands of whoever is running the tests, and one that
+read from it would pass or fail by what they last copied.
+
+| verified against Windows itself | |
+|---|---|
+| copy here | `FileDrop`, `FileNameW`, `FileName` and drop effect 1 |
+| cut here | the same, drop effect 2, so Explorer moves rather than copies |
+| copy in Explorer, paste here | the file arrives in the open folder |
+
 ## Comparison
 
 `Ctrl+K` puts two to four photographs side by side, and the same key closes
@@ -536,12 +594,12 @@ and the AI describer are still v1's alone.
 
 | | |
 |---|---|
-| tests | 303 (including 6,000 fuzz cases over EXIF and 70 checked colour pairs) |
+| tests | 322 (including 6,000 fuzz cases over EXIF and 70 checked colour pairs) |
 | scan of 7,558 photographs | 0.3 s; 0.1 s on a repeat |
 | opening 134,990 photographs recursively | 727 ms |
 | `cargo clippy -D warnings` | clean |
 | themes | 5 plus following the system |
-| settings entries | 32, of which 24 are on the screen it generates |
+| settings entries | 33, of which 24 are on the screen it generates |
 | catalogue schema | 4 migrations |
 
 A cross-check from Windows passes for `photosite-image` against both targets.
@@ -551,9 +609,15 @@ done by CI**, where the runners are native.
 
 ## What is missing, and known to be
 
-Of v1's features, in the order they are being brought across: import, the
-editor, batch conversion, faces, the AI describer. Of the file
-operations, copying and moving to a chosen folder are not done — the rest are.
+Of v1's features: the editor, batch conversion, faces and the AI describer.
+The editor is deliberately last and will be rebuilt rather than ported.
+Importing from a memory card is **not** being brought across at all — this is
+a manager for files that are already on a disk.
+
+Of the manager itself, what is left is small and named: the exposure triangle
+in the details, GPS and the map, words on a whole selection at once, a
+compact list beside the grid, fullscreen, and a thumbnail cache that survives
+a restart.
 
 Three of the filter's facets are waiting on features that come later: people,
 the smiling and eyes-open scores, and the approximate-GPS verdict. All three

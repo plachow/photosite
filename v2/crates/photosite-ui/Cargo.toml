@@ -29,5 +29,8 @@ notify.workspace = true
 rfd.workspace = true
 pollster.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+clipboard-win.workspace = true
+
 [dev-dependencies]
 tempfile.workspace = true

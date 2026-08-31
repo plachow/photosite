@@ -20,11 +20,12 @@ pub mod paths;
 pub mod settings;
 pub mod theme;
 pub mod time;
+pub mod transfer;
 
 pub use catalog::{Catalog, NewPhoto};
 pub use compare::Compare;
 pub use docks::Layout;
-pub use domain::{FileIdentity, Photo, PhotoId, is_photo};
+pub use domain::{FileIdentity, Photo, PhotoId, is_photo, sidecar_of};
 pub use filter::{Facets, Filter, Shape};
 pub use history::History;
 pub use i18n::{t, t_args};

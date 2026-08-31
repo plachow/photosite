@@ -97,6 +97,10 @@ pub struct Gallery {
     pub sort_field: String,
     pub sort_descending: bool,
     pub last_folder: Option<String>,
+    /// Where the last copy or move went. Remembered so that sorting a folder
+    /// into piles is one dialog and then a key, rather than one dialog for
+    /// every photograph.
+    pub last_destination: Option<String>,
 }
 
 impl Default for Gallery {
@@ -115,6 +119,7 @@ impl Default for Gallery {
             sort_field: crate::domain::SortField::TakenAt.id().to_owned(),
             sort_descending: false,
             last_folder: None,
+            last_destination: None,
         }
     }
 }
@@ -564,6 +569,11 @@ pub const TUNABLES: &[Tunable] = &[
         kind: Kind::State,
     },
     Tunable {
+        path: "gallery.last_destination",
+        label_key: "setting-last-destination",
+        kind: Kind::State,
+    },
+    Tunable {
         path: "loading.thumb_size",
         label_key: "setting-thumb-size",
         kind: Kind::Int { min: 96, max: 1024 },
@@ -661,6 +671,7 @@ pub fn paths_in_settings() -> Vec<String> {
     probe.window.x = Some(0.0);
     probe.window.y = Some(0.0);
     probe.gallery.last_folder = Some(String::new());
+    probe.gallery.last_destination = Some(String::new());
     if let Ok(table) = toml::Table::try_from(&probe) {
         walk("", &table, &mut found);
     }

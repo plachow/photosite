@@ -11,9 +11,15 @@
 //! **Deleting goes to the recycle bin.** Never `remove_file`. A photograph is
 //! not something to be brave about, and the one place in this application
 //! that could destroy one for good is the one place that should not exist.
+//!
+//! **Nothing at a destination is written over, ever.** A copy that lands on
+//! a name already in use takes a number instead. Where every file is going
+//! is worked out by [`photosite_core::transfer`] before a byte moves, and
+//! that is where the reasoning — and the tests — live.
 
 use crate::App;
 use anyhow::{Context, Result};
+use photosite_core::transfer::{self, Mode, Planned};
 use std::path::{Path, PathBuf};
 
 /// A name being typed into a dialog.
@@ -64,15 +70,89 @@ pub fn rename(app: &mut App, from: &Path, to_name: &str) -> Result<PathBuf> {
 }
 
 /// Copies photographs beside themselves, under a name that is free.
+///
+/// Which is the same question as copying them into their own folder, and is
+/// answered in the same place.
 pub fn duplicate(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
     let mut made = Vec::with_capacity(paths.len());
     for path in paths {
-        let to = unused_name(path);
-        std::fs::copy(path, &to).with_context(|| format!("cannot copy {}", path.display()))?;
-        made.push(to);
+        let Some(folder) = path.parent() else {
+            continue;
+        };
+        for step in transfer::plan(std::slice::from_ref(path), folder, Mode::Copy, &|path| {
+            path.exists()
+        }) {
+            carry(&step, Mode::Copy)?;
+            made.push(step.to);
+        }
     }
 
     Ok(made)
+}
+
+/// Copies or moves photographs into another folder.
+///
+/// The catalogue follows a move, the same as it follows a rename: the rating
+/// and the words hang off the row's number, and forgetting one row to write
+/// another loses them.
+pub fn transfer(app: &mut App, files: &[PathBuf], into: &Path, mode: Mode) -> Result<usize> {
+    anyhow::ensure!(into.is_dir(), "{} is not a folder", into.display());
+
+    let planned = transfer::plan(files, into, mode, &|path| path.exists());
+    let mut done = 0usize;
+    for step in &planned {
+        carry(step, mode)?;
+        done += 1;
+        if mode == Mode::Move {
+            let (from, to) = (step.from.clone(), step.to.clone());
+            app.write_catalog(move |catalog| catalog.moved(&from, &to));
+        }
+    }
+
+    Ok(done)
+}
+
+/// One file and its sidecar, along the way the plan laid out.
+fn carry(step: &Planned, mode: Mode) -> Result<()> {
+    one(&step.from, &step.to, mode)
+        .with_context(|| format!("cannot move {}", step.from.display()))?;
+
+    // The sidecar is part of the photograph as far as anybody is concerned.
+    // A failure here is not a failure of the operation — the photograph did
+    // arrive — but it is not something to be quiet about either.
+    let (from, to) = &step.sidecar;
+    if from.exists()
+        && let Err(error) = one(from, to, mode)
+    {
+        tracing::warn!(
+            from = %from.display(),
+            %error,
+            "the photograph arrived but its sidecar did not"
+        );
+    }
+
+    Ok(())
+}
+
+/// A move across volumes is not a rename.
+///
+/// `std::fs::rename` refuses to cross a drive on Windows and a mount
+/// elsewhere, and moving photographs from a card to a library is exactly
+/// that. So a refused rename becomes a copy and then a delete of the
+/// original — in that order, because the other way round loses the file if
+/// the copy fails.
+fn one(from: &Path, to: &Path, mode: Mode) -> std::io::Result<()> {
+    if mode == Mode::Copy {
+        return std::fs::copy(from, to).map(|_| ());
+    }
+
+    match std::fs::rename(from, to) {
+        Ok(()) => Ok(()),
+        Err(_) => {
+            std::fs::copy(from, to)?;
+            std::fs::remove_file(from)
+        }
+    }
 }
 
 /// To the recycle bin, never to nowhere.
@@ -113,33 +193,6 @@ pub fn new_folder(inside: &Path, name: &str) -> Result<PathBuf> {
     let path = inside.join(name);
     std::fs::create_dir(&path).with_context(|| format!("cannot make {}", path.display()))?;
     Ok(path)
-}
-
-/// A name beside this one that nothing is using.
-///
-/// `holiday.jpg` becomes `holiday (2).jpg`, then `holiday (3).jpg`. The
-/// number goes before the extension and not after it, or the copy stops being
-/// a photograph as far as everything else is concerned.
-pub fn unused_name(path: &Path) -> PathBuf {
-    let parent = path.parent().unwrap_or(Path::new(""));
-    let stem = path
-        .file_stem()
-        .map(|stem| stem.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let extension = path
-        .extension()
-        .map(|extension| format!(".{}", extension.to_string_lossy()))
-        .unwrap_or_default();
-
-    // Two is where a second copy starts. Nobody calls the second one "1".
-    for number in 2..10_000 {
-        let candidate = parent.join(format!("{stem} ({number}){extension}"));
-        if !candidate.exists() {
-            return candidate;
-        }
-    }
-
-    parent.join(format!("{stem} (copy){extension}"))
 }
 
 /// Hands the photograph to the system's own file manager.
@@ -188,34 +241,24 @@ fn show(path: &Path) -> std::io::Result<()> {
 mod tests {
     use super::*;
 
+    /// Numbering is the core's rule and is tested there. What matters here
+    /// is that a duplicate takes its sidecar with it: a RAW's stars live in
+    /// the sidecar and nowhere else, so a copy without one is a copy with
+    /// nothing said about it.
     #[test]
-    fn a_duplicate_is_numbered_before_the_extension() {
+    fn a_duplicate_takes_its_sidecar_with_it() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("holiday.jpg");
+        let path = dir.path().join("holiday.nef");
         std::fs::write(&path, b"x").unwrap();
+        std::fs::write(dir.path().join("holiday.xmp"), b"<x:xmpmeta/>").unwrap();
 
-        let second = unused_name(&path);
-        assert_eq!(second.file_name().unwrap(), "holiday (2).jpg");
+        let made = duplicate(&[path]).unwrap();
+        assert_eq!(made[0].file_name().unwrap(), "holiday (2).nef");
         assert_eq!(
-            second.extension().unwrap(),
-            "jpg",
-            "the copy stopped being a photograph"
+            std::fs::read_to_string(dir.path().join("holiday (2).xmp")).unwrap(),
+            "<x:xmpmeta/>",
+            "the copy was made without what was said about it"
         );
-
-        std::fs::write(&second, b"x").unwrap();
-        assert_eq!(
-            unused_name(&path).file_name().unwrap(),
-            "holiday (3).jpg",
-            "the second copy took the first one's name"
-        );
-    }
-
-    #[test]
-    fn a_file_with_no_extension_still_gets_a_number() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("holiday");
-        std::fs::write(&path, b"x").unwrap();
-        assert_eq!(unused_name(&path).file_name().unwrap(), "holiday (2)");
     }
 
     #[test]
@@ -240,5 +283,69 @@ mod tests {
             "a name with a separator in it is a path, not a name"
         );
         assert!(new_folder(dir.path(), "a/b").is_err());
+    }
+
+    #[test]
+    fn moving_takes_the_photograph_and_its_sidecar_and_leaves_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (from, into) = (dir.path().join("from"), dir.path().join("into"));
+        std::fs::create_dir_all(&from).unwrap();
+        std::fs::create_dir_all(&into).unwrap();
+        let photo = from.join("holiday.nef");
+        std::fs::write(&photo, b"pixels").unwrap();
+        std::fs::write(from.join("holiday.xmp"), b"stars").unwrap();
+
+        let (mut app, _data, _photos) = crate::culling::three();
+        let count = transfer(&mut app, std::slice::from_ref(&photo), &into, Mode::Move).unwrap();
+
+        assert_eq!(count, 1);
+        assert!(!photo.exists(), "the original stayed behind");
+        assert!(!from.join("holiday.xmp").exists());
+        assert_eq!(std::fs::read(into.join("holiday.nef")).unwrap(), b"pixels");
+        assert_eq!(std::fs::read(into.join("holiday.xmp")).unwrap(), b"stars");
+    }
+
+    /// The one that would be quiet and unrecoverable.
+    #[test]
+    fn a_copy_never_writes_over_what_is_already_there() {
+        let dir = tempfile::tempdir().unwrap();
+        let (from, into) = (dir.path().join("from"), dir.path().join("into"));
+        std::fs::create_dir_all(&from).unwrap();
+        std::fs::create_dir_all(&into).unwrap();
+        std::fs::write(from.join("a.jpg"), b"the new one").unwrap();
+        std::fs::write(into.join("a.jpg"), b"the one already there").unwrap();
+
+        let (mut app, _data, _photos) = crate::culling::three();
+        transfer(&mut app, &[from.join("a.jpg")], &into, Mode::Copy).unwrap();
+
+        assert_eq!(
+            std::fs::read(into.join("a.jpg")).unwrap(),
+            b"the one already there",
+            "a photograph was written over"
+        );
+        assert_eq!(
+            std::fs::read(into.join("a (2).jpg")).unwrap(),
+            b"the new one"
+        );
+    }
+
+    #[test]
+    fn a_destination_that_is_not_a_folder_is_refused_rather_than_guessed() {
+        let dir = tempfile::tempdir().unwrap();
+        let photo = dir.path().join("a.jpg");
+        std::fs::write(&photo, b"x").unwrap();
+
+        let (mut app, _data, _photos) = crate::culling::three();
+        assert!(
+            transfer(
+                &mut app,
+                std::slice::from_ref(&photo),
+                &dir.path().join("nowhere"),
+                Mode::Copy
+            )
+            .is_err()
+        );
+        assert!(transfer(&mut app, std::slice::from_ref(&photo), &photo, Mode::Copy).is_err());
+        assert!(photo.exists());
     }
 }

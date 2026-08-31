@@ -109,6 +109,54 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Delete"),
         toolbar: false,
     },
+    // Copying and moving. `Ctrl+C` and `Ctrl+V` are the file manager's own
+    // keys and mean the files themselves, not a list of their names.
+    Command {
+        id: "file.copy",
+        title_key: "command-file-copy",
+        group: Group::File,
+        default_shortcut: Some("Ctrl+C"),
+        toolbar: false,
+    },
+    Command {
+        id: "file.cut",
+        title_key: "command-file-cut",
+        group: Group::File,
+        default_shortcut: Some("Ctrl+X"),
+        toolbar: false,
+    },
+    Command {
+        id: "file.paste",
+        title_key: "command-file-paste",
+        group: Group::File,
+        default_shortcut: Some("Ctrl+V"),
+        toolbar: false,
+    },
+    // Somewhere else, chosen now. Alt rather than Ctrl because the clipboard
+    // already has Ctrl+C, and these are the same idea without the two steps.
+    Command {
+        id: "file.copy_to",
+        title_key: "command-file-copy-to",
+        group: Group::File,
+        default_shortcut: Some("Alt+C"),
+        toolbar: false,
+    },
+    Command {
+        id: "file.move_to",
+        title_key: "command-file-move-to",
+        group: Group::File,
+        default_shortcut: Some("Alt+X"),
+        toolbar: false,
+    },
+    // And to wherever the last one went. Sorting a folder into three piles
+    // is three dialogs otherwise, and two of them say the same thing.
+    Command {
+        id: "file.copy_again",
+        title_key: "command-file-copy-again",
+        group: Group::File,
+        default_shortcut: Some("Ctrl+Shift+C"),
+        toolbar: false,
+    },
     Command {
         id: "file.new_folder",
         title_key: "command-file-new-folder",

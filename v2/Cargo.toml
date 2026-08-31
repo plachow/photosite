@@ -39,6 +39,11 @@ rfd = "0.17"
 # awaited elsewhere; that needs no async runtime. `eframe` already carries the
 # same version, so this line adds nothing to the tree.
 pollster = "1"
+# The Windows clipboard's file list (CF_HDROP), so a copy here can be pasted
+# in Explorer and a copy there pasted here. Windows only, deliberately: no
+# other platform agrees on how to put files on a clipboard, and pretending
+# otherwise would be a portable API over an unportable idea.
+clipboard-win = "5"
 clap = { version = "4", features = ["derive"] }
 jpeg-decoder = "0.3"
 # Writing metadata without shipping exiftool and a copy of Perl. little_exif

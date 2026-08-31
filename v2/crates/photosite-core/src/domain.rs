@@ -425,6 +425,16 @@ impl FileIdentity {
     }
 }
 
+/// Where a photograph's sidecar lives.
+///
+/// `photo.nef` keeps its sidecar at `photo.xmp`, which is where every other
+/// application looks for it. The rule is here rather than beside the code
+/// that writes one because file operations have to honour it too: a
+/// photograph moved away from its sidecar has lost everything it holds.
+pub fn sidecar_of(path: &std::path::Path) -> PathBuf {
+    path.with_extension("xmp")
+}
+
 /// Extensions we treat as a photograph.
 ///
 /// The RAW formats here are the TIFF-based ones, which is nearly all of

@@ -398,3 +398,39 @@ compare-actual = 100 %
 compare-magnification = { $percent } %
 compare-hint = Tab focuses the next · Delete takes one out · Esc closes
 compare-unreadable = Not decoded yet
+
+command-file-copy = Copy
+command-file-cut = Cut
+command-file-paste = Paste
+command-file-copy-to = Copy to…
+command-file-move-to = Move to…
+command-file-copy-again = Copy to the last folder
+
+setting-last-destination = Last destination
+
+files-copied =
+    { $count ->
+        [one] { $count } photograph copied
+       *[other] { $count } photographs copied
+    }
+files-moved =
+    { $count ->
+        [one] { $count } photograph moved
+       *[other] { $count } photographs moved
+    }
+files-on-the-clipboard =
+    { $count ->
+        [one] { $count } photograph on the clipboard
+       *[other] { $count } photographs on the clipboard
+    }
+files-cut-to-the-clipboard =
+    { $count ->
+        [one] { $count } photograph ready to move
+       *[other] { $count } photographs ready to move
+    }
+files-clipboard-empty = There are no photographs on the clipboard
+files-nowhere-to-paste = Open a folder to paste into first
+files-nowhere-yet = Nothing has been copied anywhere yet
+files-already-there = They are already in that folder
+copy-into = Copy into…
+move-into = Move into…
