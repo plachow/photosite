@@ -172,6 +172,18 @@ public sealed partial class PhotoCatalogRepository
                 face_count          INTEGER NOT NULL,
                 scanned_utc         TEXT NOT NULL
             );
+
+            -- People put on a photograph by hand - present on the shot but
+            -- with no visible face for the detector to frame.
+            CREATE TABLE IF NOT EXISTS photo_people (
+                path        TEXT NOT NULL COLLATE NOCASE,
+                person_id   INTEGER NOT NULL,
+                created_utc TEXT NOT NULL,
+                PRIMARY KEY (path, person_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_photo_people_person
+                ON photo_people(person_id);
             """;
         await indexCommand.ExecuteNonQueryAsync(cancellationToken);
 
@@ -468,6 +480,7 @@ public sealed partial class PhotoCatalogRepository
             DELETE FROM photos WHERE path = $path;
             DELETE FROM faces WHERE path = $path;
             DELETE FROM face_scans WHERE path = $path;
+            DELETE FROM photo_people WHERE path = $path;
             """;
         var path = command.Parameters.Add("$path", SqliteType.Text);
 

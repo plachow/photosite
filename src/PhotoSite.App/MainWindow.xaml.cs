@@ -20,6 +20,7 @@ using PhotoSite.Infrastructure;
 using PhotoSite.Services;
 using PhotoSite.Services.Batch;
 using PhotoSite.ViewModels;
+using ShapeEllipse = System.Windows.Shapes.Ellipse;
 using ShapePath = System.Windows.Shapes.Path;
 
 namespace PhotoSite;
@@ -266,6 +267,8 @@ public partial class MainWindow : Window
     internal void ValidatePhotoContextMenuForSmokeTest()
     {
         if (Resources["PhotoContextMenuItemStyle"] is not Style itemStyle
+            || Resources["PhotoContextMenuSubmenuItemStyle"]
+                is not Style submenuItemStyle
             || Resources["PhotoContextMenuStyle"] is not Style contextMenuStyle
             || Resources["PhotoContextMenuSeparatorStyle"]
                 is not Style separatorStyle
@@ -296,9 +299,12 @@ public partial class MainWindow : Window
 
         var items = contextMenu.Items.OfType<MenuItem>().ToArray();
         var separators = contextMenu.Items.OfType<Separator>().ToArray();
-        if (items.Length != 16
+        if (items.Length != 17
             || items.Any(item => item.Icon is null
-                                 || !ReferenceEquals(item.Style, itemStyle))
+                                 || !(ReferenceEquals(item.Style, itemStyle)
+                                      || ReferenceEquals(
+                                          item.Style,
+                                          submenuItemStyle)))
             || separators.Length != 6
             || separators.Any(separator =>
                 !ReferenceEquals(separator.Style, separatorStyle)))
@@ -958,6 +964,14 @@ public partial class MainWindow : Window
             selectedCount == 1
                 ? "Find people…"
                 : $"Find people in {selectedCount:N0} photos…");
+        SetMenuHeader(
+            items,
+            "AssignPerson",
+            selectedCount == 1
+                ? "Assign person"
+                : $"Assign person to {selectedCount:N0} photos");
+        RebuildAssignPersonMenu(
+            items.Single(item => Equals(item.Tag, "AssignPerson")));
         // Renaming is a one-file operation; a bulk rename is what the batch
         // dialog is for, and it does it far better than a prompt could.
         items.Single(item => Equals(item.Tag, "RenameFile")).IsEnabled =
@@ -2190,6 +2204,200 @@ public partial class MainWindow : Window
         _ = viewModel.RefreshPhotoPeopleAsync();
     }
 
+    /// <summary>
+    /// The person list the Assign person submenu and the info panel combo
+    /// draw from; the person-filter load keeps it warm.
+    /// </summary>
+    private IReadOnlyList<PersonRecord> personChoices = [];
+
+    /// <summary>
+    /// Fills the Assign person submenu with the known people, colour dot
+    /// and name each - for tagging someone whose face is not visible.
+    /// </summary>
+    private void RebuildAssignPersonMenu(MenuItem parent)
+    {
+        parent.Items.Clear();
+        var itemStyle = (Style)Resources["PhotoContextMenuItemStyle"];
+        if (personChoices.Count == 0)
+        {
+            parent.Items.Add(new MenuItem
+            {
+                Style = itemStyle,
+                Header = "No people yet - use Find people… first",
+                IsEnabled = false,
+                Icon = new ShapeEllipse
+                {
+                    Width = 9,
+                    Height = 9,
+                    Fill = Brushes.Transparent
+                }
+            });
+            return;
+        }
+
+        foreach (var person in personChoices)
+        {
+            var item = new MenuItem
+            {
+                Style = itemStyle,
+                Header = person.Name,
+                Icon = new ShapeEllipse
+                {
+                    Width = 9,
+                    Height = 9,
+                    Fill = PersonBrushes.Get(person.Id)
+                },
+                Tag = person
+            };
+            item.Click += OnAssignPersonMenuItemClick;
+            parent.Items.Add(item);
+        }
+    }
+
+    private async void OnAssignPersonMenuItemClick(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        if (sender is MenuItem { Tag: PersonRecord person } item)
+        {
+            await AssignPersonToPhotosAsync(GetContextPhotos(item), person.Name);
+        }
+    }
+
+    /// <summary>
+    /// Tags a person onto photographs by hand - they are on the shot, but
+    /// no face is visible. The person joins the catalogue's people-on-photo
+    /// list and the keywords, exactly like a named face, just frameless.
+    /// </summary>
+    private async Task AssignPersonToPhotosAsync(
+        IReadOnlyCollection<PhotoItemViewModel> photos,
+        string name)
+    {
+        var targets = photos
+            .Where(photo => !photo.IsTransient)
+            .ToArray();
+        if (targets.Length == 0 || string.IsNullOrWhiteSpace(name))
+        {
+            return;
+        }
+
+        try
+        {
+            var personId = await catalog.GetOrCreatePersonAsync(name);
+            foreach (var photo in targets)
+            {
+                await catalog.AddPersonToPhotoAsync(photo.Path, personId);
+                var merged = OllamaVisionService.MergeKeywords(
+                    photo.Keywords,
+                    [name.Trim()]);
+                if (merged is not null
+                    && !string.Equals(
+                        merged,
+                        photo.Keywords,
+                        StringComparison.Ordinal))
+                {
+                    photo.Keywords = merged;
+                }
+            }
+
+            viewModel.ReportStatus(
+                targets.Length == 1
+                    ? $"Tagged “{name.Trim()}” on 1 photo"
+                    : $"Tagged “{name.Trim()}” on {targets.Length:N0} photos");
+        }
+        catch (Exception exception)
+        {
+            viewModel.ReportStatus(
+                $"Tagging the person failed: {exception.Message}");
+        }
+
+        _ = LoadPersonFilterChoicesAsync();
+        await viewModel.RefreshPhotoPeopleAsync();
+    }
+
+    /// <summary>
+    /// The ✕ on an info panel person pill: takes the person off the photo -
+    /// the hand tag, any assigned faces, the keyword and the MWG regions.
+    /// </summary>
+    private async void OnRemovePersonTagClick(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        if (sender is not FrameworkElement { Tag: PersonTag tag }
+            || viewModel.SelectedPhoto is not { IsTransient: false } photo)
+        {
+            return;
+        }
+
+        try
+        {
+            await catalog.RemovePersonFromPhotoAsync(photo.Path, tag.Id);
+            var remaining = (photo.Keywords ?? string.Empty)
+                .Split(
+                    [';', ','],
+                    StringSplitOptions.RemoveEmptyEntries
+                    | StringSplitOptions.TrimEntries)
+                .Where(keyword => !keyword.Equals(
+                    tag.Name,
+                    StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            photo.Keywords = remaining.Length == 0
+                ? null
+                : string.Join("; ", remaining);
+            await catalog.RebuildFaceRegionsAsync(photo.Path);
+            viewModel.ReportStatus(
+                $"Removed “{tag.Name}” from {photo.FileName}");
+        }
+        catch (Exception exception)
+        {
+            viewModel.ReportStatus(
+                $"Removing the person failed: {exception.Message}");
+        }
+
+        _ = UpdateFaceOverlaysAsync();
+        await viewModel.RefreshPhotoPeopleAsync();
+    }
+
+    private async void OnAssignPersonBoxDropDownClosed(
+        object sender,
+        EventArgs eventArgs)
+    {
+        if (sender is ComboBox { SelectedItem: PersonRecord person } box)
+        {
+            await CommitAssignPersonBoxAsync(box, person.Name);
+        }
+    }
+
+    private async void OnAssignPersonBoxKeyDown(
+        object sender,
+        KeyEventArgs eventArgs)
+    {
+        // With the dropdown open, Enter belongs to the selection and lands
+        // here again through DropDownClosed.
+        if (eventArgs.Key != Key.Enter
+            || sender is not ComboBox { IsDropDownOpen: false } box)
+        {
+            return;
+        }
+
+        eventArgs.Handled = true;
+        await CommitAssignPersonBoxAsync(box, box.Text);
+    }
+
+    private async Task CommitAssignPersonBoxAsync(ComboBox box, string? name)
+    {
+        var trimmed = name?.Trim();
+        box.SelectedItem = null;
+        box.Text = string.Empty;
+        if (string.IsNullOrWhiteSpace(trimmed)
+            || viewModel.SelectedPhoto is not { IsTransient: false } photo)
+        {
+            return;
+        }
+
+        await AssignPersonToPhotosAsync([photo], trimmed);
+    }
+
     private const string ShowFacesSetting = "show_faces";
     private readonly Dictionary<long, string> peopleNames = new();
 
@@ -2282,6 +2490,9 @@ public partial class MainWindow : Window
         // The await resumed off the dispatcher; the chips have not.
         _ = Dispatcher.BeginInvoke(() =>
         {
+            personChoices = people;
+            AssignPersonBox.ItemsSource = people;
+            EditorAssignPersonBox.ItemsSource = people;
             var checkedBefore = personFilterChips
                 .Count(chip => chip.IsChecked == true);
             isFilterUiUpdating = true;

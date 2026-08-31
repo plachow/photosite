@@ -6,3 +6,10 @@ obj/
 artifacts/
 PhotoSite.local/
 target/
+
+# 105 MB of binaries: exiftool with its own Perl, and the ONNX face models.
+# They are fetched, not authored, and git is the wrong place for them.
+**/PhotoSite.App/tools/
+
+# JetBrains project files.
+.idea/

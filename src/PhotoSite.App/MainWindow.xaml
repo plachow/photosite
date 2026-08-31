@@ -41,6 +41,40 @@
       </Border>
     </DataTemplate>
 
+    <!-- The info panel flavour of the person pill: dot, name, and a ✕ that
+         takes the person off the photo again. -->
+    <DataTemplate x:Key="PersonEditBadgeTemplate">
+      <Border Margin="0,2,4,0"
+              Padding="6,2,3,3"
+              Background="#242832"
+              BorderBrush="#3A3F4B"
+              BorderThickness="1"
+              CornerRadius="9">
+        <StackPanel Orientation="Horizontal">
+          <Ellipse Width="8"
+                   Height="8"
+                   Margin="0,1,5,0"
+                   VerticalAlignment="Center"
+                   Fill="{Binding Converter={StaticResource PersonBrush}}" />
+          <TextBlock FontSize="11"
+                     Foreground="#E8ECF2"
+                     Text="{Binding Name}" />
+          <Button Margin="5,0,0,0"
+                  Padding="3,0"
+                  VerticalAlignment="Center"
+                  AutomationProperties.Name="Remove this person from the photo"
+                  Background="Transparent"
+                  BorderThickness="0"
+                  Content="✕"
+                  FontSize="9"
+                  Foreground="#AAB2C0"
+                  Tag="{Binding}"
+                  ToolTip="Remove this person from the photo"
+                  Click="OnRemovePersonTagClick" />
+        </StackPanel>
+      </Border>
+    </DataTemplate>
+
     <!-- Tab strip: one Manager tab, one tab per open editor. -->
     <Style x:Key="TabLabelButtonStyle" TargetType="Button">
       <Setter Property="Foreground" Value="#C8CDD8" />
@@ -246,6 +280,80 @@
                            VerticalAlignment="Center"
                            Foreground="#AAB2C0"
                            Text="{TemplateBinding InputGestureText}" />
+              </Grid>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsHighlighted" Value="True">
+                <Setter TargetName="ItemBorder"
+                        Property="Background"
+                        Value="#315676" />
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Opacity" Value="0.45" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- The submenu flavour of the dark item: same row plus a » arrow, and
+         its own dark popup - the leaf template has no popup part. -->
+    <Style x:Key="PhotoContextMenuSubmenuItemStyle" TargetType="MenuItem">
+      <Setter Property="Background" Value="{StaticResource RaisedBrush}" />
+      <Setter Property="Foreground" Value="#F2F4F8" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="MenuItem">
+            <Border x:Name="ItemBorder"
+                    MinWidth="280"
+                    Height="34"
+                    Background="{TemplateBinding Background}"
+                    CornerRadius="3"
+                    SnapsToDevicePixels="True">
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="32" />
+                  <ColumnDefinition Width="*" />
+                  <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <ContentPresenter Grid.Column="0"
+                                  HorizontalAlignment="Center"
+                                  VerticalAlignment="Center"
+                                  ContentSource="Icon" />
+                <ContentPresenter Grid.Column="1"
+                                  Margin="3,0,12,0"
+                                  VerticalAlignment="Center"
+                                  ContentSource="Header"
+                                  RecognizesAccessKey="True" />
+                <Path Grid.Column="2"
+                      Margin="12,0,15,0"
+                      VerticalAlignment="Center"
+                      Data="M0,0 L4,4 L0,8"
+                      Stroke="#AAB2C0"
+                      StrokeThickness="1.4"
+                      StrokeStartLineCap="Round"
+                      StrokeEndLineCap="Round" />
+                <Popup x:Name="PART_Popup"
+                       AllowsTransparency="True"
+                       Focusable="False"
+                       HorizontalOffset="2"
+                       IsOpen="{Binding IsSubmenuOpen,
+                                        RelativeSource={RelativeSource TemplatedParent}}"
+                       Placement="Right"
+                       PopupAnimation="Fade">
+                  <Border Padding="5"
+                          Background="{StaticResource RaisedBrush}"
+                          BorderBrush="#4A5160"
+                          BorderThickness="1"
+                          CornerRadius="6">
+                    <ScrollViewer MaxHeight="420"
+                                  VerticalScrollBarVisibility="Auto">
+                      <ItemsPresenter />
+                    </ScrollViewer>
+                  </Border>
+                </Popup>
               </Grid>
             </Border>
             <ControlTemplate.Triggers>
@@ -498,6 +606,35 @@
               <Path Data="M2.8,16 C3.3,12.4 5.7,10.8 9,10.8 C12.3,10.8 14.7,12.4 15.2,16"
                     Stroke="#8BC8FF"
                     StrokeThickness="1.4"
+                    StrokeStartLineCap="Round"
+                    StrokeEndLineCap="Round" />
+            </Canvas>
+          </Viewbox>
+        </MenuItem.Icon>
+      </MenuItem>
+      <!-- For people on the shot with no visible face; the submenu is
+           rebuilt from the person list every time the menu opens. -->
+      <MenuItem Padding="10,6"
+                Style="{StaticResource PhotoContextMenuSubmenuItemStyle}"
+                Header="Assign person"
+                Tag="AssignPerson">
+        <MenuItem.Icon>
+          <Viewbox Width="17" Height="17">
+            <Canvas Width="18" Height="18">
+              <Ellipse Canvas.Left="4.4"
+                       Canvas.Top="2"
+                       Width="7.2"
+                       Height="7.2"
+                       Stroke="#A8D88F"
+                       StrokeThickness="1.4" />
+              <Path Data="M1.8,16 C2.3,12.4 4.7,10.8 8,10.8 C11.3,10.8 13.7,12.4 14.2,16"
+                    Stroke="#A8D88F"
+                    StrokeThickness="1.4"
+                    StrokeStartLineCap="Round"
+                    StrokeEndLineCap="Round" />
+              <Path Data="M14.7,3.4 V8 M12.4,5.7 H17"
+                    Stroke="#C9E6FF"
+                    StrokeThickness="1.5"
                     StrokeStartLineCap="Round"
                     StrokeEndLineCap="Round" />
             </Canvas>
@@ -2187,6 +2324,7 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                   </Grid.RowDefinitions>
                   <StackPanel Margin="0,0,0,8" Orientation="Horizontal">
                     <controls:RatingPicker AutomationProperties.Name="Rating"
@@ -2349,11 +2487,9 @@
                   <TextBlock Grid.Row="8"
                              Margin="0,8,0,3"
                              Style="{StaticResource InfoCaptionStyle}"
-                             Text="People"
-                             Visibility="{Binding PeopleText,
-                                                  Converter={StaticResource NullToCollapsed}}" />
+                             Text="People" />
                   <ItemsControl Grid.Row="9"
-                                ItemTemplate="{StaticResource PersonBadgeTemplate}"
+                                ItemTemplate="{StaticResource PersonEditBadgeTemplate}"
                                 ItemsSource="{Binding People}"
                                 Visibility="{Binding PeopleText,
                                                      Converter={StaticResource NullToCollapsed}}">
@@ -2363,13 +2499,38 @@
                       </ItemsPanelTemplate>
                     </ItemsControl.ItemsPanel>
                   </ItemsControl>
-                  <TextBlock Grid.Row="10"
+                  <!-- Tags a person with no visible face onto the photo:
+                       pick a name, or type a new one and press Enter. -->
+                  <ComboBox x:Name="AssignPersonBox"
+                            Grid.Row="10"
+                            MinWidth="160"
+                            Margin="0,2,0,0"
+                            HorizontalAlignment="Left"
+                            IsEditable="True"
+                            TextSearch.TextPath="Name"
+                            ToolTip="Add a person to this photo - pick one, or type a new name and press Enter"
+                            DropDownClosed="OnAssignPersonBoxDropDownClosed"
+                            KeyDown="OnAssignPersonBoxKeyDown">
+                    <ComboBox.ItemTemplate>
+                      <DataTemplate>
+                        <StackPanel Orientation="Horizontal">
+                          <Ellipse Width="8"
+                                   Height="8"
+                                   Margin="0,1,6,0"
+                                   VerticalAlignment="Center"
+                                   Fill="{Binding Converter={StaticResource PersonBrush}}" />
+                          <TextBlock Text="{Binding Name}" />
+                        </StackPanel>
+                      </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                  </ComboBox>
+                  <TextBlock Grid.Row="11"
                              Margin="0,8,0,3"
                              Style="{StaticResource InfoCaptionStyle}"
                              Text="Expression"
                              Visibility="{Binding ExpressionText,
                                                   Converter={StaticResource NullToCollapsed}}" />
-                  <TextBlock Grid.Row="11"
+                  <TextBlock Grid.Row="12"
                              FontSize="12"
                              Foreground="#C9CFDA"
                              Text="{Binding ExpressionText}"
@@ -2767,6 +2928,7 @@
                       <RowDefinition Height="Auto" />
                       <RowDefinition Height="Auto" />
                       <RowDefinition Height="Auto" />
+                      <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
                     <StackPanel Margin="0,0,0,8" Orientation="Horizontal">
                       <controls:RatingPicker AutomationProperties.Name="Rating"
@@ -2929,11 +3091,9 @@
                     <TextBlock Grid.Row="8"
                                Margin="0,8,0,3"
                                Style="{StaticResource InfoCaptionStyle}"
-                               Text="People"
-                               Visibility="{Binding PeopleText,
-                                                    Converter={StaticResource NullToCollapsed}}" />
+                               Text="People" />
                     <ItemsControl Grid.Row="9"
-                                  ItemTemplate="{StaticResource PersonBadgeTemplate}"
+                                  ItemTemplate="{StaticResource PersonEditBadgeTemplate}"
                                   ItemsSource="{Binding People}"
                                   Visibility="{Binding PeopleText,
                                                        Converter={StaticResource NullToCollapsed}}">
@@ -2943,6 +3103,31 @@
                         </ItemsPanelTemplate>
                       </ItemsControl.ItemsPanel>
                     </ItemsControl>
+                    <!-- Tags a person with no visible face onto the photo:
+                         pick a name, or type a new one and press Enter. -->
+                    <ComboBox x:Name="EditorAssignPersonBox"
+                              Grid.Row="10"
+                              MinWidth="160"
+                              Margin="0,2,0,0"
+                              HorizontalAlignment="Left"
+                              IsEditable="True"
+                              TextSearch.TextPath="Name"
+                              ToolTip="Add a person to this photo - pick one, or type a new name and press Enter"
+                              DropDownClosed="OnAssignPersonBoxDropDownClosed"
+                              KeyDown="OnAssignPersonBoxKeyDown">
+                      <ComboBox.ItemTemplate>
+                        <DataTemplate>
+                          <StackPanel Orientation="Horizontal">
+                            <Ellipse Width="8"
+                                     Height="8"
+                                     Margin="0,1,6,0"
+                                     VerticalAlignment="Center"
+                                     Fill="{Binding Converter={StaticResource PersonBrush}}" />
+                            <TextBlock Text="{Binding Name}" />
+                          </StackPanel>
+                        </DataTemplate>
+                      </ComboBox.ItemTemplate>
+                    </ComboBox>
                   </Grid>
                 </ScrollViewer>
               </Border>

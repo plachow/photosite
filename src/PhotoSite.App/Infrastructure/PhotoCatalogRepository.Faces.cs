@@ -190,6 +190,7 @@ public sealed partial class PhotoCatalogRepository
     /// <summary>
     /// Every photograph's named people in one query - the source for the
     /// gallery badges, the info panel's People row and the person filter.
+    /// Faces and hand-tagged people (no visible face) count the same.
     /// </summary>
     public async Task<IReadOnlyDictionary<string, IReadOnlyList<PersonTag>>>
         GetPeopleByPhotoAsync(CancellationToken cancellationToken = default)
@@ -198,9 +199,14 @@ public sealed partial class PhotoCatalogRepository
         await using var command = connection.CreateCommand();
         command.CommandText =
             """
-            SELECT DISTINCT faces.path, people.id, people.name
-            FROM faces
-            JOIN people ON people.id = faces.person_id
+            SELECT DISTINCT source.path, people.id, people.name
+            FROM (
+                SELECT path, person_id FROM faces
+                WHERE person_id IS NOT NULL
+                UNION
+                SELECT path, person_id FROM photo_people
+            ) AS source
+            JOIN people ON people.id = source.person_id
             ORDER BY people.name COLLATE NOCASE;
             """;
         var map = new Dictionary<string, IReadOnlyList<PersonTag>>(
@@ -338,7 +344,11 @@ public sealed partial class PhotoCatalogRepository
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText =
-            "SELECT DISTINCT path FROM faces WHERE person_id = $person;";
+            """
+            SELECT DISTINCT path FROM faces WHERE person_id = $person
+            UNION
+            SELECT path FROM photo_people WHERE person_id = $person;
+            """;
         command.Parameters.AddWithValue("$person", personId);
         var paths = new List<string>();
         await using var reader = await command.ExecuteReaderAsync(
@@ -557,6 +567,94 @@ public sealed partial class PhotoCatalogRepository
     }
 
     /// <summary>
+    /// Tags a person onto a photograph by hand - they are on the shot, but
+    /// no face is visible for the detector to frame. Idempotent.
+    /// </summary>
+    public async Task AddPersonToPhotoAsync(
+        string path,
+        long personId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            INSERT OR IGNORE INTO photo_people (path, person_id, created_utc)
+            VALUES ($path, $person, $created);
+            """;
+        command.Parameters.AddWithValue("$path", path);
+        command.Parameters.AddWithValue("$person", personId);
+        command.Parameters.AddWithValue(
+            "$created",
+            DateTime.UtcNow.ToString("O"));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Takes a person off one photograph entirely: the hand tag goes away
+    /// and any of their faces on the shot return to the unnamed pool.
+    /// </summary>
+    public async Task RemovePersonFromPhotoAsync(
+        string path,
+        long personId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            DELETE FROM photo_people
+            WHERE path = $path AND person_id = $person;
+            UPDATE faces SET person_id = NULL
+            WHERE path = $path AND person_id = $person;
+            """;
+        command.Parameters.AddWithValue("$path", path);
+        command.Parameters.AddWithValue("$person", personId);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Rebuilds and queues the photograph's MWG face regions from the faces
+    /// currently assigned in the catalogue. Needs the pixel dimensions from
+    /// the catalogue; without them the write is skipped rather than guessed.
+    /// </summary>
+    public async Task RebuildFaceRegionsAsync(
+        string path,
+        CancellationToken cancellationToken = default)
+    {
+        var record = await GetByPathAsync(path, cancellationToken);
+        if (record is not
+            {
+                PixelWidth: > 0 and { } width,
+                PixelHeight: > 0 and { } height
+            })
+        {
+            return;
+        }
+
+        var faces = await GetFacesForPathAsync(path, cancellationToken);
+        var names = (await GetPeopleAsync(cancellationToken)).ToDictionary(
+            person => person.Id,
+            person => person.Name);
+        var regions = faces
+            .Where(face => face.PersonId is { } id && names.ContainsKey(id))
+            .Select(face => new
+            {
+                name = names[face.PersonId!.Value],
+                x = face.X,
+                y = face.Y,
+                w = face.Width,
+                h = face.Height
+            })
+            .ToArray();
+        await EnqueueFaceRegionsAsync(
+            path,
+            System.Text.Json.JsonSerializer.Serialize(
+                new { width, height, regions }),
+            cancellationToken);
+    }
+
+    /// <summary>
     /// Queues the photograph's named face rectangles for exiftool to write
     /// as MWG regions; the payload carries the pixel dimensions and the
     /// normalized top-left rectangles with their names.
@@ -610,6 +708,7 @@ public sealed partial class PhotoCatalogRepository
             UPDATE faces SET person_id = NULL WHERE person_id = $id;
             UPDATE faces SET suggested_person_id = NULL
             WHERE suggested_person_id = $id;
+            DELETE FROM photo_people WHERE person_id = $id;
             DELETE FROM people WHERE id = $id;
             """;
         command.Parameters.AddWithValue("$id", personId);

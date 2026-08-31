@@ -104,8 +104,8 @@
                 <ItemsControl.ItemTemplate>
                   <DataTemplate>
                     <Grid Margin="0,0,6,6">
-                      <Border Width="64"
-                              Height="64"
+                      <Border Width="80"
+                              Height="80"
                               Background="#111318"
                               CornerRadius="4"
                               ToolTip="{Binding Face.Path}">
@@ -152,14 +152,14 @@
                           <ItemsControl ItemsSource="{Binding Thumbnails}">
                             <ItemsControl.ItemsPanel>
                               <ItemsPanelTemplate>
-                                <StackPanel Orientation="Horizontal" />
+                                <WrapPanel Orientation="Horizontal" />
                               </ItemsPanelTemplate>
                             </ItemsControl.ItemsPanel>
                             <ItemsControl.ItemTemplate>
                               <DataTemplate>
-                                <Border Width="64"
-                                        Height="64"
-                                        Margin="0,0,6,0"
+                                <Border Width="80"
+                                        Height="80"
+                                        Margin="0,0,6,6"
                                         Background="#111318"
                                         CornerRadius="4">
                                   <Image Margin="2"
@@ -210,23 +210,55 @@
                         <ColumnDefinition Width="Auto" />
                       </Grid.ColumnDefinitions>
                       <StackPanel>
-                        <ItemsControl ItemsSource="{Binding Thumbnails}">
+                        <ItemsControl ItemsSource="{Binding Faces}">
                           <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
-                              <StackPanel Orientation="Horizontal" />
+                              <WrapPanel Orientation="Horizontal" />
                             </ItemsPanelTemplate>
                           </ItemsControl.ItemsPanel>
                           <ItemsControl.ItemTemplate>
                             <DataTemplate>
-                              <Border Width="64"
-                                      Height="64"
-                                      Margin="0,0,6,0"
-                                      Background="#111318"
-                                      CornerRadius="4">
-                                <Image Margin="2"
-                                       Source="{Binding}"
-                                       Stretch="UniformToFill" />
-                              </Border>
+                              <Grid Margin="0,0,6,6">
+                                <Border Width="80"
+                                        Height="80"
+                                        Background="#111318"
+                                        CornerRadius="4"
+                                        ToolTip="{Binding Face.Path}">
+                                  <Image Margin="2"
+                                         Source="{Binding Thumbnail}"
+                                         Stretch="UniformToFill" />
+                                </Border>
+                                <!-- Appears on hover: this face does not
+                                     belong to the group. -->
+                                <Button Width="18"
+                                        Height="18"
+                                        Margin="0,2,2,0"
+                                        Padding="0"
+                                        HorizontalAlignment="Right"
+                                        VerticalAlignment="Top"
+                                        AutomationProperties.Name="Leave this face out of the group"
+                                        Content="✕"
+                                        FontSize="10"
+                                        Tag="{Binding}"
+                                        ToolTip="Not the same person - leave this face out of the group"
+                                        Click="OnRemoveClusterFaceClick">
+                                  <Button.Style>
+                                    <Style TargetType="Button"
+                                           BasedOn="{StaticResource {x:Type Button}}">
+                                      <Setter Property="Visibility"
+                                              Value="Collapsed" />
+                                      <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsMouseOver,
+                                                                       RelativeSource={RelativeSource AncestorType=Grid}}"
+                                                     Value="True">
+                                          <Setter Property="Visibility"
+                                                  Value="Visible" />
+                                        </DataTrigger>
+                                      </Style.Triggers>
+                                    </Style>
+                                  </Button.Style>
+                                </Button>
+                              </Grid>
                             </DataTemplate>
                           </ItemsControl.ItemTemplate>
                         </ItemsControl>
@@ -301,5 +333,37 @@
               IsCancel="True"
               Click="OnCloseClick" />
     </StackPanel>
+
+    <!-- Bulk writes lock the whole dialog behind this veil, so nothing can
+         be clicked while the cards are about to reshuffle. -->
+    <Grid x:Name="BusyOverlay"
+          Grid.RowSpan="2"
+          Margin="-16"
+          Background="#D9111318"
+          Visibility="Collapsed">
+      <Border MinWidth="360"
+              MaxWidth="460"
+              Padding="26,22"
+              HorizontalAlignment="Center"
+              VerticalAlignment="Center"
+              Background="#20242B"
+              BorderBrush="#3A3F4B"
+              BorderThickness="1"
+              CornerRadius="8">
+        <StackPanel>
+          <TextBlock x:Name="BusyTitle"
+                     FontSize="13"
+                     Foreground="{StaticResource PrimaryTextBrush}"
+                     TextWrapping="Wrap" />
+          <ProgressBar x:Name="BusyProgress"
+                       Height="6"
+                       Margin="0,12,0,0" />
+          <TextBlock x:Name="BusyText"
+                     Margin="0,8,0,0"
+                     FontSize="12"
+                     Foreground="{StaticResource MutedTextBrush}" />
+        </StackPanel>
+      </Border>
+    </Grid>
   </Grid>
 </Window>

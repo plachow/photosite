@@ -1,3 +1,5 @@
+using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -21,7 +23,8 @@ public partial class PeopleDialog : Window
 {
     private const int DetectPixelWidth = 1024;
     private const int ThumbnailPixelWidth = 512;
-    private const int ThumbnailsPerCluster = 5;
+    private const int SuggestionThumbnails = 5;
+    private const int CropCopyPixelWidth = 160;
     private const int MaxClustersShown = 60;
     private const int MaxPersonFacesShown = 60;
 
@@ -32,6 +35,7 @@ public partial class PeopleDialog : Window
     private readonly bool scanningSelection;
     private CancellationTokenSource? scanCancellation;
     private bool isScanning;
+    private bool isBusy;
 
     internal PeopleDialog(
         IReadOnlyList<PhotoRecord> photos,
@@ -48,25 +52,60 @@ public partial class PeopleDialog : Window
         InitializeComponent();
         DarkWindowChrome.Apply(this);
         ScanButton.Content = ScanButtonLabel;
-        Loaded += async (_, _) => await RefreshAsync();
+        Loaded += async (_, _) =>
+        {
+            BeginBusy("Loading the face groups…");
+            try
+            {
+                await RefreshAsync();
+            }
+            finally
+            {
+                EndBusy();
+            }
+        };
     }
 
     private string ScanButtonLabel => scanningSelection
         ? "Scan selection for faces"
         : "Scan folder for faces";
 
-    private sealed class ClusterRow
+    private sealed class ClusterRow : INotifyPropertyChanged
     {
-        public required IReadOnlyList<ImageSource> Thumbnails { get; init; }
+        public required ObservableCollection<ClusterFace> Faces { get; init; }
 
-        public required string CountText { get; init; }
+        public string CountText => Faces.Count == 1
+            ? "1 face"
+            : $"{Faces.Count:N0} faces in {Paths.Count:N0} photos";
 
-        public required IReadOnlyList<long> FaceIds { get; init; }
+        public IReadOnlyList<long> FaceIds =>
+            Faces.Select(face => face.Face.Id).ToArray();
 
-        public required IReadOnlyList<string> Paths { get; init; }
+        public IReadOnlyList<string> Paths => Faces
+            .Select(face => face.Face.Path)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
 
         // Filled right after construction; each chip needs its owning row.
         public IReadOnlyList<AssignChoice> AssignChoices { get; set; } = [];
+
+        public event PropertyChangedEventHandler? PropertyChanged;
+
+        /// <summary>Redraws the face count after a ✕ removal.</summary>
+        public void NotifyCountChanged() =>
+            PropertyChanged?.Invoke(
+                this,
+                new PropertyChangedEventArgs(nameof(CountText)));
+    }
+
+    /// <summary>One face tile on a group card, removable by its ✕.</summary>
+    private sealed class ClusterFace
+    {
+        public required ImageSource? Thumbnail { get; init; }
+
+        public required FaceRecord Face { get; init; }
+
+        public ClusterRow? Row { get; set; }
     }
 
     /// <summary>One chip on a group card: this group is that person.</summary>
@@ -123,18 +162,42 @@ public partial class PeopleDialog : Window
             var peopleById = people.ToDictionary(
                 person => person.Id,
                 person => person.Name);
+            var suggestionGroups = suggested
+                .Where(face => face.SuggestedPersonId is { } id
+                               && peopleById.ContainsKey(id))
+                .GroupBy(face => face.SuggestedPersonId!.Value)
+                .Select(group => group.ToArray())
+                .ToArray();
+
+            var unassigned = await catalog.GetUnassignedFacesAsync();
+            var clusters = FaceClusterer.Cluster(unassigned);
+            // Lone faces get a card too - on a small selection every face
+            // is unique, and it still needs naming or ignoring. The biggest
+            // groups come first, so the cap only ever trims the tail.
+            var groups = clusters
+                .Take(MaxClustersShown)
+                .ToArray();
+            var overflow = unassigned.Count
+                           - groups.Sum(cluster => cluster.Faces.Count);
+
+            // Every face crop not cached yet costs one photo decode;
+            // fetching the missing previews a few at a time keeps the first
+            // open of a big folder bearable.
+            await PreloadPreviewsAsync(
+                suggestionGroups
+                    .SelectMany(faces => faces.Take(SuggestionThumbnails))
+                    .Concat(groups.SelectMany(cluster => cluster.Faces)),
+                previewCache);
+
             var suggestionRows = new List<SuggestionRow>();
-            foreach (var group in suggested
-                         .Where(face => face.SuggestedPersonId is { } id
-                                        && peopleById.ContainsKey(id))
-                         .GroupBy(face => face.SuggestedPersonId!.Value))
+            foreach (var faces in suggestionGroups)
             {
-                var faces = group.ToArray();
-                var name = peopleById[group.Key];
+                var personId = faces[0].SuggestedPersonId!.Value;
+                var name = peopleById[personId];
                 suggestionRows.Add(new SuggestionRow
                 {
                     Thumbnails = await LoadFaceThumbnailsAsync(
-                        faces,
+                        faces.Take(SuggestionThumbnails).ToArray(),
                         previewCache),
                     QuestionText = faces.Length == 1
                         ? $"Is this {name}?"
@@ -144,7 +207,7 @@ public partial class PeopleDialog : Window
                         .Select(face => face.Path)
                         .Distinct(StringComparer.OrdinalIgnoreCase)
                         .ToArray(),
-                    PersonId = group.Key,
+                    PersonId = personId,
                     PersonName = name
                 });
             }
@@ -154,33 +217,27 @@ public partial class PeopleDialog : Window
                 ? Visibility.Visible
                 : Visibility.Collapsed;
 
-            var unassigned = await catalog.GetUnassignedFacesAsync();
-            var clusters = FaceClusterer.Cluster(unassigned);
-            var groups = clusters
-                .Where(cluster => cluster.Faces.Count >= 2)
-                .Take(MaxClustersShown)
-                .ToArray();
-            var singles = unassigned.Count
-                          - groups.Sum(cluster => cluster.Faces.Count);
-
-            var rows = new List<ClusterRow>(groups.Length);
+            var rows = new ObservableCollection<ClusterRow>();
             foreach (var cluster in groups)
             {
-                var row = new ClusterRow
+                var faces = new ObservableCollection<ClusterFace>();
+                foreach (var face in cluster.Faces)
                 {
-                    Thumbnails = await LoadClusterThumbnailsAsync(
-                        cluster,
-                        previewCache),
-                    CountText = cluster.Faces.Count == 1
-                        ? "1 face"
-                        : $"{cluster.Faces.Count:N0} faces in "
-                          + $"{cluster.Faces.Select(face => face.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count():N0} photos",
-                    FaceIds = cluster.Faces.Select(face => face.Id).ToArray(),
-                    Paths = cluster.Faces
-                        .Select(face => face.Path)
-                        .Distinct(StringComparer.OrdinalIgnoreCase)
-                        .ToArray()
-                };
+                    faces.Add(new ClusterFace
+                    {
+                        Thumbnail = await LoadFaceCropAsync(
+                            face,
+                            previewCache),
+                        Face = face
+                    });
+                }
+
+                var row = new ClusterRow { Faces = faces };
+                foreach (var face in faces)
+                {
+                    face.Row = row;
+                }
+
                 row.AssignChoices = people
                     .Select(person => new AssignChoice(row, person))
                     .ToArray();
@@ -212,9 +269,9 @@ public partial class PeopleDialog : Window
                     parts.Add($"{rows.Count:N0} unnamed groups");
                 }
 
-                if (singles > 0)
+                if (overflow > 0)
                 {
-                    parts.Add($"{singles:N0} faces without a group yet");
+                    parts.Add($"{overflow:N0} more faces not shown");
                 }
 
                 SummaryText.Text = string.Join(" · ", parts);
@@ -227,55 +284,145 @@ public partial class PeopleDialog : Window
         }
     }
 
-    private Task<IReadOnlyList<ImageSource>> LoadClusterThumbnailsAsync(
-        FaceCluster cluster,
-        Dictionary<string, BitmapSource?> previewCache) =>
-        LoadFaceThumbnailsAsync(cluster.Faces, previewCache);
+    /// <summary>
+    /// Face crops survive every refresh here, keyed by face id: cutting a
+    /// crop costs a whole photo decode, and the same faces come back after
+    /// each bulk action. The copies are small standalone bitmaps, so even a
+    /// long naming session stays at tens of kilobytes per face.
+    /// </summary>
+    private readonly Dictionary<long, ImageSource?> faceCropCache = new();
+
+    /// <summary>
+    /// Decodes the previews the given faces will need, a few at a time.
+    /// Faces already cropped in the cache cost nothing and are skipped.
+    /// </summary>
+    private async Task PreloadPreviewsAsync(
+        IEnumerable<FaceRecord> faces,
+        Dictionary<string, BitmapSource?> previewCache)
+    {
+        var pending = faces
+            .Where(face => !faceCropCache.ContainsKey(face.Id))
+            .Select(face => face.Path)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(path => !previewCache.ContainsKey(path))
+            .ToArray();
+        using var gate = new SemaphoreSlim(4);
+        var loads = pending
+            .Select(async path =>
+            {
+                await gate.WaitAsync();
+                try
+                {
+                    return (Path: path,
+                        Preview: File.Exists(path)
+                            ? (BitmapSource?)await previews.LoadAsync(
+                                path,
+                                ThumbnailPixelWidth,
+                                CancellationToken.None)
+                            : null);
+                }
+                catch (Exception)
+                {
+                    // The cards still render without this thumbnail.
+                    return (Path: path, Preview: (BitmapSource?)null);
+                }
+                finally
+                {
+                    gate.Release();
+                }
+            })
+            .ToArray();
+        foreach (var load in loads)
+        {
+            var (path, preview) = await load;
+            previewCache[path] = preview;
+        }
+    }
 
     private async Task<IReadOnlyList<ImageSource>> LoadFaceThumbnailsAsync(
         IReadOnlyList<FaceRecord> faces,
         Dictionary<string, BitmapSource?> previewCache)
     {
-        var thumbnails = new List<ImageSource>(ThumbnailsPerCluster);
-        foreach (var face in faces.Take(ThumbnailsPerCluster))
+        var thumbnails = new List<ImageSource>(faces.Count);
+        foreach (var face in faces)
         {
-            if (!previewCache.TryGetValue(face.Path, out var preview))
+            if (await LoadFaceCropAsync(face, previewCache) is { } crop)
             {
-                try
-                {
-                    preview = File.Exists(face.Path)
-                        ? await previews.LoadAsync(
-                            face.Path,
-                            ThumbnailPixelWidth,
-                            CancellationToken.None)
-                        : null;
-                }
-                catch (Exception)
-                {
-                    // A face row can outlive its file or codec; the group
-                    // is still nameable without this thumbnail.
-                    preview = null;
-                }
-
-                previewCache[face.Path] = preview;
+                thumbnails.Add(crop);
             }
-
-            if (preview is null)
-            {
-                continue;
-            }
-
-            var crop = new CroppedBitmap(
-                preview,
-                FaceCropper.ComputeCropRect(
-                    preview.PixelWidth,
-                    preview.PixelHeight,
-                    face));
-            crop.Freeze();
-            thumbnails.Add(crop);
         }
 
         return thumbnails;
+    }
+
+    /// <summary>
+    /// The face cut out of its photograph as a small standalone bitmap. A
+    /// plain CroppedBitmap would pin the whole decoded preview in memory,
+    /// so the pixels are copied out and scaled down before the preview is
+    /// let go.
+    /// </summary>
+    private async Task<ImageSource?> LoadFaceCropAsync(
+        FaceRecord face,
+        Dictionary<string, BitmapSource?> previewCache)
+    {
+        if (faceCropCache.TryGetValue(face.Id, out var cached))
+        {
+            return cached;
+        }
+
+        if (!previewCache.TryGetValue(face.Path, out var preview))
+        {
+            try
+            {
+                preview = File.Exists(face.Path)
+                    ? await previews.LoadAsync(
+                        face.Path,
+                        ThumbnailPixelWidth,
+                        CancellationToken.None)
+                    : null;
+            }
+            catch (Exception)
+            {
+                // A face row can outlive its file or codec; the group is
+                // still nameable without this thumbnail.
+                preview = null;
+            }
+
+            previewCache[face.Path] = preview;
+        }
+
+        ImageSource? crop = null;
+        if (preview is not null)
+        {
+            try
+            {
+                BitmapSource source = new CroppedBitmap(
+                    preview,
+                    FaceCropper.ComputeCropRect(
+                        preview.PixelWidth,
+                        preview.PixelHeight,
+                        face));
+                if (source.PixelWidth > CropCopyPixelWidth)
+                {
+                    var scale = (double)CropCopyPixelWidth
+                                / source.PixelWidth;
+                    source = new TransformedBitmap(
+                        source,
+                        new ScaleTransform(scale, scale));
+                }
+
+                var copy = new WriteableBitmap(source);
+                copy.Freeze();
+                crop = copy;
+            }
+            catch (Exception)
+            {
+                // An undecodable crop leaves an empty tile, nothing worse.
+            }
+        }
+
+        faceCropCache[face.Id] = crop;
+        return crop;
     }
 
     private async void OnScanClick(object sender, RoutedEventArgs eventArgs)
@@ -453,7 +600,15 @@ public partial class PeopleDialog : Window
         }
 
         SummaryText.Text = string.Join(" · ", summary);
-        await RefreshAsync();
+        BeginBusy("Refreshing the groups…");
+        try
+        {
+            await RefreshAsync();
+        }
+        finally
+        {
+            EndBusy();
+        }
     }
 
     /// <summary>
@@ -609,42 +764,10 @@ public partial class PeopleDialog : Window
 
     /// <summary>
     /// Queues the photograph's named face rectangles as MWG regions, the
-    /// face-frame format Lightroom, digiKam and Windows understand. Needs
-    /// the pixel dimensions from the catalogue; without them the write is
-    /// skipped rather than guessed.
+    /// face-frame format Lightroom, digiKam and Windows understand.
     /// </summary>
-    private async Task WriteFaceRegionsAsync(string path)
-    {
-        var record = await catalog.GetByPathAsync(path);
-        if (record is not
-            {
-                PixelWidth: > 0 and { } width,
-                PixelHeight: > 0 and { } height
-            })
-        {
-            return;
-        }
-
-        var faces = await catalog.GetFacesForPathAsync(path);
-        var names = (await catalog.GetPeopleAsync()).ToDictionary(
-            person => person.Id,
-            person => person.Name);
-        var regions = faces
-            .Where(face => face.PersonId is { } id && names.ContainsKey(id))
-            .Select(face => new
-            {
-                name = names[face.PersonId!.Value],
-                x = face.X,
-                y = face.Y,
-                w = face.Width,
-                h = face.Height
-            })
-            .ToArray();
-        await catalog.EnqueueFaceRegionsAsync(
-            path,
-            System.Text.Json.JsonSerializer.Serialize(
-                new { width, height, regions }));
-    }
+    private Task WriteFaceRegionsAsync(string path) =>
+        catalog.RebuildFaceRegionsAsync(path);
 
     private async void OnConfirmSuggestionClick(
         object sender,
@@ -655,25 +778,40 @@ public partial class PeopleDialog : Window
             return;
         }
 
+        BeginBusy(
+            $"Confirming {row.FaceIds.Count:N0} face(s) as "
+            + $"“{row.PersonName}”…",
+            row.Paths.Count);
         try
         {
-            await catalog.AssignFacesAsync(row.FaceIds, row.PersonId);
-            foreach (var path in row.Paths)
+            try
             {
-                await WritePersonKeywordAsync(path, row.PersonName);
-                await WriteFaceRegionsAsync(path);
+                await catalog.AssignFacesAsync(row.FaceIds, row.PersonId);
+                for (var index = 0; index < row.Paths.Count; index++)
+                {
+                    ReportBusy(index + 1, row.Paths.Count);
+                    await WritePersonKeywordAsync(
+                        row.Paths[index],
+                        row.PersonName);
+                    await WriteFaceRegionsAsync(row.Paths[index]);
+                }
+
+                DetailText.Text =
+                    $"Confirmed {row.FaceIds.Count:N0} face(s) as "
+                    + $"“{row.PersonName}”.";
+            }
+            catch (Exception exception)
+            {
+                DetailText.Text = $"Confirming failed: {exception.Message}";
             }
 
-            DetailText.Text =
-                $"Confirmed {row.FaceIds.Count:N0} face(s) as "
-                + $"“{row.PersonName}”.";
+            ReportBusyRefreshing();
+            await RefreshAsync();
         }
-        catch (Exception exception)
+        finally
         {
-            DetailText.Text = $"Confirming failed: {exception.Message}";
+            EndBusy();
         }
-
-        await RefreshAsync();
     }
 
     private async void OnRejectSuggestionClick(
@@ -685,19 +823,57 @@ public partial class PeopleDialog : Window
             return;
         }
 
+        BeginBusy("Returning the faces to the unnamed groups…");
         try
         {
-            await catalog.ClearSuggestionsAsync(row.FaceIds);
-            DetailText.Text =
-                $"{row.FaceIds.Count:N0} face(s) returned to the unnamed "
-                + "groups.";
+            try
+            {
+                await catalog.ClearSuggestionsAsync(row.FaceIds);
+                DetailText.Text =
+                    $"{row.FaceIds.Count:N0} face(s) returned to the unnamed "
+                    + "groups.";
+            }
+            catch (Exception exception)
+            {
+                DetailText.Text = $"Rejecting failed: {exception.Message}";
+            }
+
+            ReportBusyRefreshing();
+            await RefreshAsync();
         }
-        catch (Exception exception)
+        finally
         {
-            DetailText.Text = $"Rejecting failed: {exception.Message}";
+            EndBusy();
+        }
+    }
+
+    /// <summary>
+    /// The ✕ on a face tile: the face does not belong to this group, so it
+    /// is left out of the imminent naming. Nothing is written - the face
+    /// stays unnamed and gets its own card on the next refresh.
+    /// </summary>
+    private void OnRemoveClusterFaceClick(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        if (sender is not FrameworkElement { Tag: ClusterFace face }
+            || face.Row is not { } row)
+        {
+            return;
         }
 
-        await RefreshAsync();
+        row.Faces.Remove(face);
+        row.NotifyCountChanged();
+        if (row.Faces.Count == 0
+            && ClusterList.ItemsSource
+                is ObservableCollection<ClusterRow> rows)
+        {
+            rows.Remove(row);
+        }
+
+        DetailText.Text =
+            "Left the face out of the group; it stays unnamed and gets its "
+            + "own card on the next refresh.";
     }
 
     private async void OnAssignChipClick(
@@ -739,43 +915,70 @@ public partial class PeopleDialog : Window
             return;
         }
 
+        BeginBusy($"Ignoring {row.FaceIds.Count:N0} face(s)…");
         try
         {
-            await catalog.IgnoreFacesAsync(row.FaceIds);
-            DetailText.Text =
-                $"Ignored {row.FaceIds.Count:N0} face(s); the group will "
-                + "not be offered again.";
-        }
-        catch (Exception exception)
-        {
-            DetailText.Text = $"Ignoring the group failed: {exception.Message}";
-        }
+            try
+            {
+                await catalog.IgnoreFacesAsync(row.FaceIds);
+                DetailText.Text =
+                    $"Ignored {row.FaceIds.Count:N0} face(s); the group will "
+                    + "not be offered again.";
+            }
+            catch (Exception exception)
+            {
+                DetailText.Text =
+                    $"Ignoring the group failed: {exception.Message}";
+            }
 
-        await RefreshAsync();
+            ReportBusyRefreshing();
+            await RefreshAsync();
+        }
+        finally
+        {
+            EndBusy();
+        }
     }
 
     private async Task AssignClusterAsync(ClusterRow row, string name)
     {
+        // Snapshots: the lists are computed from the live tile collection,
+        // and the naming must cover exactly what was on screen at the click.
+        var faceIds = row.FaceIds;
+        var paths = row.Paths;
+        BeginBusy(
+            $"Naming {faceIds.Count:N0} face(s) as “{name}”…",
+            paths.Count);
         try
         {
-            var personId = await catalog.GetOrCreatePersonAsync(name);
-            await catalog.AssignFacesAsync(row.FaceIds, personId);
-            foreach (var path in row.Paths)
+            try
             {
-                await WritePersonKeywordAsync(path, name);
-                await WriteFaceRegionsAsync(path);
+                var personId = await catalog.GetOrCreatePersonAsync(name);
+                await catalog.AssignFacesAsync(faceIds, personId);
+                for (var index = 0; index < paths.Count; index++)
+                {
+                    ReportBusy(index + 1, paths.Count);
+                    await WritePersonKeywordAsync(paths[index], name);
+                    await WriteFaceRegionsAsync(paths[index]);
+                }
+
+                DetailText.Text =
+                    $"Named {faceIds.Count:N0} face(s) as “{name}” and "
+                    + $"wrote the keyword into {paths.Count:N0} photo(s).";
+            }
+            catch (Exception exception)
+            {
+                DetailText.Text =
+                    $"Naming the group failed: {exception.Message}";
             }
 
-            DetailText.Text =
-                $"Named {row.FaceIds.Count:N0} face(s) as “{name}” and wrote "
-                + $"the keyword into {row.Paths.Count:N0} photo(s).";
+            ReportBusyRefreshing();
+            await RefreshAsync();
         }
-        catch (Exception exception)
+        finally
         {
-            DetailText.Text = $"Naming the group failed: {exception.Message}";
+            EndBusy();
         }
-
-        await RefreshAsync();
     }
 
     private async void OnPeopleSelectionChanged(
@@ -842,33 +1045,44 @@ public partial class PeopleDialog : Window
             return;
         }
 
+        BeginBusy($"Removing a face from “{selected.Person.Name}”…");
         try
         {
-            await catalog.AssignFacesAsync([row.Face.Id], null);
-
-            // When that was the person's last face on the photo, the keyword
-            // written earlier no longer holds and comes back out; the region
-            // list is rebuilt either way.
-            var stillPresent = (await catalog.GetFacesForPathAsync(row.Face.Path))
-                .Any(face => face.PersonId == personId);
-            if (!stillPresent)
+            try
             {
-                await RemovePersonKeywordAsync(
-                    row.Face.Path,
-                    selected.Person.Name);
+                await catalog.AssignFacesAsync([row.Face.Id], null);
+
+                // When that was the person's last face on the photo, the
+                // keyword written earlier no longer holds and comes back
+                // out; the region list is rebuilt either way.
+                var stillPresent =
+                    (await catalog.GetFacesForPathAsync(row.Face.Path))
+                    .Any(face => face.PersonId == personId);
+                if (!stillPresent)
+                {
+                    await RemovePersonKeywordAsync(
+                        row.Face.Path,
+                        selected.Person.Name);
+                }
+
+                await WriteFaceRegionsAsync(row.Face.Path);
+                DetailText.Text =
+                    $"Removed a face from “{selected.Person.Name}”; it "
+                    + "returned to the unnamed pool.";
+            }
+            catch (Exception exception)
+            {
+                DetailText.Text =
+                    $"Removing the face failed: {exception.Message}";
             }
 
-            await WriteFaceRegionsAsync(row.Face.Path);
-            DetailText.Text =
-                $"Removed a face from “{selected.Person.Name}”; it returned "
-                + "to the unnamed pool.";
+            ReportBusyRefreshing();
+            await RefreshAsync();
         }
-        catch (Exception exception)
+        finally
         {
-            DetailText.Text = $"Removing the face failed: {exception.Message}";
+            EndBusy();
         }
-
-        await RefreshAsync();
     }
 
     /// <summary>
@@ -921,27 +1135,43 @@ public partial class PeopleDialog : Window
         }
 
         var name = dialog.Value.Trim();
+        BeginBusy($"Renaming “{row.Person.Name}” to “{name}”…");
         try
         {
-            await catalog.RenamePersonAsync(row.Person.Id, name);
-            // The new name joins the keywords of the person's photos; the
-            // old keyword is left in place rather than silently rewritten.
-            // The face regions are rebuilt whole, so they carry the new name.
-            var faces = await catalog.GetFacesForPersonAsync(row.Person.Id);
-            foreach (var path in faces
-                         .Select(face => face.Path)
-                         .Distinct(StringComparer.OrdinalIgnoreCase))
+            try
             {
-                await WritePersonKeywordAsync(path, name);
-                await WriteFaceRegionsAsync(path);
+                await catalog.RenamePersonAsync(row.Person.Id, name);
+                // The new name joins the keywords of the person's photos;
+                // the old keyword is left in place rather than silently
+                // rewritten. The face regions are rebuilt whole, so they
+                // carry the new name.
+                var faces = await catalog.GetFacesForPersonAsync(
+                    row.Person.Id);
+                var paths = faces
+                    .Select(face => face.Path)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+                BusyProgress.IsIndeterminate = false;
+                BusyProgress.Maximum = Math.Max(1, paths.Length);
+                for (var index = 0; index < paths.Length; index++)
+                {
+                    ReportBusy(index + 1, paths.Length);
+                    await WritePersonKeywordAsync(paths[index], name);
+                    await WriteFaceRegionsAsync(paths[index]);
+                }
             }
-        }
-        catch (Exception exception)
-        {
-            DetailText.Text = $"The rename failed: {exception.Message}";
-        }
+            catch (Exception exception)
+            {
+                DetailText.Text = $"The rename failed: {exception.Message}";
+            }
 
-        await RefreshAsync();
+            ReportBusyRefreshing();
+            await RefreshAsync();
+        }
+        finally
+        {
+            EndBusy();
+        }
     }
 
     private async void OnDeletePersonClick(
@@ -967,16 +1197,59 @@ public partial class PeopleDialog : Window
             return;
         }
 
+        BeginBusy($"Removing “{row.Person.Name}”…");
         try
         {
-            await catalog.DeletePersonAsync(row.Person.Id);
-        }
-        catch (Exception exception)
-        {
-            DetailText.Text = $"The removal failed: {exception.Message}";
-        }
+            try
+            {
+                await catalog.DeletePersonAsync(row.Person.Id);
+            }
+            catch (Exception exception)
+            {
+                DetailText.Text = $"The removal failed: {exception.Message}";
+            }
 
-        await RefreshAsync();
+            ReportBusyRefreshing();
+            await RefreshAsync();
+        }
+        finally
+        {
+            EndBusy();
+        }
+    }
+
+    /// <summary>
+    /// Raises the veil over the dialog for a bulk write. Zero steps means an
+    /// operation without a meaningful count; the bar just pulses.
+    /// </summary>
+    private void BeginBusy(string title, int totalSteps = 0)
+    {
+        isBusy = true;
+        BusyTitle.Text = title;
+        BusyText.Text = string.Empty;
+        BusyProgress.IsIndeterminate = totalSteps <= 0;
+        BusyProgress.Maximum = Math.Max(1, totalSteps);
+        BusyProgress.Value = 0;
+        BusyOverlay.Visibility = Visibility.Visible;
+    }
+
+    private void ReportBusy(int current, int total)
+    {
+        BusyText.Text = $"Processing photo {current:N0} / {total:N0}";
+        BusyProgress.Value = current;
+    }
+
+    /// <summary>The tail of every bulk write: the cards reshuffle.</summary>
+    private void ReportBusyRefreshing()
+    {
+        BusyText.Text = "Refreshing the groups…";
+        BusyProgress.IsIndeterminate = true;
+    }
+
+    private void EndBusy()
+    {
+        isBusy = false;
+        BusyOverlay.Visibility = Visibility.Collapsed;
     }
 
     private void SetScanningState(bool scanning)
@@ -1005,6 +1278,14 @@ public partial class PeopleDialog : Window
             // face already stored stays stored.
             e.Cancel = true;
             scanCancellation?.Cancel();
+            return;
+        }
+
+        if (isBusy)
+        {
+            // A bulk write is not cancellable - half the photos would carry
+            // the keyword and half not; the veil says what is happening.
+            e.Cancel = true;
             return;
         }
 

@@ -1235,6 +1235,28 @@ try
         && (await repository.GetUnassignedFacesAsync()).Count == 1,
         "Rejecting a suggestion returns the face to the unnamed pool.");
 
+    // A person on the photo with no visible face: the hand tag shows up in
+    // the per-photo people map and the person's photo list, and removing
+    // them also unassigns any of their faces on that photo.
+    var handTagPersonId = await repository.GetOrCreatePersonAsync(
+        "Hand Tagged");
+    await repository.AddPersonToPhotoAsync(firstPhoto, handTagPersonId);
+    await repository.AddPersonToPhotoAsync(firstPhoto, handTagPersonId);
+    Assert(
+        (await repository.GetPeopleByPhotoAsync())
+            .TryGetValue(firstPhoto, out var handTagged)
+        && handTagged.Any(tag => tag.Id == handTagPersonId)
+        && (await repository.GetPersonPhotoPathsAsync(handTagPersonId))
+            .Contains(firstPhoto),
+        "A hand-tagged person must appear on the photo without any face.");
+    await repository.RemovePersonFromPhotoAsync(firstPhoto, handTagPersonId);
+    Assert(
+        !(await repository.GetPeopleByPhotoAsync()).ContainsKey(firstPhoto)
+        || !(await repository.GetPeopleByPhotoAsync())[firstPhoto]
+            .Any(tag => tag.Id == handTagPersonId),
+        "Removing the hand tag must take the person off the photo.");
+    await repository.DeletePersonAsync(handTagPersonId);
+
     var strangerFace = (await repository.GetUnassignedFacesAsync())[0];
     await repository.IgnoreFacesAsync([strangerFace.Id]);
     Assert(
