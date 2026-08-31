@@ -21,6 +21,9 @@ const WIDGETS: &[&str] = &[
     "on_hover_text(",
     "heading(",
     "selectable_value(",
+    "selectable_label(",
+    "hint_text(",
+    "Label::new(",
     // The title of the native dialog. Not egui's, but on screen all the same.
     "set_title(",
 ];

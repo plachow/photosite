@@ -62,6 +62,72 @@ pub fn civil(seconds: i64) -> (i64, u32, u32, u32, u32, u32) {
     )
 }
 
+/// A calendar date to seconds since the epoch — the exact inverse of
+/// [`civil`].
+///
+/// `photosite-image` holds its own copy of this arithmetic for reading EXIF
+/// timestamps, and deliberately so: it is a leaf crate that must not have to
+/// depend on the domain to parse a date out of a file. Both are ten lines of
+/// a fixed algorithm and both are pinned to the same reference instants by
+/// their tests, so they cannot quietly drift apart.
+pub fn from_civil(year: i64, month: u32, day: u32, hour: u32, minute: u32, second: u32) -> i64 {
+    let month = month as i64;
+    let shifted = if month <= 2 { year - 1 } else { year };
+    let era = if shifted >= 0 { shifted } else { shifted - 399 } / 400;
+    let year_of_era = shifted - era * 400;
+    let day_of_year =
+        (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day as i64 - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let days = era * 146_097 + day_of_era - 719_468;
+    days * 86_400 + hour as i64 * 3_600 + minute as i64 * 60 + second as i64
+}
+
+/// `2024-07-14` as the first second of that day.
+///
+/// Lenient about what it is handed, because it sits under a text field
+/// somebody types into: nonsense is no date rather than an error, and the
+/// filter simply does not narrow by it. Separators other than `-` are
+/// accepted, since `2024/07/14` is what half of Europe types.
+pub fn parse_date(text: &str) -> Option<i64> {
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+
+    let parts: Vec<&str> = text
+        .split(['-', '/', '.', ' '])
+        .filter(|part| !part.is_empty())
+        .collect();
+    if parts.len() != 3 {
+        return None;
+    }
+
+    let year: i64 = parts[0].parse().ok()?;
+    let month: u32 = parts[1].parse().ok()?;
+    let day: u32 = parts[2].parse().ok()?;
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) || !(1826..=9999).contains(&year) {
+        return None;
+    }
+
+    // A date that does not exist — the 31st of February — must not come back
+    // as the 3rd of March. The round trip is the cheapest way to be sure.
+    let seconds = from_civil(year, month, day, 0, 0, 0);
+    let (back_year, back_month, back_day, ..) = civil(seconds);
+    (back_year == year && back_month == month && back_day == day).then_some(seconds)
+}
+
+/// The last second of that day, for the far end of a range. A range typed as
+/// `to 2024-07-14` plainly means the whole of the fourteenth.
+pub fn parse_date_end(text: &str) -> Option<i64> {
+    parse_date(text).map(|start| start + 86_399)
+}
+
+/// `2024-07-14`, which is what [`parse_date`] reads back.
+pub fn format_date(seconds: i64) -> String {
+    let (year, month, day, ..) = civil(seconds);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,6 +160,70 @@ mod tests {
         // Truncating division rather than flooring puts this on the 1st.
         assert_eq!(civil(-1), (1969, 12, 31, 23, 59, 59));
         assert_eq!(civil(-86_400), (1969, 12, 31, 0, 0, 0));
+    }
+
+    #[test]
+    fn the_two_directions_are_inverses() {
+        for seconds in [
+            0,
+            946_684_800,
+            1_720_949_400,
+            -86_400,
+            1_709_164_800,
+            2_000_000_000,
+        ] {
+            let (year, month, day, hour, minute, second) = civil(seconds);
+            assert_eq!(
+                from_civil(year, month, day, hour, minute, second),
+                seconds,
+                "{seconds}"
+            );
+        }
+    }
+
+    /// The same reference instant `photosite-image`'s EXIF test builds from
+    /// `2024:07:14 09:30:00`. Both calendars are pinned to it.
+    #[test]
+    fn the_reference_instant_agrees_with_the_exif_reader() {
+        assert_eq!(from_civil(2024, 7, 14, 9, 30, 0), 1_720_949_400);
+    }
+
+    #[test]
+    fn a_typed_date_is_the_first_second_of_that_day() {
+        let day = parse_date("2024-07-14").expect("a date");
+        assert_eq!(format(day), "2024-07-14 00:00");
+        assert_eq!(
+            format(parse_date_end("2024-07-14").unwrap()),
+            "2024-07-14 23:59"
+        );
+    }
+
+    #[test]
+    fn the_separators_people_actually_type_are_accepted() {
+        let want = parse_date("2024-07-14");
+        for text in ["2024/07/14", "2024.07.14", " 2024-7-14 ", "2024 07 14"] {
+            assert_eq!(parse_date(text), want, "{text}");
+        }
+    }
+
+    #[test]
+    fn a_date_that_does_not_exist_is_no_date() {
+        // Not the 3rd of March, which is where the arithmetic alone lands.
+        assert_eq!(parse_date("2023-02-31"), None);
+        assert_eq!(parse_date("2024-13-01"), None);
+        assert_eq!(parse_date("not a date"), None);
+        assert_eq!(parse_date(""), None);
+        assert_eq!(parse_date("2024-07"), None);
+        // But a real leap day is real.
+        assert!(parse_date("2024-02-29").is_some());
+        assert_eq!(parse_date("2023-02-29"), None);
+    }
+
+    #[test]
+    fn a_date_written_out_reads_back_in() {
+        let day = parse_date("2019-11-11").expect("a date");
+        assert_eq!(format_date(day), "2019-11-11");
+        assert_eq!(parse_date(&format_date(day)), Some(day));
     }
 
     #[test]

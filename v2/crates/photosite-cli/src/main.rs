@@ -91,16 +91,30 @@ fn scan(paths: &Paths, folder: &Path, recursive: bool) -> Result<()> {
         "{}",
         t!("error-not-a-folder", path = folder.display().to_string())
     );
-    let catalog = Catalog::open(&paths.catalog())?;
+    let mut catalog = Catalog::open(&paths.catalog())?;
 
+    // The same two steps the application takes, in the same order and
+    // through the same catalogue methods: a row for every file first, then
+    // the headers of whatever has not given one up yet.
+    //
+    // It used to decide what to skip by length and write time alone, which
+    // is a different question from "has this file been read". They agreed
+    // until a migration added a column, and then the window went back over
+    // the library while this did not.
     let started = std::time::Instant::now();
-    let files: Vec<PathBuf> = walkdir::WalkDir::new(folder)
+    let files: Vec<domain::FileIdentity> = walkdir::WalkDir::new(folder)
         .max_depth(if recursive { usize::MAX } else { 1 })
         .into_iter()
         .filter_map(std::result::Result::ok)
         .filter(|entry| entry.file_type().is_file())
-        .map(walkdir::DirEntry::into_path)
-        .filter(|path| domain::is_photo(path))
+        .filter(|entry| domain::is_photo(entry.path()))
+        .filter_map(|entry| match domain::FileIdentity::read(entry.path()) {
+            Ok(identity) => Some(identity),
+            Err(error) => {
+                tracing::warn!(path = %entry.path().display(), %error, "the file cannot be read");
+                None
+            }
+        })
         .collect();
     println!(
         "{}",
@@ -112,38 +126,22 @@ fn scan(paths: &Paths, folder: &Path, recursive: bool) -> Result<()> {
     );
 
     let started = std::time::Instant::now();
-    let mut catalog = catalog;
-    let (mut added, mut skipped, mut failed) = (0u64, 0u64, 0u64);
+    catalog.upsert_identities(&files)?;
+    let waiting = catalog.unindexed(folder, recursive)?;
+    let skipped = files.len().saturating_sub(waiting.len()) as u64;
+    let (mut added, mut failed) = (0u64, 0u64);
 
     // In batches: one write to the catalogue per thousand files, not per
     // file.
-    for chunk in files.chunks(1000) {
-        let identities: Vec<domain::FileIdentity> = chunk
-            .iter()
-            .filter_map(|path| match domain::FileIdentity::read(path) {
-                Ok(identity) => Some(identity),
-                Err(error) => {
-                    tracing::warn!(path = %path.display(), %error, "the file cannot be read");
-                    None
-                }
-            })
-            .collect();
-        failed += (chunk.len() - identities.len()) as u64;
-
-        let known = catalog.unchanged(&identities)?;
-        let mut batch = Vec::new();
-        for identity in identities {
-            if known.contains(&identity.path) {
-                skipped += 1;
-                continue;
-            }
-
-            match read_one(&identity) {
+    for chunk in waiting.chunks(1000) {
+        let mut batch = Vec::with_capacity(chunk.len());
+        for path in chunk {
+            match read_one(path) {
                 Ok(photo) => batch.push(photo),
                 Err(error) => {
                     // Failing on one file is normal. Saying nothing is not.
                     failed += 1;
-                    tracing::warn!(path = %identity.path.display(), error = %format!("{error:#}"), "file skipped");
+                    tracing::warn!(path = %path.display(), error = %format!("{error:#}"), "file skipped");
                 }
             }
         }
@@ -170,22 +168,19 @@ fn scan(paths: &Paths, folder: &Path, recursive: bool) -> Result<()> {
 
 /// Reads out of one file what belongs in the catalogue. Only the header is
 /// read, not the whole photograph — nobody here cares about pixels.
-fn read_one(identity: &domain::FileIdentity) -> Result<NewPhoto> {
-    use std::io::Read as _;
-    let mut head = vec![0u8; photosite_image::exif::HEADER_BYTES];
-    let mut file = std::fs::File::open(&identity.path)?;
-    let read = file.read(&mut head)?;
-    head.truncate(read);
-
-    let meta = photosite_image::exif::read(&head);
+fn read_one(path: &Path) -> Result<NewPhoto> {
+    let identity = domain::FileIdentity::read(path)?;
+    let meta = photosite_image::exif::read_file(path);
     Ok(NewPhoto {
-        path: identity.path.clone(),
+        path: identity.path,
         file_size: identity.file_size,
         modified_at: identity.modified_at,
         taken_at: meta.taken_at,
         width: meta.width,
         height: meta.height,
         orientation: meta.orientation,
+        camera: meta.camera,
+        lens: meta.lens,
     })
 }
 
@@ -228,6 +223,14 @@ fn info(file: &Path) -> Result<()> {
             Some(seconds) => seconds.to_string(),
             None => t!("cli-info-taken-none"),
         },
+    ));
+    rows.push((
+        t!("cli-info-camera"),
+        meta.camera.clone().unwrap_or_else(|| t!("cli-info-none")),
+    ));
+    rows.push((
+        t!("cli-info-lens"),
+        meta.lens.clone().unwrap_or_else(|| t!("cli-info-none")),
     ));
     rows.push((
         t!("cli-info-frame"),

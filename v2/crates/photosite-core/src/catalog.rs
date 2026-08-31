@@ -83,6 +83,24 @@ const MIGRATIONS: &[Migration] = &[
         CREATE INDEX keywords_keyword ON keywords(keyword);
     ",
     },
+    Migration {
+        name: "0003-camera-and-lens",
+        // What the filter offers has to be a column: "only the cameras that
+        // are in this folder" means asking the catalogue, not opening seven
+        // thousand files to find out.
+        sql: "
+        ALTER TABLE photos ADD COLUMN camera TEXT;
+        ALTER TABLE photos ADD COLUMN lens   TEXT;
+
+        CREATE INDEX photos_camera ON photos(camera);
+        CREATE INDEX photos_lens   ON photos(lens);
+
+        -- Every row was written before there were these columns, so none of
+        -- them has been asked. Clearing the mark is what sends the
+        -- background pass round again; it is cheap and it happens once.
+        UPDATE photos SET indexed = 0;
+    ",
+    },
 ];
 
 /// Which schema version this build is built for.
@@ -97,7 +115,7 @@ const SEPARATOR: char = std::path::MAIN_SEPARATOR;
 /// The columns [`read_photo`] expects, in its order. Written once so a column
 /// added to one query and not the other cannot happen.
 const COLUMNS: &str = "id, path, folder, file_size, modified_at, taken_at, width, height, \
-                       orientation, rating, label, flag, title, description";
+                       orientation, camera, lens, rating, label, flag, title, description";
 
 /// **Every column here is one the disk owns.** The organisation — rating,
 /// label, flag, title, description — is deliberately absent from the update:
@@ -105,8 +123,8 @@ const COLUMNS: &str = "id, path, folder, file_size, modified_at, taken_at, width
 /// about it. Touching a photograph on disk would otherwise clear its stars.
 const UPSERT: &str = "
     INSERT INTO photos(path, folder, file_size, modified_at, taken_at, width, height,
-                       orientation, indexed)
-    VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1)
+                       orientation, camera, lens, indexed)
+    VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1)
     ON CONFLICT(path) DO UPDATE SET
         folder = excluded.folder,
         file_size = excluded.file_size,
@@ -115,6 +133,8 @@ const UPSERT: &str = "
         width = excluded.width,
         height = excluded.height,
         orientation = excluded.orientation,
+        camera = excluded.camera,
+        lens = excluded.lens,
         indexed = 1
 ";
 
@@ -241,6 +261,8 @@ impl Catalog {
                 photo.width,
                 photo.height,
                 photo.orientation,
+                photo.camera,
+                photo.lens,
             ],
         )?;
         Ok(PhotoId(self.conn.query_row(
@@ -274,6 +296,8 @@ impl Catalog {
                     photo.width,
                     photo.height,
                     photo.orientation,
+                    photo.camera,
+                    photo.lens,
                 ])?;
             }
         }
@@ -638,6 +662,8 @@ pub struct NewPhoto {
     pub width: Option<u32>,
     pub height: Option<u32>,
     pub orientation: u8,
+    pub camera: Option<String>,
+    pub lens: Option<String>,
 }
 
 /// Builds a photograph out of one row of [`COLUMNS`].
@@ -658,14 +684,16 @@ fn read_photo(row: &rusqlite::Row<'_>) -> rusqlite::Result<Photo> {
         width: row.get(6)?,
         height: row.get(7)?,
         orientation: row.get(8)?,
+        camera: row.get(9)?,
+        lens: row.get(10)?,
         organisation: Organisation {
             rating: row
-                .get::<_, i64>(9)?
+                .get::<_, i64>(11)?
                 .clamp(0, Organisation::MAX_RATING as i64) as u8,
-            label: ColorLabel::from_i64(row.get(10)?),
-            flag: Flag::from_i64(row.get(11)?),
-            title: row.get(12)?,
-            description: row.get(13)?,
+            label: ColorLabel::from_i64(row.get(12)?),
+            flag: Flag::from_i64(row.get(13)?),
+            title: row.get(14)?,
+            description: row.get(15)?,
             keywords: Vec::new(),
         },
     })
@@ -719,6 +747,8 @@ mod tests {
             width: Some(4000),
             height: Some(3000),
             orientation: 6,
+            camera: Some("NIKON Z 6".to_owned()),
+            lens: None,
         }
     }
 

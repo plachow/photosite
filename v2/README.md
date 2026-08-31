@@ -6,7 +6,7 @@ A clean sheet. Rust, egui over wgpu, Windows / macOS / Linux from one source.
 cd v2
 cargo run --release -p photosite-ui              # the application
 cargo run --release -p photosite-cli -- doctor   # where everything lives
-cargo test --workspace                           # 174 tests, no window, no GPU
+cargo test --workspace                           # 204 tests, no window, no GPU
 ```
 
 ## Layout
@@ -281,11 +281,13 @@ a row that merely exists looks finished, and no date would ever be read.
 |---|---|
 | 2,861 photographs | 16 ms |
 | 134,990 photographs, recursive | **727 ms**, browsable and ratable at once |
-| reading their headers | 156 files/s, on a thread, while the grid works |
+| reading their headers, cold disk | 156 files/s, on a thread, while the grid works |
+| the same headers, warm cache | 20,000 files/s |
 
 Blocking on that read would have meant eighteen seconds of frozen window for
-one folder of three thousand — and Windows calls a window that quiet
-unresponsive.
+one folder of three thousand the first time it is opened — and Windows calls
+a window that quiet unresponsive. The warm figure is what makes it look
+harmless in a benchmark and is exactly the reason to measure the cold one.
 
 **The selection follows the photographs, not the positions.** Reordering the
 gallery rebuilds the selection by path. Otherwise the next rating lands on
@@ -304,20 +306,66 @@ its own triangles.
 Nothing is written to the photographs themselves yet. That is the metadata
 outbox, and it comes next.
 
+## Filtering and searching
+
+The second block across from v1: **rating, colour label, verdict, format,
+camera, lens, shape and capture date**, plus one search box over file names,
+titles, descriptions and keywords.
+
+Two rules make it usable rather than a puzzle, and both are v1's:
+
+**An empty facet does not filter.** No labels chosen means *any* label, not
+*no* label. The facets narrow each other and the values inside one widen it:
+red and green means red **or** green; red plus three stars means red **and**
+three stars.
+
+**Only offer what is there.** The panel is built from the folder in front of
+you — in a folder shot on two phones it offers those two phones and no
+heading at all for lenses, because there are none. A list of every camera
+ever owned, most of them matching nothing here, is a list nobody reads.
+
+The filter is deliberately **not** saved between runs. One that survived a
+restart would hide photographs on a later day for a reason nobody remembers
+setting, and *where did half my folder go* is not a question an application
+should ever cause. What is set is written on the button itself, in the accent
+colour, with `3 of 2861` beside it — an active filter is never invisible.
+
+Two things this does differently from v1. The search matches every **word**
+typed rather than the line as one piece, so "iceland waterfall" finds a
+photograph titled *Waterfall* with the keyword *Iceland*; one word behaves
+identically. And a photograph with no date falls **outside** every date range
+rather than inside all of them — asking for last July and being handed every
+undated file is not an answer.
+
+Reading the camera meant a little more EXIF, and one rule worth keeping:
+`NIKON CORPORATION` and `NIKON Z 6` are one camera. Joined as they come they
+stutter, so only the maker's first word is used and it is dropped when the
+model already begins with it. `LensModel` is an EXIF 2.3 tag that phones and
+older bodies simply do not write — where a Nikon keeps it is in its own
+MakerNote, which is precisely the vendor breadth this deliberately does not
+chase.
+
+The gallery is now the folder plus a list of which rows get through it, so
+typing in the search box costs one pass over memory rather than one query.
+Over a hundred thousand photographs that is the difference between a search
+box and a stutter.
+
 ## Where this stands
 
-The scaffolding is done and the first block of photographic features is on
-top of it. Browsing, culling and organising work; editing, filtering, batch
-conversion, import, faces and the AI describer are still v1's alone.
+The scaffolding is done and the photographic features are being brought over
+on top of it. Browsing, culling, organising, filtering and searching work;
+editing, batch conversion, import, faces and the AI describer are still v1's
+alone.
 
 | | |
 |---|---|
-| tests | 174 (including 6,000 fuzz cases over EXIF and 70 checked colour pairs) |
+| tests | 204 (including 6,000 fuzz cases over EXIF and 70 checked colour pairs) |
 | scan of 7,558 photographs | 0.3 s; 0.1 s on a repeat |
 | opening 134,990 photographs recursively | 727 ms |
 | `cargo clippy -D warnings` | clean |
 | themes | 5 plus following the system |
 | settings entries | 29, screen generated from the descriptions |
+| catalogue schema | 3 migrations |
 
 A cross-check from Windows passes for `photosite-image` against both targets.
 The rest does not, because `libsqlite3-sys` with `bundled` compiles C and that
@@ -326,10 +374,13 @@ done by CI**, where the runners are native.
 
 ## What is missing, and known to be
 
-Of v1's features, in the order they are being brought across: filtering and
-search, writing metadata into the files themselves, file operations and
-navigation, RAW, comparison, import, the editor, batch conversion, faces, the
-AI describer.
+Of v1's features, in the order they are being brought across: writing metadata
+into the files themselves, file operations and navigation, RAW, comparison,
+import, the editor, batch conversion, faces, the AI describer.
+
+Three of the filter's facets are waiting on features that come later: people,
+the smiling and eyes-open scores, and the approximate-GPS verdict. All three
+need something to filter on first.
 
 RAW is deliberately small: the embedded JPEG every camera puts in the file, so
 a folder off a card is never a grid of grey tiles. No demosaicing, no colour

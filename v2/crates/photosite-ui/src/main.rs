@@ -9,6 +9,7 @@
 //! what cannot be configured gets rewritten sooner or later.
 
 mod docks;
+mod filter;
 mod grid;
 mod info;
 mod picker;
@@ -19,6 +20,7 @@ use eframe::egui;
 use photosite_core::catalog::NewPhoto;
 use photosite_core::commands::{Bindings, Group, Shortcut};
 use photosite_core::domain::{ColorLabel, Flag, Photo, PhotoId, Sort, SortField};
+use photosite_core::filter::{Facets, Filter};
 use photosite_core::settings::{Gallery, Kind, Settings, TUNABLES, Tunable};
 use photosite_core::{
     Catalog, FileIdentity, Paths, commands, diagnostics, docks as layout, i18n, jobs, t,
@@ -61,6 +63,8 @@ fn main() -> Result<()> {
     let mut shot: Option<PathBuf> = None;
     let mut reset = false;
     let mut open_settings = false;
+    let mut open_filter = false;
+    let mut search: Option<String> = None;
     let mut folder: Option<PathBuf> = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -71,6 +75,10 @@ fn main() -> Result<()> {
             "--shot" => shot = args.next().map(PathBuf::from),
             "--reset-settings" => reset = true,
             "--open-settings" => open_settings = true,
+            "--open-filter" => open_filter = true,
+            // Start already narrowed. The filter is not saved between
+            // runs on purpose, so this is the only way to open on one.
+            "--search" => search = args.next(),
             other => folder = Some(PathBuf::from(other)),
         }
     }
@@ -113,6 +121,13 @@ fn main() -> Result<()> {
             app.selftest = selftest;
             app.shot = shot;
             app.show_settings = open_settings;
+            app.show_filter = open_filter;
+            if let Some(search) = search {
+                app.set_filter(photosite_core::filter::Filter {
+                    search,
+                    ..Default::default()
+                });
+            }
             app.dress(&cc.egui_ctx);
             Ok(Box::new(app))
         }),
@@ -182,7 +197,27 @@ pub struct App {
 
     pub roots: Vec<Node>,
     pub folder: Option<PathBuf>,
-    pub photos: Vec<Photo>,
+    /// The folder as the catalogue holds it, in the chosen order —
+    /// everything, whether the filter lets it through or not.
+    ///
+    /// Kept apart from what is shown so that typing in the search box costs
+    /// one pass over memory instead of one query. Over a hundred thousand
+    /// photographs the difference is the box being usable or not.
+    pub all: Vec<Photo>,
+    /// Which of them get through, as positions into [`App::all`]. The grid,
+    /// the preview and the selection all work in these, so a filtered folder
+    /// behaves in every way like a folder.
+    pub visible: Vec<usize>,
+    pub filter: Filter,
+    /// What this folder actually holds, so the panel offers nothing that
+    /// would come back empty.
+    pub facets: Facets,
+    pub show_filter: bool,
+    /// The two ends of the date range, as typed. Held as text so a
+    /// half-written date does not keep clearing itself while somebody is
+    /// still typing it.
+    pub filter_from: String,
+    pub filter_to: String,
     /// The tile the preview and the details follow, and the end a shift-click
     /// measures from. Always one of [`App::selection`] when there is one.
     pub selected: Option<usize>,
@@ -253,7 +288,8 @@ impl std::fmt::Debug for App {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("App")
             .field("folder", &self.folder)
-            .field("photos", &self.photos.len())
+            .field("photos", &self.all.len())
+            .field("visible", &self.visible.len())
             .field("textures", &self.textures.len())
             .field("blank", &self.blank)
             .finish()
@@ -325,7 +361,13 @@ impl App {
             catalog,
             roots: roots(),
             folder: None,
-            photos: Vec::new(),
+            all: Vec::new(),
+            visible: Vec::new(),
+            filter: Filter::default(),
+            facets: Facets::default(),
+            show_filter: false,
+            filter_from: String::new(),
+            filter_to: String::new(),
             selected: None,
             selection: BTreeSet::new(),
             indexing: None,
@@ -449,21 +491,13 @@ impl App {
     /// that slot, which is the kind of mistake nobody notices until later.
     fn relist(&mut self) {
         let Some(folder) = self.folder.clone() else {
-            self.photos.clear();
+            self.all.clear();
+            self.visible.clear();
+            self.facets = Facets::default();
             return;
         };
 
-        let held: HashSet<PathBuf> = self
-            .selection
-            .iter()
-            .filter_map(|at| self.photos.get(*at))
-            .map(|photo| photo.path.clone())
-            .collect();
-        let current = self
-            .selected
-            .and_then(|at| self.photos.get(at))
-            .map(|photo| photo.path.clone());
-
+        let kept = self.hold();
         let mut photos = match self.catalog.as_ref() {
             Some(catalog) => catalog
                 .in_folder(&folder, self.settings.gallery.recursive)
@@ -477,18 +511,98 @@ impl App {
             None => Vec::new(),
         };
         self.sort().apply(&mut photos);
-        self.photos = photos;
 
-        self.selection = self
-            .photos
+        // What the panel may offer comes from the whole folder, not from
+        // what is showing. Otherwise choosing a camera would take every
+        // other camera out of the list and there would be no way back.
+        self.facets = Facets::of(&photos);
+        self.all = photos;
+        self.narrow(kept);
+    }
+
+    /// Works out what gets through the filter, without touching the disk.
+    ///
+    /// This is what runs on every keystroke in the search box: one pass over
+    /// memory rather than one query. Over a hundred thousand photographs
+    /// that is the difference between a search box and a stutter.
+    fn refilter(&mut self) {
+        let kept = self.hold();
+        self.narrow(kept);
+    }
+
+    /// The paths currently selected, so they can be found again afterwards.
+    fn hold(&self) -> (HashSet<PathBuf>, Option<PathBuf>) {
+        let held = self
+            .selection
+            .iter()
+            .filter_map(|at| self.photo(*at))
+            .map(|photo| photo.path.clone())
+            .collect();
+        let current = self.photo_at_cursor().map(|photo| photo.path.clone());
+        (held, current)
+    }
+
+    /// Rebuilds what is shown and puts the selection back on the same
+    /// photographs — by path, never by position. A filter that moved the
+    /// selection onto whatever slid into the gap would be worse than no
+    /// filter.
+    fn narrow(&mut self, (held, current): (HashSet<PathBuf>, Option<PathBuf>)) {
+        self.visible = self
+            .all
             .iter()
             .enumerate()
-            .filter(|(_, photo)| held.contains(&photo.path))
+            .filter(|(_, photo)| self.filter.keeps(photo))
             .map(|(at, _)| at)
             .collect();
+
+        self.selection = self
+            .visible
+            .iter()
+            .enumerate()
+            .filter(|(_, at)| held.contains(&self.all[**at].path))
+            .map(|(position, _)| position)
+            .collect();
         self.selected = current
-            .and_then(|path| self.photos.iter().position(|photo| photo.path == path))
+            .and_then(|path| {
+                self.visible
+                    .iter()
+                    .position(|at| self.all[*at].path == path)
+            })
             .or_else(|| self.selection.iter().next().copied());
+    }
+
+    /// How many photographs are showing.
+    pub fn count(&self) -> usize {
+        self.visible.len()
+    }
+
+    /// How many the folder holds, filter or no filter.
+    pub fn total(&self) -> usize {
+        self.all.len()
+    }
+
+    /// The photograph at a position in the gallery.
+    pub fn photo(&self, at: usize) -> Option<&Photo> {
+        self.all.get(*self.visible.get(at)?)
+    }
+
+    fn photo_mut(&mut self, at: usize) -> Option<&mut Photo> {
+        let at = *self.visible.get(at)?;
+        self.all.get_mut(at)
+    }
+
+    /// The one the preview and the details follow.
+    pub fn photo_at_cursor(&self) -> Option<&Photo> {
+        self.photo(self.selected?)
+    }
+
+    /// Replaces the filter and reworks what is shown, but only when it
+    /// really changed — the search box hands one back every frame.
+    fn set_filter(&mut self, filter: Filter) {
+        if filter != self.filter {
+            self.filter = filter;
+            self.refilter();
+        }
     }
 
     /// Reads the headers of whatever this folder has not given up yet, on a
@@ -691,6 +805,12 @@ impl App {
                 self.dress(ctx);
             }
             "view.settings" => self.show_settings = !self.show_settings,
+            "view.filter" => self.show_filter = !self.show_filter,
+            "view.clear_filter" => {
+                self.filter_from.clear();
+                self.filter_to.clear();
+                self.set_filter(Filter::default());
+            }
             "view.toggle_tree" => self.toggle_dock("tree"),
             "view.toggle_preview" => self.toggle_dock("preview"),
             "view.toggle_info" => self.toggle_dock("info"),
@@ -735,7 +855,7 @@ impl App {
     fn chosen(&self) -> Vec<PhotoId> {
         self.selection
             .iter()
-            .filter_map(|at| self.photos.get(*at))
+            .filter_map(|at| self.photo(*at))
             .map(|photo| photo.id)
             .collect()
     }
@@ -768,14 +888,12 @@ impl App {
     pub fn select_through(&mut self, at: usize) {
         let from = self.selected.unwrap_or(at);
         let (first, last) = if from <= at { (from, at) } else { (at, from) };
-        self.selection = (first..=last)
-            .filter(|at| *at < self.photos.len())
-            .collect();
+        self.selection = (first..=last).filter(|at| *at < self.count()).collect();
         self.selected = Some(at);
     }
 
     fn select_all(&mut self) {
-        self.selection = (0..self.photos.len()).collect();
+        self.selection = (0..self.count()).collect();
         if self.selected.is_none() {
             self.selected = self.selection.iter().next().copied();
         }
@@ -813,8 +931,8 @@ impl App {
 
         self.write_catalog(|catalog| catalog.set_rating(&chosen, stars));
         let stars = stars.min(photosite_core::domain::Organisation::MAX_RATING);
-        for at in &self.selection {
-            if let Some(photo) = self.photos.get_mut(*at) {
+        for at in self.selection.clone() {
+            if let Some(photo) = self.photo_mut(at) {
                 photo.organisation.rating = stars;
             }
         }
@@ -827,8 +945,8 @@ impl App {
         }
 
         self.write_catalog(|catalog| catalog.set_label(&chosen, label));
-        for at in &self.selection {
-            if let Some(photo) = self.photos.get_mut(*at) {
+        for at in self.selection.clone() {
+            if let Some(photo) = self.photo_mut(at) {
                 photo.organisation.label = label;
             }
         }
@@ -848,13 +966,13 @@ impl App {
         let already = self
             .selection
             .iter()
-            .filter_map(|at| self.photos.get(*at))
+            .filter_map(|at| self.photo(*at))
             .all(|photo| photo.organisation.flag == flag);
         let wanted = if already { Flag::None } else { flag };
 
         self.write_catalog(|catalog| catalog.set_flag(&chosen, wanted));
-        for at in &self.selection {
-            if let Some(photo) = self.photos.get_mut(*at) {
+        for at in self.selection.clone() {
+            if let Some(photo) = self.photo_mut(at) {
                 photo.organisation.flag = wanted;
             }
         }
@@ -884,7 +1002,7 @@ impl App {
         let value = (!text.trim().is_empty()).then(|| text.trim().to_owned());
         self.write_catalog(|catalog| catalog.set_title(photo, value.as_deref()));
         if let Some(at) = self.selected
-            && let Some(photo) = self.photos.get_mut(at)
+            && let Some(photo) = self.photo_mut(at)
         {
             photo.organisation.title = value;
         }
@@ -896,7 +1014,7 @@ impl App {
         let value = (!text.trim().is_empty()).then(|| text.trim().to_owned());
         self.write_catalog(|catalog| catalog.set_description(photo, value.as_deref()));
         if let Some(at) = self.selected
-            && let Some(photo) = self.photos.get_mut(at)
+            && let Some(photo) = self.photo_mut(at)
         {
             photo.organisation.description = value;
         }
@@ -925,7 +1043,7 @@ impl App {
             .unwrap_or(words);
         self.edit_keywords = tidied.join(", ");
         if let Some(at) = self.selected
-            && let Some(photo) = self.photos.get_mut(at)
+            && let Some(photo) = self.photo_mut(at)
         {
             photo.organisation.keywords = tidied;
         }
@@ -934,7 +1052,7 @@ impl App {
     /// The photograph the details pane is showing.
     fn current(&self) -> Option<PhotoId> {
         self.selected
-            .and_then(|at| self.photos.get(at))
+            .and_then(|at| self.photo(at))
             .map(|photo| photo.id)
     }
 
@@ -944,7 +1062,7 @@ impl App {
     pub fn rate_from_panel(&mut self, stars: u8) {
         let already = self
             .selected
-            .and_then(|at| self.photos.get(at))
+            .and_then(|at| self.photo(at))
             .map(|photo| photo.organisation.rating == stars)
             .unwrap_or(false);
         self.rate(if already { 0 } else { stars });
@@ -1102,6 +1220,8 @@ fn read_header(path: &Path) -> Option<NewPhoto> {
         width: meta.width,
         height: meta.height,
         orientation: meta.orientation,
+        camera: meta.camera,
+        lens: meta.lens,
     })
 }
 
@@ -1142,6 +1262,7 @@ impl eframe::App for App {
 
         self.diagnostics_window(&ctx);
         self.settings_window(&ctx);
+        filter::window(self, &ctx, &palette);
 
         // The wishlist is overwritten only here, once it is clear what is
         // visible and what is selected. Anything not on it stops being
@@ -1229,13 +1350,30 @@ impl App {
                 self.sort_by(field);
             }
 
+            // The direction is a triangle and not a sentence. "Oldest and
+            // smallest first" is true of a date sort, true of a size sort
+            // and wrong about a name sort, and it took a quarter of the
+            // toolbar to be wrong in. The words are in the hover text for
+            // whoever wants them.
             let descending = self.settings.gallery.sort_descending;
+            let (rect, response) =
+                ui.allocate_exact_size(egui::Vec2::splat(18.0), egui::Sense::click());
+            theme::caret(
+                ui.painter(),
+                rect.center(),
+                descending,
+                theme::color(if response.hovered() {
+                    palette.accent
+                } else {
+                    palette.text
+                }),
+            );
             let way = if descending {
                 t!("toolbar-sort-descending")
             } else {
                 t!("toolbar-sort-ascending")
             };
-            if ui.button(way).clicked() {
+            if response.on_hover_text(way).clicked() {
                 self.run("sort.reverse", ctx);
             }
 
@@ -1261,18 +1399,54 @@ impl App {
             }
 
             ui.separator();
-            ui.label(
-                egui::RichText::new(
-                    self.folder
-                        .as_ref()
-                        .map(|folder| folder.to_string_lossy().into_owned())
-                        .unwrap_or_default(),
-                )
-                .color(theme::color(palette.dim)),
-            );
 
+            let mut search = self.filter.search.clone();
+            if ui
+                .add(
+                    egui::TextEdit::singleline(&mut search)
+                        .desired_width(150.0)
+                        .hint_text(t!("filter-search")),
+                )
+                .changed()
+            {
+                let mut filter = self.filter.clone();
+                filter.search = search;
+                self.set_filter(filter);
+            }
+
+            // The button says what is set rather than saying "Filter". Half a
+            // folder missing with nothing on screen to say why is the worst
+            // thing a filter can do.
+            let described = self.filter.describe();
+            let active = self.filter.is_active();
+            let label = egui::RichText::new(described).color(theme::color(if active {
+                palette.accent
+            } else {
+                palette.text
+            }));
+            if ui.button(label).clicked() {
+                self.show_filter = !self.show_filter;
+            }
+
+            ui.separator();
+
+            // The right-hand side is claimed first and the folder gets what
+            // is left, truncated. The path is the one thing here that can be
+            // any length at all: laid out first it pushed the count and the
+            // task off the edge, and they drew on top of each other.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(egui::RichText::new(&self.status).color(theme::color(palette.dim)));
+                if self.count() != self.total() {
+                    ui.label(
+                        egui::RichText::new(t!(
+                            "filter-showing",
+                            shown = self.count() as i64,
+                            all = self.total() as i64
+                        ))
+                        .color(theme::color(palette.accent)),
+                    );
+                }
+
                 if self.selection.len() > 1 {
                     ui.label(
                         egui::RichText::new(t!(
@@ -1286,6 +1460,20 @@ impl App {
                 for task in self.tasks.running() {
                     ui.label(egui::RichText::new(&task.title).color(theme::color(palette.accent)));
                 }
+
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    let folder = self
+                        .folder
+                        .as_ref()
+                        .map(|folder| folder.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(folder).color(theme::color(palette.dim)),
+                        )
+                        .truncate(),
+                    );
+                });
             });
         });
     }
@@ -1296,7 +1484,8 @@ impl App {
         }
 
         let mut rows = diagnostics::about(&self.paths);
-        rows.push((t!("diagnostics-photos"), self.photos.len().to_string()));
+        rows.push((t!("diagnostics-photos"), self.total().to_string()));
+        rows.push((t!("diagnostics-showing"), self.count().to_string()));
         rows.push((t!("diagnostics-textures"), self.textures.len().to_string()));
         rows.push((
             t!("diagnostics-decoding"),
@@ -1487,7 +1676,7 @@ impl App {
             return;
         }
 
-        if self.photos.is_empty() {
+        if self.count() == 0 {
             println!("{}", t!("selftest-no-photos"));
             std::process::exit(2);
         }
@@ -1497,7 +1686,7 @@ impl App {
                 "{}",
                 t!(
                     "selftest-ok",
-                    count = self.photos.len() as i64,
+                    count = self.count() as i64,
                     ms = elapsed * 1000.0
                 )
             );
@@ -1809,8 +1998,9 @@ mod culling {
     }
 
     fn names(app: &App) -> Vec<String> {
-        app.photos
+        app.visible
             .iter()
+            .filter_map(|at| app.all.get(*at))
             .map(|photo| {
                 photo
                     .path
@@ -1825,7 +2015,7 @@ mod culling {
     fn chosen_names(app: &App) -> Vec<String> {
         app.selection
             .iter()
-            .filter_map(|at| app.photos.get(*at))
+            .filter_map(|at| app.photo(*at))
             .map(|photo| {
                 photo
                     .path
@@ -1843,7 +2033,7 @@ mod culling {
         assert_eq!(names(&app), ["a.jpg", "b.jpg", "c.jpg"]);
         // Every one of them has a catalogue row already, or there would be
         // nowhere for a rating to go.
-        assert!(app.photos.iter().all(|photo| photo.id.0 > 0));
+        assert!(app.visible.iter().all(|at| app.all[*at].id.0 > 0));
     }
 
     #[test]
@@ -1906,8 +2096,8 @@ mod culling {
         app.select_only(1);
         app.run_for_test("photo.rate_4");
 
-        assert_eq!(app.photos[1].organisation.rating, 4);
-        let path = app.photos[1].path.clone();
+        assert_eq!(app.photo(1).unwrap().organisation.rating, 4);
+        let path = app.photo(1).unwrap().path.clone();
         let written = app
             .catalog
             .as_ref()
@@ -1925,9 +2115,9 @@ mod culling {
         app.select_through(2);
         app.run_for_test("photo.rate_5");
         assert!(
-            app.photos
+            app.visible
                 .iter()
-                .all(|photo| photo.organisation.rating == 5)
+                .all(|at| app.all[*at].organisation.rating == 5)
         );
     }
 
@@ -1936,10 +2126,10 @@ mod culling {
         let (mut app, _data, _photos) = three();
         app.select_only(0);
         app.run_for_test("photo.pick");
-        assert_eq!(app.photos[0].organisation.flag, Flag::Picked);
+        assert_eq!(app.photo(0).unwrap().organisation.flag, Flag::Picked);
 
         app.run_for_test("photo.pick");
-        assert_eq!(app.photos[0].organisation.flag, Flag::None);
+        assert_eq!(app.photo(0).unwrap().organisation.flag, Flag::None);
     }
 
     #[test]
@@ -1948,7 +2138,7 @@ mod culling {
         app.select_only(0);
         app.run_for_test("photo.pick");
         app.run_for_test("photo.reject");
-        assert_eq!(app.photos[0].organisation.flag, Flag::Rejected);
+        assert_eq!(app.photo(0).unwrap().organisation.flag, Flag::Rejected);
     }
 
     #[test]
@@ -1956,9 +2146,9 @@ mod culling {
         let (mut app, _data, _photos) = three();
         app.run_for_test("photo.rate_5");
         assert!(
-            app.photos
+            app.visible
                 .iter()
-                .all(|photo| photo.organisation.rating == 0)
+                .all(|at| app.all[*at].organisation.rating == 0)
         );
     }
 
@@ -1981,6 +2171,106 @@ mod culling {
         assert_eq!(names(&app), ["c.jpg", "b.jpg", "a.jpg"]);
         assert_eq!(chosen_names(&app), ["a.jpg"], "the selection changed hands");
         assert_eq!(app.selected, Some(2));
+    }
+
+    /// The one that would be quiet and expensive to get wrong. With a
+    /// filter on, position nought in the gallery is not row nought in the
+    /// folder — and the rating keys work in positions.
+    #[test]
+    fn a_rating_lands_on_what_is_shown_and_not_on_what_is_hidden() {
+        let (mut app, _data, _photos) = three();
+        app.set_filter(Filter {
+            search: "c.jpg".to_owned(),
+            ..Default::default()
+        });
+        assert_eq!(app.count(), 1);
+        assert_eq!(app.total(), 3);
+
+        app.select_only(0);
+        app.run_for_test("photo.rate_5");
+
+        assert_eq!(app.photo(0).unwrap().organisation.rating, 5);
+        let rated: Vec<&str> = app
+            .all
+            .iter()
+            .filter(|photo| photo.organisation.rating == 5)
+            .map(|photo| photo.path.file_name().unwrap().to_str().unwrap())
+            .collect();
+        assert_eq!(rated, ["c.jpg"], "the stars went on the wrong photograph");
+    }
+
+    #[test]
+    fn a_filter_narrows_what_is_shown_and_leaves_the_folder_alone() {
+        let (mut app, _data, _photos) = three();
+        app.set_filter(Filter {
+            minimum_rating: 1,
+            ..Default::default()
+        });
+        assert_eq!(app.count(), 0);
+        assert_eq!(app.total(), 3, "the folder is still the folder");
+
+        app.set_filter(Filter::default());
+        assert_eq!(app.count(), 3);
+    }
+
+    #[test]
+    fn what_the_filter_hides_leaves_the_selection() {
+        let (mut app, _data, _photos) = three();
+        app.select_only(0);
+        app.select_through(2);
+        assert_eq!(app.selection.len(), 3);
+
+        // Deliberate: the selection is what is in front of you. Keeping
+        // hidden photographs in it means the next rating lands somewhere
+        // nobody can see.
+        app.set_filter(Filter {
+            search: "b.jpg".to_owned(),
+            ..Default::default()
+        });
+        assert_eq!(app.selection.len(), 1);
+        assert_eq!(
+            app.photo(app.selected.unwrap())
+                .unwrap()
+                .path
+                .file_name()
+                .unwrap(),
+            "b.jpg"
+        );
+
+        app.set_filter(Filter::default());
+        assert_eq!(app.selection.len(), 1, "hidden ones do not come back");
+    }
+
+    #[test]
+    fn the_facets_come_from_the_folder_and_not_from_what_is_showing() {
+        let (mut app, _data, _photos) = three();
+        let all = app.facets.clone();
+        app.set_filter(Filter {
+            search: "a.jpg".to_owned(),
+            ..Default::default()
+        });
+        assert_eq!(app.count(), 1);
+        assert_eq!(
+            app.facets, all,
+            "narrowing the gallery must not narrow what can be asked"
+        );
+    }
+
+    #[test]
+    fn clearing_the_filter_puts_the_folder_back() {
+        let (mut app, _data, _photos) = three();
+        app.filter_from = "2024-01-01".to_owned();
+        app.set_filter(Filter {
+            minimum_rating: 4,
+            search: "nothing".to_owned(),
+            ..Default::default()
+        });
+        assert_eq!(app.count(), 0);
+
+        app.run_for_test("view.clear_filter");
+        assert_eq!(app.count(), 3);
+        assert!(!app.filter.is_active());
+        assert!(app.filter_from.is_empty(), "the typed dates go too");
     }
 
     #[test]

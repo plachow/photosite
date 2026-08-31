@@ -15,9 +15,17 @@ use photosite_core::theme::Palette;
 use std::path::{Path, PathBuf};
 
 pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
-    if app.photos.is_empty() {
+    if app.count() == 0 {
+        // "There is nothing here" and "the filter is hiding it all" are
+        // different problems with different answers, and telling somebody
+        // the wrong one sends them looking in the wrong place.
+        let message = if app.total() > 0 {
+            t!("filter-nothing-matches")
+        } else {
+            t!("gallery-empty")
+        };
         ui.centered_and_justified(|ui| {
-            ui.label(egui::RichText::new(t!("gallery-empty")).color(theme::color(palette.dim)));
+            ui.label(egui::RichText::new(message).color(theme::color(palette.dim)));
         });
         return;
     }
@@ -27,7 +35,7 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
     let tile_h = theme::tile_height(&gallery);
     let gap = gallery.gap as f32;
     let margin = gallery.prefetch_rows.clamp(0, 64) as usize;
-    let count = app.photos.len();
+    let count = app.count();
 
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -61,7 +69,9 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
                             ),
                         Vec2::new(tile_w, tile_h),
                     );
-                    let path = app.photos[index].path.clone();
+                    let Some(path) = app.photo(index).map(|photo| photo.path.clone()) else {
+                        continue;
+                    };
                     let response = ui.interact(rect, ui.id().with(index), Sense::click());
                     if response.clicked() {
                         clicked = Some((index, ui.input(|input| input.modifiers)));
@@ -106,7 +116,10 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
                         None => wanted_quick.push((index, path.clone())),
                     }
 
-                    theme::badges(ui.painter(), well, palette, &app.photos[index].organisation);
+                    if let Some(photo) = app.photo(index) {
+                        let organisation = photo.organisation.clone();
+                        theme::badges(ui.painter(), well, palette, &organisation);
+                    }
                 }
             }
 
@@ -127,7 +140,9 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
             let ahead_from = first.saturating_sub(margin) * cols;
             let ahead_to = ((last + margin) * cols).min(count);
             for index in ahead_from..ahead_to {
-                let path = app.photos[index].path.clone();
+                let Some(path) = app.photo(index).map(|photo| photo.path.clone()) else {
+                    continue;
+                };
                 if !app.has(&path, Want::Thumb) && !app.wanted_sharp.contains(&path) {
                     app.wanted_sharp.push(path);
                 }
@@ -143,7 +158,9 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
             // otherwise they are the first to go and are ordered again at
             // once.
             for index in ahead_from..ahead_to {
-                let path = app.photos[index].path.clone();
+                let Some(path) = app.photo(index).map(|photo| photo.path.clone()) else {
+                    continue;
+                };
                 app.touch(&(path.clone(), Want::Thumb));
                 app.touch(&(path, Want::Quick));
             }
@@ -172,7 +189,9 @@ pub fn preview(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
         return;
     };
 
-    let path = app.photos[index].path.clone();
+    let Some(path) = app.photo(index).map(|photo| photo.path.clone()) else {
+        return;
+    };
     let area = ui.available_rect_before_wrap();
     ui.painter()
         .rect_filled(area, 0, theme::color(palette.well));

@@ -23,7 +23,7 @@ pub fn pane(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
         return;
     };
 
-    let Some(photo) = app.photos.get(index).cloned() else {
+    let Some(photo) = app.photo(index).cloned() else {
         return;
     };
 

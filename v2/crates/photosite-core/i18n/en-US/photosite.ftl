@@ -280,3 +280,61 @@ cli-info-taken = taken at
 cli-info-taken-none = no date in the file
 cli-info-frame = frame
 cli-info-frame-none = no size in the header
+
+cli-info-camera = camera
+cli-info-lens = lens
+cli-info-none = not recorded
+
+## The filter
+#
+# What is set has to be visible: half a folder missing with nothing on screen
+# to say why is the worst thing a filter can do.
+
+filter-none = Filter
+filter-title = Filter
+filter-clear = Show everything
+filter-rating = { $count }★ and up
+filter-cameras =
+    { $count ->
+        [one] { $count } camera
+       *[other] { $count } cameras
+    }
+filter-lenses =
+    { $count ->
+        [one] { $count } lens
+       *[other] { $count } lenses
+    }
+filter-date = date
+filter-no-rejects = no rejects
+filter-hide-rejected = Hide the rejects
+filter-search = Search
+filter-search-hint = File name, title, description, keywords
+filter-showing =
+    { $shown ->
+        [one] { $shown } of { $all }
+       *[other] { $shown } of { $all }
+    }
+filter-nothing-matches = Nothing here matches the filter
+
+filter-section-rating = Rating
+filter-section-label = Label
+filter-section-flag = Verdict
+filter-section-format = Format
+filter-section-camera = Camera
+filter-section-lens = Lens
+filter-section-shape = Shape
+filter-section-taken = Taken
+
+shape-any = Any shape
+shape-landscape = Landscape
+shape-portrait = Portrait
+shape-square = Square
+
+diagnostics-showing = showing
+command-view-filter = Filter…
+command-view-clear-filter = Show everything
+
+filter-any = Any
+filter-from = from
+filter-to = to
+filter-taken-range = this folder spans { $from } to { $to }

@@ -13,7 +13,7 @@ pub struct Thumbnail {
     pub len: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Exif {
     /// EXIF orientation, 1..8; 1 when none was found.
     pub orientation: u8,
@@ -35,6 +35,16 @@ pub struct Exif {
     /// in it.
     pub width: Option<u32>,
     pub height: Option<u32>,
+    /// What took the photograph, as one name.
+    ///
+    /// EXIF keeps the maker and the model apart, and putting them back
+    /// together is not concatenation: a Nikon writes `NIKON CORPORATION` and
+    /// `NIKON Z 6`, which joined naively reads as a stutter. See
+    /// [`camera_name`].
+    pub camera: Option<String>,
+    /// The lens, where the camera bothered to record one. Phones mostly do
+    /// not; interchangeable-lens cameras do.
+    pub lens: Option<String>,
 }
 
 impl Exif {
@@ -44,6 +54,8 @@ impl Exif {
         taken_at: None,
         width: None,
         height: None,
+        camera: None,
+        lens: None,
     };
 }
 
@@ -139,6 +151,8 @@ fn parse(raw: &[u8]) -> Option<Exif> {
                     len: thumb.len,
                 });
                 found.taken_at = reader.taken_at();
+                found.camera = camera_name(reader.text(0, 0x010F), reader.text(0, 0x0110));
+                found.lens = reader.sub_ifd().and_then(|ifd| reader.text(ifd, 0xA434));
             }
         }
 
@@ -168,6 +182,30 @@ fn parse(raw: &[u8]) -> Option<Exif> {
     }
 
     anything.then_some(found)
+}
+
+/// The maker and the model as one camera name.
+///
+/// `NIKON CORPORATION` and `NIKON Z 6` are one camera and must read as one:
+/// joined as they come they stutter, and a filter list offering both
+/// `NIKON Z 6` and `NIKON CORPORATION NIKON Z 6` is worse than useless. So
+/// only the maker's first word is used, and it is dropped entirely when the
+/// model already begins with it.
+///
+/// Ported from v1, which learned this the same way.
+pub fn camera_name(make: Option<String>, model: Option<String>) -> Option<String> {
+    match (make, model) {
+        (make, None) => make,
+        (None, model) => model,
+        (Some(make), Some(model)) => {
+            let first = make.split_whitespace().next().unwrap_or(&make).to_owned();
+            if model.to_lowercase().starts_with(&first.to_lowercase()) {
+                Some(model)
+            } else {
+                Some(format!("{first} {model}"))
+            }
+        }
+    }
 }
 
 /// Turns `YYYY:MM:DD HH:MM:SS` into seconds since the epoch.
@@ -310,6 +348,44 @@ impl<'a> TiffReader<'a> {
     fn sub_ifd(&self) -> Option<usize> {
         let at = self.find(self.ifd0()?, 0x8769)?;
         Some(self.u32(at + 8)? as usize)
+    }
+
+    /// An ASCII tag as a tidy string, or nothing.
+    ///
+    /// `ifd` of nought means IFD0; anything else is the offset of a block
+    /// [`Self::sub_ifd`] found. Trailing NULs and padding spaces are stripped
+    /// — cameras pad these fields, and `Canon EOS R6      ` and `Canon EOS
+    /// R6` would otherwise be two different cameras in the filter list.
+    fn text(&self, ifd: usize, tag: u16) -> Option<String> {
+        let ifd = if ifd == 0 { self.ifd0()? } else { ifd };
+        let at = self.find(ifd, tag)?;
+        let bytes = self.ascii_long(at)?;
+        let text = std::str::from_utf8(bytes).ok()?;
+        let text = text.trim_end_matches('\0').trim();
+        (!text.is_empty()).then(|| text.to_owned())
+    }
+
+    /// [`Self::ascii`] with room for a name rather than a timestamp.
+    ///
+    /// A lens is written out in full — `EF24-70mm f/2.8L II USM` — so the
+    /// twenty-byte ceiling a date needs would cut it off.
+    fn ascii_long(&self, at: usize) -> Option<&'a [u8]> {
+        if self.u16(at.checked_add(2)?)? != 2 {
+            return None;
+        }
+
+        let count = self.u32(at.checked_add(4)?)? as usize;
+        if !(1..=256).contains(&count) {
+            return None;
+        }
+
+        let from = if count <= 4 {
+            at.checked_add(8)?
+        } else {
+            self.u32(at.checked_add(8)?)? as usize
+        };
+
+        self.bytes.get(from..from.checked_add(count)?)
     }
 
     fn taken_at(&self) -> Option<i64> {
@@ -551,6 +627,42 @@ mod tests {
             1
         );
         assert_eq!(days_from_civil(2000, 1, 1) * 86_400, 946_684_800);
+    }
+
+    #[test]
+    fn a_stuttering_camera_name_is_said_once() {
+        // The case that made v1 grow this rule.
+        assert_eq!(
+            camera_name(Some("NIKON CORPORATION".into()), Some("NIKON Z 6".into())),
+            Some("NIKON Z 6".into())
+        );
+    }
+
+    #[test]
+    fn a_maker_the_model_does_not_name_is_put_in_front() {
+        assert_eq!(
+            camera_name(Some("Canon".into()), Some("EOS R6".into())),
+            Some("Canon EOS R6".into())
+        );
+        // Only the first word of the maker: nobody wants to read
+        // "SONY CORPORATION ILCE-7M3" in a list of six.
+        assert_eq!(
+            camera_name(Some("SONY CORPORATION".into()), Some("ILCE-7M3".into())),
+            Some("SONY ILCE-7M3".into())
+        );
+    }
+
+    #[test]
+    fn either_one_alone_is_the_whole_name() {
+        assert_eq!(
+            camera_name(Some("Canon".into()), None),
+            Some("Canon".into())
+        );
+        assert_eq!(
+            camera_name(None, Some("EOS R6".into())),
+            Some("EOS R6".into())
+        );
+        assert_eq!(camera_name(None, None), None);
     }
 
     #[test]

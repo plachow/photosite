@@ -113,6 +113,29 @@ pub fn tile_height(gallery: &Gallery) -> f32 {
         + gallery.tile_padding as f32
 }
 
+/// A little triangle, pointing down or up.
+///
+/// Drawn and not written, for the same reason as the star and as the folder
+/// tree's own: the default font has neither `▲` nor `▼` and an absent glyph
+/// comes out as an empty box.
+pub fn caret(painter: &egui::Painter, centre: egui::Pos2, down: bool, fill: Color32) {
+    let reach = 4.0;
+    let points = if down {
+        vec![
+            egui::pos2(centre.x - reach, centre.y - reach * 0.5),
+            egui::pos2(centre.x + reach, centre.y - reach * 0.5),
+            egui::pos2(centre.x, centre.y + reach * 0.75),
+        ]
+    } else {
+        vec![
+            egui::pos2(centre.x - reach, centre.y + reach * 0.5),
+            egui::pos2(centre.x + reach, centre.y + reach * 0.5),
+            egui::pos2(centre.x, centre.y - reach * 0.75),
+        ]
+    };
+    painter.add(egui::Shape::convex_polygon(points, fill, Stroke::NONE));
+}
+
 /// A five-pointed star, drawn rather than written.
 ///
 /// The default font has no `★` — the same reason the folder tree draws its

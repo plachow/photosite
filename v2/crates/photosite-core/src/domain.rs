@@ -30,6 +30,10 @@ pub struct Photo {
     pub height: Option<u32>,
     /// EXIF orientation, 1..8.
     pub orientation: u8,
+    /// What took it, and with what. Both are what the filter offers, so
+    /// they are columns rather than something read back out of the file.
+    pub camera: Option<String>,
+    pub lens: Option<String>,
     /// What somebody has said about it, as opposed to what was read out of
     /// it. A scan never touches this.
     pub organisation: Organisation,
@@ -430,6 +434,8 @@ mod tests {
             width: Some(100),
             height: Some(100),
             orientation: 1,
+            camera: None,
+            lens: None,
             organisation: Organisation::default(),
         }
     }

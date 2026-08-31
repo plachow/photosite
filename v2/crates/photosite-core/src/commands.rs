@@ -262,6 +262,20 @@ pub const COMMANDS: &[Command] = &[
         toolbar: false,
     },
     Command {
+        id: "view.filter",
+        title_key: "command-view-filter",
+        group: Group::View,
+        default_shortcut: Some("Ctrl+F"),
+        toolbar: false,
+    },
+    Command {
+        id: "view.clear_filter",
+        title_key: "command-view-clear-filter",
+        group: Group::View,
+        default_shortcut: Some("Ctrl+Shift+F"),
+        toolbar: false,
+    },
+    Command {
         id: "view.toggle_tree",
         title_key: "command-view-toggle-tree",
         group: Group::View,

@@ -50,6 +50,8 @@ fn write(catalog: &mut Catalog, files: &[std::path::PathBuf]) {
             width: None,
             height: None,
             orientation: 1,
+            camera: None,
+            lens: None,
         })
         .collect();
     catalog.upsert_many(&batch).unwrap();
