@@ -45,6 +45,10 @@ pub struct Exif {
     /// The lens, where the camera bothered to record one. Phones mostly do
     /// not; interchangeable-lens cameras do.
     pub lens: Option<String>,
+    /// How the photograph was actually taken: the shutter, the aperture, the
+    /// sensitivity and the focal length. Together they are the one thing a
+    /// photographer reads off a frame before anything else.
+    pub exposure: Exposure,
     /// What the camera's clock was set to, against UTC, in seconds.
     ///
     /// The one thing that turns [`Self::taken_at`] from a wall clock into a
@@ -55,6 +59,68 @@ pub struct Exif {
     /// camera knew that. What to make of it is not decided here — see
     /// [`Gps`].
     pub gps: Option<Gps>,
+}
+
+/// The exposure, as the camera recorded it.
+///
+/// Each piece separately, because cameras write whichever ones they feel
+/// like: a phone records the shutter and the aperture and no focal length
+/// worth the name, an old scan records nothing at all.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Exposure {
+    /// The shutter, in seconds. Written as a rational, so 1/250 arrives
+    /// exactly as it was meant rather than as 0.004.
+    pub seconds: Option<f64>,
+    /// The f-number.
+    pub aperture: Option<f64>,
+    /// ISO.
+    pub sensitivity: Option<u32>,
+    /// The focal length in millimetres, as it was on the lens.
+    pub focal_mm: Option<f64>,
+    /// And the same in the terms everybody compares by, where the camera
+    /// bothered to work it out.
+    pub focal_equivalent_mm: Option<u32>,
+}
+
+impl Exposure {
+    pub const NONE: Self = Self {
+        seconds: None,
+        aperture: None,
+        sensitivity: None,
+        focal_mm: None,
+        focal_equivalent_mm: None,
+    };
+
+    pub fn is_empty(&self) -> bool {
+        *self == Self::NONE
+    }
+
+    /// The shutter as a photographer says it: `1/250`, or `2.5 s` once it is
+    /// long enough to count out loud.
+    pub fn shutter(&self) -> Option<String> {
+        let seconds = self.seconds?;
+        if seconds <= 0.0 || !seconds.is_finite() {
+            return None;
+        }
+
+        if seconds >= 1.0 {
+            return Some(format!("{seconds:.1} s"));
+        }
+
+        // Rounded to the nearest whole denominator: a camera writes 1/249 or
+        // 10/2500 depending on its mood, and both mean 1/250.
+        Some(format!("1/{}", (1.0 / seconds).round() as i64))
+    }
+
+    /// `f/2.8`, and `f/8` rather than `f/8.0`.
+    pub fn f_number(&self) -> Option<String> {
+        let aperture = self.aperture.filter(|value| *value > 0.0)?;
+        Some(if (aperture.fract()).abs() < 0.05 {
+            format!("f/{aperture:.0}")
+        } else {
+            format!("f/{aperture:.1}")
+        })
+    }
 }
 
 /// What the file says about where it was taken.
@@ -91,6 +157,7 @@ impl Exif {
         height: None,
         camera: None,
         lens: None,
+        exposure: Exposure::NONE,
         offset_seconds: None,
         gps: None,
     };
@@ -105,6 +172,71 @@ impl Default for Exif {
 /// How many bytes from the start of the file are enough. APP1 sits right
 /// behind the header.
 pub const HEADER_BYTES: usize = 128 << 10;
+
+/// The size of the frame, for a file whose SOF marker sits past the header.
+///
+/// The header we read is 128 KB, which holds the EXIF block and the SOF of
+/// nearly every photograph — but only nearly. A phone that writes a large
+/// embedded preview pushes the frame header past it, and on one real library
+/// that happened twenty bytes over the line: the dimensions were missing, the
+/// photograph dropped out of a sort by size and out of the shape filter, and
+/// nothing said why.
+///
+/// So when the header does not hold the answer, the file is walked for it —
+/// by seeking from segment to segment rather than reading it in. It costs a
+/// handful of seeks, and only for the files that need it.
+pub fn frame_in_file(path: &std::path::Path) -> Option<(u32, u32)> {
+    use std::io::{Read as _, Seek as _, SeekFrom};
+
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut two = [0u8; 2];
+    file.read_exact(&mut two).ok()?;
+    if two != [0xFF, 0xD8] {
+        return None;
+    }
+
+    // A generous bound rather than none: a corrupt file must not be walked
+    // for ever, and no real JPEG has this many segments before its frame.
+    for _ in 0..4_096 {
+        let mut marker = [0u8; 2];
+        file.read_exact(&mut marker).ok()?;
+        if marker[0] != 0xFF {
+            return None;
+        }
+
+        let kind = marker[1];
+        // Fill bytes and bodyless markers carry no length.
+        if kind == 0xFF || matches!(kind, 0x01 | 0xD0..=0xD9) {
+            file.seek(SeekFrom::Current(-1)).ok()?;
+            continue;
+        }
+
+        // Past the start of the image data there are no more markers.
+        if kind == 0xDA {
+            return None;
+        }
+
+        let mut length = [0u8; 2];
+        file.read_exact(&mut length).ok()?;
+        let length = u16::from_be_bytes(length) as i64;
+        if length < 2 {
+            return None;
+        }
+
+        if matches!(kind, 0xC0..=0xCF) && !matches!(kind, 0xC4 | 0xC8 | 0xCC) {
+            // Precision, then height, then width.
+            let mut frame = [0u8; 5];
+            file.read_exact(&mut frame).ok()?;
+            let height = u16::from_be_bytes([frame[1], frame[2]]) as u32;
+            let width = u16::from_be_bytes([frame[3], frame[4]]) as u32;
+            return (width > 0 && height > 0).then_some((width, height));
+        }
+
+        file.seek(SeekFrom::Current(length - 2)).ok()?;
+    }
+
+    None
+}
 
 /// Walks the JPEG markers, finds APP1 and reads what we need out of it.
 ///
@@ -140,6 +272,7 @@ fn from_tiff(raw: &[u8]) -> Option<Exif> {
         height,
         camera: camera_name(reader.text(0, 0x010F), reader.text(0, 0x0110)),
         lens: reader.sub_ifd().and_then(|ifd| reader.text(ifd, 0xA434)),
+        exposure: reader.exposure(),
         offset_seconds: reader.offset_seconds(),
         gps: reader.gps(),
     })
@@ -221,6 +354,7 @@ fn parse(raw: &[u8]) -> Option<Exif> {
                 found.taken_at = reader.taken_at();
                 found.camera = camera_name(reader.text(0, 0x010F), reader.text(0, 0x0110));
                 found.lens = reader.sub_ifd().and_then(|ifd| reader.text(ifd, 0xA434));
+                found.exposure = reader.exposure();
                 found.offset_seconds = reader.offset_seconds();
                 found.gps = reader.gps();
             }
@@ -513,6 +647,26 @@ impl<'a> TiffReader<'a> {
     }
 
     /// The EXIF sub-block, where everything about the exposure lives.
+    /// The exposure, out of the block the camera keeps it in.
+    fn exposure(&self) -> Exposure {
+        let Some(ifd) = self.sub_ifd() else {
+            return Exposure::NONE;
+        };
+
+        Exposure {
+            seconds: self.rational(ifd, 0x829A),
+            aperture: self.rational(ifd, 0x829D),
+            // A SHORT for anything up to 65535 and a LONG above it, and
+            // cameras that go past that write both. Either will do.
+            sensitivity: self
+                .short(ifd, 0x8827)
+                .map(u32::from)
+                .or_else(|| self.long(ifd, 0x8833)),
+            focal_mm: self.rational(ifd, 0x920A),
+            focal_equivalent_mm: self.short(ifd, 0xA405).map(u32::from),
+        }
+    }
+
     /// What the camera's clock was set to, against UTC.
     ///
     /// `OffsetTimeOriginal` is the one that belongs to the shutter; the other
@@ -871,6 +1025,55 @@ mod tests {
         }
 
         bytes
+    }
+
+    /// The one a real library taught us: a phone that writes a large
+    /// embedded preview pushes the frame header past the 128 KB we read, and
+    /// twenty bytes over the line was enough to lose the dimensions.
+    #[test]
+    fn the_frame_is_found_even_when_it_sits_past_the_header() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.jpg");
+
+        // A JPEG with a very large APP1 in front of the frame header. The
+        // segment length field is sixteen bits, so it takes several.
+        let mut raw = vec![0xFF, 0xD8];
+        for _ in 0..4 {
+            raw.extend_from_slice(&[0xFF, 0xE1]);
+            raw.extend_from_slice(&65_535u16.to_be_bytes());
+            raw.resize(raw.len() + 65_533, 0x41);
+        }
+
+        raw.extend_from_slice(&[0xFF, 0xC0]);
+        raw.extend_from_slice(&11u16.to_be_bytes());
+        raw.push(8);
+        raw.extend_from_slice(&2_736u16.to_be_bytes());
+        raw.extend_from_slice(&3_648u16.to_be_bytes());
+        raw.extend_from_slice(&[3, 0, 0, 0]);
+        std::fs::write(&path, &raw).unwrap();
+
+        assert!(
+            raw.len() > HEADER_BYTES,
+            "the fixture has to be larger than what is read"
+        );
+        assert_eq!(read(&raw[..HEADER_BYTES]).width, None, "nothing to guard");
+        assert_eq!(frame_in_file(&path), Some((3_648, 2_736)));
+    }
+
+    #[test]
+    fn walking_a_file_for_a_frame_gives_up_rather_than_hanging() {
+        let dir = tempfile::tempdir().unwrap();
+        for (name, bytes) in [
+            ("empty.jpg", vec![]),
+            ("nonsense.jpg", b"not a jpeg at all".to_vec()),
+            ("truncated.jpg", vec![0xFF, 0xD8, 0xFF, 0xE1, 0xFF]),
+        ] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, bytes).unwrap();
+            assert_eq!(frame_in_file(&path), None, "{name}");
+        }
+
+        assert_eq!(frame_in_file(&dir.path().join("nothing.jpg")), None);
     }
 
     #[test]

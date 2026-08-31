@@ -30,12 +30,38 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
         return;
     }
 
+    // Two views of one folder, and a switch rather than two panels: side by
+    // side they would each be too narrow to be worth having.
+    if app.gallery().as_list {
+        return crate::list::show(app, ui, palette);
+    }
+
     let gallery = app.gallery().clone();
     let tile_w = gallery.tile_size as f32;
     let tile_h = theme::tile_height(&gallery);
     let gap = gallery.gap as f32;
     let margin = gallery.prefetch_rows.clamp(0, 64) as usize;
     let count = app.count();
+
+    // Ctrl and the wheel resizes the tiles, the way it does in every file
+    // manager and every browser. It is taken **before** the scroll area sees
+    // it, or the grid scrolls and resizes at the same time.
+    let zooming = ui.input_mut(|input| {
+        if !input.modifiers.command && !input.modifiers.ctrl {
+            return 0.0;
+        }
+
+        let wheel = input.smooth_scroll_delta.y;
+        if wheel != 0.0 {
+            input.smooth_scroll_delta.y = 0.0;
+        }
+
+        wheel
+    });
+    if zooming != 0.0 && ui.rect_contains_pointer(ui.max_rect()) {
+        // A notch is a fifth larger, which is the same step the menu takes.
+        app.resize_tiles(f64::from(1.2f32.powf(zooming / 50.0)));
+    }
 
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])

@@ -15,6 +15,7 @@
 //! silently misses half the library.
 
 use photosite_core::domain::{ColorLabel, Organisation};
+use photosite_core::place::Place;
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::{NsReader, Writer};
 use std::io::Cursor;
@@ -24,20 +25,39 @@ const NS_XMP: &[u8] = b"http://ns.adobe.com/xap/1.0/";
 /// `http://purl.org/dc/elements/1.1/` — where the words live.
 const NS_DC: &[u8] = b"http://purl.org/dc/elements/1.1/";
 const NS_RDF: &[u8] = b"http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+/// Where a position lives in XMP, whatever the file it sits in.
+const NS_EXIF: &[u8] = b"http://ns.adobe.com/exif/1.0/";
 
 /// What we read out of a packet, and what we put back into one.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+// Not `Eq`: a position is two floating-point numbers.
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Xmp {
     pub rating: Option<u8>,
     pub label: Option<String>,
     pub title: Option<String>,
     pub description: Option<String>,
     pub keywords: Vec<String>,
+    /// Where it was taken, when somebody has said so. A position is never
+    /// **removed** from a file by us: what we do not know we leave alone,
+    /// and a photograph that arrived with coordinates keeps them.
+    pub place: Option<Place>,
+    /// The two halves as they were read, held between reading the latitude
+    /// and the longitude. They are separate properties and either can come
+    /// first.
+    latitude: Option<String>,
+    longitude: Option<String>,
 }
 
 impl Xmp {
     pub fn is_empty(&self) -> bool {
         self == &Self::default()
+    }
+
+    /// Both halves of a position have arrived, so make one of them.
+    fn settle_place(&mut self) {
+        if let (Some(latitude), Some(longitude)) = (&self.latitude, &self.longitude) {
+            self.place = photosite_core::place::from_xmp(latitude, longitude);
+        }
     }
 
     /// What the catalogue would hold if this were all we knew.
@@ -69,6 +89,11 @@ impl From<&Organisation> for Xmp {
             title: organisation.title.clone(),
             description: organisation.description.clone(),
             keywords: organisation.keywords.clone(),
+            // A position is not part of what somebody said about a
+            // photograph; it is set beside it, by whoever knows one.
+            place: None,
+            latitude: None,
+            longitude: None,
         }
     }
 }
@@ -78,6 +103,7 @@ fn ours(namespace: Option<&[u8]>, local: &[u8]) -> bool {
     match namespace {
         Some(NS_XMP) => matches!(local, b"Rating" | b"Label"),
         Some(NS_DC) => matches!(local, b"title" | b"description" | b"subject"),
+        Some(NS_EXIF) => matches!(local, b"GPSLatitude" | b"GPSLongitude"),
         _ => false,
     }
 }
@@ -204,6 +230,8 @@ enum Property {
     Title,
     Description,
     Subject,
+    Latitude,
+    Longitude,
 }
 
 impl Property {
@@ -214,6 +242,8 @@ impl Property {
             (Some(NS_DC), b"title") => Some(Self::Title),
             (Some(NS_DC), b"description") => Some(Self::Description),
             (Some(NS_DC), b"subject") => Some(Self::Subject),
+            (Some(NS_EXIF), b"GPSLatitude") => Some(Self::Latitude),
+            (Some(NS_EXIF), b"GPSLongitude") => Some(Self::Longitude),
             _ => None,
         }
     }
@@ -232,6 +262,14 @@ impl Property {
             }
             Self::Label => {
                 into.label.get_or_insert(value);
+            }
+            Self::Latitude => {
+                into.latitude.get_or_insert(value);
+                into.settle_place();
+            }
+            Self::Longitude => {
+                into.longitude.get_or_insert(value);
+                into.settle_place();
             }
             Self::Title => {
                 into.title.get_or_insert(value);
@@ -285,7 +323,8 @@ fn our_block(xmp: &Xmp) -> String {
     let mut out = String::from(
         "  <rdf:Description rdf:about=\"\"\n      \
          xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\"\n      \
-         xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\n",
+         xmlns:dc=\"http://purl.org/dc/elements/1.1/\"\n      \
+         xmlns:exif=\"http://ns.adobe.com/exif/1.0/\">\n",
     );
 
     if let Some(rating) = xmp.rating {
@@ -308,6 +347,14 @@ fn our_block(xmp: &Xmp) -> String {
                 escape(value)
             ));
         }
+    }
+
+    if let Some(place) = xmp.place {
+        let (latitude, longitude) = place.as_xmp();
+        out.push_str(&format!(
+            "   <exif:GPSLatitude>{latitude}</exif:GPSLatitude>\n   \
+             <exif:GPSLongitude>{longitude}</exif:GPSLongitude>\n"
+        ));
     }
 
     if !xmp.keywords.is_empty() {
@@ -610,6 +657,9 @@ mod tests {
             title: Some("Sunrise".to_owned()),
             description: Some("The first morning".to_owned()),
             keywords: vec!["Hawaii".to_owned(), "holiday".to_owned()],
+            place: None,
+            latitude: None,
+            longitude: None,
         }
     }
 

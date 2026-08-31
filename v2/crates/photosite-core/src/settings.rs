@@ -89,6 +89,8 @@ pub struct Gallery {
     /// How many rows above and below the viewport are loaded ahead.
     pub prefetch_rows: i64,
     pub show_captions: bool,
+    /// The folder as a list of rows rather than a wall of tiles.
+    pub as_list: bool,
     pub recursive: bool,
     /// What the gallery is ordered by, under the stable name from
     /// [`crate::domain::SortField::id`]. A name rather than a number, so the
@@ -120,6 +122,7 @@ impl Default for Gallery {
             tile_padding: 7.0,
             prefetch_rows: 3,
             show_captions: true,
+            as_list: false,
             recursive: false,
             // Date taken, oldest first: the order the photographs happened
             // in, which is the one nobody has to think about.
@@ -569,6 +572,11 @@ pub const TUNABLES: &[Tunable] = &[
     Tunable {
         path: "gallery.sort_descending",
         label_key: "setting-sort-descending",
+        kind: Kind::Bool,
+    },
+    Tunable {
+        path: "gallery.as_list",
+        label_key: "setting-as-list",
         kind: Kind::Bool,
     },
     Tunable {

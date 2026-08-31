@@ -32,8 +32,10 @@ use little_exif::exif_tag::ExifTag;
 use little_exif::filetype::FileExtension;
 use little_exif::ifd::ExifTagGroup;
 use little_exif::metadata::Metadata;
+use little_exif::rational::uR64;
 use photosite_core::catalog::NewPhoto;
 use photosite_core::domain::Organisation;
+use photosite_core::place::Place;
 use std::path::{Path, PathBuf};
 use xmp::Xmp;
 
@@ -149,8 +151,19 @@ pub fn scan(path: &Path) -> Option<(NewPhoto, Xmp)> {
         }
     }
 
-    let meta = photosite_image::exif::read(&header);
+    let mut meta = photosite_image::exif::read(&header);
     let said = read_from_header(path, &header);
+
+    // The frame's size, when the header did not reach far enough to hold it.
+    // See `frame_in_file`: a large embedded preview pushes the frame header
+    // past the 128 KB we read, and a photograph with no dimensions drops out
+    // of a sort by size and out of the shape filter without saying why.
+    if meta.width.is_none()
+        && let Some((width, height)) = photosite_image::exif::frame_in_file(path)
+    {
+        meta.width = Some(width);
+        meta.height = Some(height);
+    }
 
     // Where it was taken, and how much of that to believe. The verdict is
     // reached here, while the evidence is in hand: the error estimate, the
@@ -205,9 +218,10 @@ fn utc_of(meta: &photosite_image::exif::Exif) -> Option<i64> {
 /// Not a change to it but the whole of it: the caller holds one pending write
 /// per photograph, so a retry writes the truth as it stands rather than a
 /// change that may since have been undone.
-pub fn write(path: &Path, organisation: &Organisation) -> Result<Target> {
+pub fn write(path: &Path, organisation: &Organisation, place: Option<Place>) -> Result<Target> {
     let target = target_for(path);
-    let wanted = Xmp::from(organisation);
+    let mut wanted = Xmp::from(organisation);
+    wanted.place = place;
 
     match &target {
         Target::Sidecar(sidecar) => {
@@ -232,7 +246,7 @@ pub fn write(path: &Path, organisation: &Organisation) -> Result<Target> {
 /// touched.
 fn embed(raw: &[u8], wanted: &Xmp) -> Result<Vec<u8>> {
     // The stars for Windows Explorer, which reads EXIF and not XMP.
-    let mut out = with_rating(raw, wanted.rating)?;
+    let mut out = with_rating(raw, wanted.rating, wanted.place)?;
 
     let existing = jpeg::xmp(&out);
     let packet = xmp::merge(existing.as_deref(), wanted);
@@ -255,7 +269,7 @@ fn embed(raw: &[u8], wanted: &Xmp) -> Result<Vec<u8>> {
 /// Neither is in little_exif's list of known tags, so they go in by number.
 /// **The file is read first**, without exception: the alternative writes an
 /// empty metadata set over everything the camera recorded.
-fn with_rating(raw: &[u8], rating: Option<u8>) -> Result<Vec<u8>> {
+fn with_rating(raw: &[u8], rating: Option<u8>, place: Option<Place>) -> Result<Vec<u8>> {
     let mut buffer = raw.to_vec();
     let mut metadata = match Metadata::new_from_vec(&buffer, FileExtension::JPEG) {
         Ok(metadata) => metadata,
@@ -286,10 +300,66 @@ fn with_rating(raw: &[u8], rating: Option<u8>) -> Result<Vec<u8>> {
         }
     }
 
+    // A position, when the catalogue holds one. **Never removed**: a photo
+    // whose coordinates we happen not to know is not one whose coordinates
+    // are wrong, and clearing what the camera recorded because the catalogue
+    // has not caught up would be the worst kind of quiet damage.
+    if let Some(place) = place {
+        let (degrees, minutes, seconds) = sexagesimal(place.latitude);
+        metadata.set_tag(ExifTag::GPSLatitude(vec![degrees, minutes, seconds]));
+        metadata.set_tag(ExifTag::GPSLatitudeRef(
+            if place.latitude >= 0.0 { "N" } else { "S" }.to_owned(),
+        ));
+
+        let (degrees, minutes, seconds) = sexagesimal(place.longitude);
+        metadata.set_tag(ExifTag::GPSLongitude(vec![degrees, minutes, seconds]));
+        metadata.set_tag(ExifTag::GPSLongitudeRef(
+            if place.longitude >= 0.0 { "E" } else { "W" }.to_owned(),
+        ));
+
+        // **And the story of how it was arrived at, because it has changed.**
+        // A position we write is one somebody typed, so the method is
+        // MANUAL — and the camera's error estimate and the time of its fix
+        // describe a fix that has just been replaced. Left behind, they
+        // would have the photograph marked doubtful again the moment it was
+        // read back, and correcting a position would visibly do nothing.
+        metadata.set_tag(ExifTag::GPSProcessingMethod(b"ASCII\0\0\0MANUAL".to_vec()));
+        metadata.remove_tag_by_hex_group(0x001F, ExifTagGroup::GPS);
+        metadata.remove_tag_by_hex_group(0x0007, ExifTagGroup::GPS);
+        metadata.remove_tag_by_hex_group(0x001D, ExifTagGroup::GPS);
+    }
+
     metadata
         .write_to_vec(&mut buffer, FileExtension::JPEG)
         .context("the EXIF block could not be written")?;
     Ok(buffer)
+}
+
+/// Degrees, whole minutes and seconds, as the three rationals EXIF wants.
+///
+/// The sign is dropped: EXIF keeps the hemisphere as a letter in a tag of its
+/// own, and a negative degree beside a `S` would be south twice over.
+/// Seconds are kept to four decimal places, which is a hundredth of a
+/// millimetre on the ground and rather more than anybody's GPS knows.
+fn sexagesimal(value: f64) -> (uR64, uR64, uR64) {
+    let value = value.abs();
+    let degrees = value.trunc();
+    let minutes = ((value - degrees) * 60.0).trunc();
+    let seconds = (((value - degrees) * 60.0 - minutes) * 60.0 * 10_000.0).round();
+    (
+        uR64 {
+            nominator: degrees as u32,
+            denominator: 1,
+        },
+        uR64 {
+            nominator: minutes as u32,
+            denominator: 1,
+        },
+        uR64 {
+            nominator: seconds as u32,
+            denominator: 10_000,
+        },
+    )
 }
 
 /// What Windows puts in `RatingPercent` for each number of stars.
@@ -388,12 +458,110 @@ mod tests {
         let path = dir.path().join("a.jpg");
         std::fs::write(&path, jpeg_bytes()).unwrap();
 
-        assert_eq!(write(&path, &organisation()).unwrap(), Target::Embedded);
+        assert_eq!(
+            write(&path, &organisation(), None).unwrap(),
+            Target::Embedded
+        );
         let read = read(&path);
         assert_eq!(read.rating, Some(4));
         assert_eq!(read.label.as_deref(), Some("Green"));
         assert_eq!(read.title.as_deref(), Some("Sunrise"));
         assert_eq!(read.keywords, ["Hawaii"]);
+    }
+
+    /// A corrected position has to survive the trip into the file and back
+    /// out of it — the catalogue is overwritten by the next rescan, so the
+    /// file is the only place the correction can live.
+    #[test]
+    fn a_corrected_position_goes_into_the_photograph_and_comes_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.jpg");
+        std::fs::write(&path, jpeg_bytes()).unwrap();
+
+        // Prague, and then the other side of the world, where both signs
+        // are the other way round.
+        for wanted in [
+            Place::new(50.0755, 14.4378).unwrap(),
+            Place::new(-33.8688, -70.6693).unwrap(),
+        ] {
+            write(&path, &organisation(), Some(wanted)).unwrap();
+
+            let raw = std::fs::read(&path).unwrap();
+            let gps = photosite_image::exif::read(&raw)
+                .gps
+                .unwrap_or_else(|| panic!("{wanted:?} did not reach the EXIF block"));
+            assert!(
+                (gps.latitude - wanted.latitude).abs() < 1e-6,
+                "{wanted:?} came back as {gps:?}"
+            );
+            assert!(
+                (gps.longitude - wanted.longitude).abs() < 1e-6,
+                "{wanted:?} came back as {gps:?}"
+            );
+
+            // And in the XMP packet as well, which is what Lightroom reads.
+            let read = read(&path);
+            let from_xmp = read.place.expect("the packet holds no position");
+            assert!(
+                (from_xmp.latitude - wanted.latitude).abs() < 1e-4,
+                "{read:?}"
+            );
+            assert!(
+                (from_xmp.longitude - wanted.longitude).abs() < 1e-4,
+                "{read:?}"
+            );
+        }
+    }
+
+    /// The one a real photograph taught us. A correction that leaves the
+    /// cell-tower fix behind is a correction that undoes itself: the mark
+    /// comes straight back the next time the file is read.
+    #[test]
+    fn correcting_a_position_replaces_the_story_of_how_it_was_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.jpg");
+        std::fs::write(&path, jpeg_bytes()).unwrap();
+
+        write(
+            &path,
+            &organisation(),
+            Some(Place::new(50.0755, 14.4378).unwrap()),
+        )
+        .unwrap();
+
+        let raw = std::fs::read(&path).unwrap();
+        let gps = photosite_image::exif::read(&raw).gps.expect("no position");
+        assert_eq!(gps.method.as_deref(), Some("MANUAL"));
+        assert_eq!(gps.error_metres, None, "the old error estimate stayed");
+        assert_eq!(gps.fixed_at, None, "the old fix time stayed");
+
+        // Which is what makes the mark clear itself.
+        let judgement = photosite_core::place::judge(photosite_core::place::Evidence {
+            error_metres: gps.error_metres,
+            method: gps.method.as_deref(),
+            fixed_at: gps.fixed_at,
+            taken_at: None,
+        });
+        assert_eq!(judgement.verdict, photosite_core::Verdict::Precise);
+    }
+
+    /// The one that would be quiet and irreversible. A photograph whose
+    /// position we happen not to hold is not one whose position is wrong.
+    #[test]
+    fn writing_without_a_position_leaves_the_one_that_is_there() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.jpg");
+        std::fs::write(&path, jpeg_bytes()).unwrap();
+
+        let wanted = Place::new(50.0755, 14.4378).unwrap();
+        write(&path, &organisation(), Some(wanted)).unwrap();
+        write(&path, &organisation(), None).unwrap();
+
+        let raw = std::fs::read(&path).unwrap();
+        let gps = photosite_image::exif::read(&raw)
+            .gps
+            .expect("the position was wiped by a write that knew nothing about it");
+        assert!((gps.latitude - wanted.latitude).abs() < 1e-6, "{gps:?}");
     }
 
     #[test]
@@ -403,7 +571,7 @@ mod tests {
         let before = jpeg_bytes();
         std::fs::write(&path, &before).unwrap();
 
-        write(&path, &organisation()).unwrap();
+        write(&path, &organisation(), None).unwrap();
         let after = std::fs::read(&path).unwrap();
         assert_eq!(
             jpeg::compressed_image(&before),
@@ -417,7 +585,7 @@ mod tests {
         let path = dir.path().join("a.nef");
         std::fs::write(&path, b"pretend this is a raw file").unwrap();
 
-        let target = write(&path, &organisation()).unwrap();
+        let target = write(&path, &organisation(), None).unwrap();
         assert_eq!(target, Target::Sidecar(dir.path().join("a.xmp")));
         assert_eq!(
             std::fs::read(&path).unwrap(),
@@ -433,9 +601,9 @@ mod tests {
         let path = dir.path().join("a.jpg");
         std::fs::write(&path, jpeg_bytes()).unwrap();
 
-        write(&path, &organisation()).unwrap();
+        write(&path, &organisation(), None).unwrap();
         let once = std::fs::read(&path).unwrap();
-        write(&path, &organisation()).unwrap();
+        write(&path, &organisation(), None).unwrap();
         let twice = std::fs::read(&path).unwrap();
         assert_eq!(once, twice, "the second write changed the file");
     }
@@ -446,8 +614,8 @@ mod tests {
         let path = dir.path().join("a.jpg");
         std::fs::write(&path, jpeg_bytes()).unwrap();
 
-        write(&path, &organisation()).unwrap();
-        write(&path, &Organisation::default()).unwrap();
+        write(&path, &organisation(), None).unwrap();
+        write(&path, &Organisation::default(), None).unwrap();
         assert!(read(&path).is_empty(), "{:?}", read(&path));
     }
 
@@ -466,7 +634,7 @@ mod tests {
         let path = dir.path().join("a.jpg");
         std::fs::write(&path, b"this is not a jpeg at all").unwrap();
 
-        assert!(write(&path, &organisation()).is_err());
+        assert!(write(&path, &organisation(), None).is_err());
         assert_eq!(
             std::fs::read(&path).unwrap(),
             b"this is not a jpeg at all",
@@ -479,7 +647,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("a.jpg");
         std::fs::write(&path, b"not a jpeg").unwrap();
-        let _ = write(&path, &organisation());
+        let _ = write(&path, &organisation(), None);
 
         let strays: Vec<_> = std::fs::read_dir(dir.path())
             .unwrap()

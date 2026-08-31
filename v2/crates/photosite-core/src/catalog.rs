@@ -838,19 +838,67 @@ impl Catalog {
     /// The title, or `None` to clear it. An empty string is not a title —
     /// it is somebody having deleted one, and storing it would leave the
     /// photograph looking titled.
-    pub fn set_title(&self, photo: PhotoId, title: Option<&str>) -> Result<()> {
-        self.conn.execute(
+    /// A title, for one photograph or for a whole selection.
+    ///
+    /// A slice and not a single row, the same as the rating and the label:
+    /// somebody who chose forty photographs and typed a title meant all
+    /// forty, and there is no sense in one of these three taking a list and
+    /// the others not.
+    pub fn set_title(&mut self, photos: &[PhotoId], title: Option<&str>) -> Result<()> {
+        self.write_each(
+            photos,
             "UPDATE photos SET title = ?2 WHERE id = ?1",
-            params![photo.0, blank_to_none(title)],
-        )?;
-        Ok(())
+            blank_to_none(title),
+        )
     }
 
-    pub fn set_description(&self, photo: PhotoId, description: Option<&str>) -> Result<()> {
-        self.conn.execute(
+    pub fn set_description(&mut self, photos: &[PhotoId], description: Option<&str>) -> Result<()> {
+        self.write_each(
+            photos,
             "UPDATE photos SET description = ?2 WHERE id = ?1",
-            params![photo.0, blank_to_none(description)],
-        )?;
+            blank_to_none(description),
+        )
+    }
+
+    /// Where a photograph was taken, said by a person rather than read off
+    /// the file.
+    ///
+    /// The verdict goes with it, and it is always [`Verdict::Precise`] with
+    /// no reason: somebody looked at a map and typed it, and that is the
+    /// most trustworthy source there is. The mark clears itself, which is
+    /// the point of being able to correct one at all.
+    ///
+    /// A rescan will read the file again and overwrite this — which is
+    /// right, because the correction is written **into** the file and read
+    /// back from it, exactly the way a rating is.
+    pub fn set_place(&mut self, photos: &[PhotoId], place: Option<Place>) -> Result<()> {
+        if photos.is_empty() {
+            return Ok(());
+        }
+
+        let transaction = self.conn.transaction()?;
+        {
+            let mut statement = transaction.prepare(
+                "UPDATE photos
+                    SET latitude = ?2, longitude = ?3,
+                        place_verdict = ?4, place_reason = 0
+                  WHERE id = ?1",
+            )?;
+            let verdict = match place {
+                Some(_) => Verdict::Precise,
+                None => Verdict::Nowhere,
+            };
+            for photo in photos {
+                statement.execute(params![
+                    photo.0,
+                    place.map(|place| place.latitude),
+                    place.map(|place| place.longitude),
+                    verdict.as_number(),
+                ])?;
+            }
+        }
+
+        transaction.commit()?;
         Ok(())
     }
 
@@ -1376,7 +1424,7 @@ mod tests {
         let id = catalog.upsert(&sample("/a/old.jpg")).unwrap();
         catalog.set_rating(&[id], 5).unwrap();
         catalog.set_label(&[id], ColorLabel::Purple).unwrap();
-        catalog.set_title(id, Some("Sunrise")).unwrap();
+        catalog.set_title(&[id], Some("Sunrise")).unwrap();
         catalog.add_keywords(&[id], &["Hawaii"]).unwrap();
 
         catalog
@@ -1534,7 +1582,7 @@ mod tests {
         let mut catalog = Catalog::in_memory().unwrap();
         let id = catalog.upsert(&sample("/a/b.jpg")).unwrap();
         catalog.set_rating(&[id], 1).unwrap();
-        catalog.set_title(id, Some("Mine")).unwrap();
+        catalog.set_title(&[id], Some("Mine")).unwrap();
         catalog.add_keywords(&[id], &["mine"]).unwrap();
 
         let from_file = Organisation {
@@ -1585,7 +1633,7 @@ mod tests {
         catalog.set_rating(&[id], 4).unwrap();
         catalog.set_label(&[id], ColorLabel::Green).unwrap();
         catalog.set_flag(&[id], Flag::Picked).unwrap();
-        catalog.set_title(id, Some("Sunrise")).unwrap();
+        catalog.set_title(&[id], Some("Sunrise")).unwrap();
         catalog.add_keywords(&[id], &["holiday"]).unwrap();
 
         // The file changed on disk and is read again, exactly as a rescan
@@ -1647,10 +1695,10 @@ mod tests {
 
     #[test]
     fn an_emptied_title_is_cleared_rather_than_stored_blank() {
-        let catalog = Catalog::in_memory().unwrap();
+        let mut catalog = Catalog::in_memory().unwrap();
         let id = catalog.upsert(&sample("/a/b.jpg")).unwrap();
-        catalog.set_title(id, Some("Sunrise")).unwrap();
-        catalog.set_title(id, Some("   ")).unwrap();
+        catalog.set_title(&[id], Some("Sunrise")).unwrap();
+        catalog.set_title(&[id], Some("   ")).unwrap();
         let photo = catalog.by_path(Path::new("/a/b.jpg")).unwrap().unwrap();
         assert_eq!(photo.organisation.title, None);
     }

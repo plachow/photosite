@@ -15,6 +15,7 @@ mod files;
 mod filter;
 mod grid;
 mod info;
+mod list;
 mod picker;
 mod theme;
 
@@ -77,6 +78,7 @@ fn main() -> Result<()> {
     let mut compare = 0usize;
     let mut search: Option<String> = None;
     let mut folder: Option<PathBuf> = None;
+    let mut on: Option<std::ffi::OsString> = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--data" => data = args.next().map(PathBuf::from),
@@ -94,7 +96,19 @@ fn main() -> Result<()> {
             // Start already narrowed. The filter is not saved between
             // runs on purpose, so this is the only way to open on one.
             "--search" => search = args.next(),
-            other => folder = Some(PathBuf::from(other)),
+            // A folder opens the gallery on it. A photograph opens the
+            // folder it is in, standing on that photograph — which is what
+            // "open with" from a file manager means, and the only sensible
+            // reading of it until there is an editor to open it in.
+            other => {
+                let path = PathBuf::from(other);
+                if path.is_file() {
+                    on = path.file_name().map(|name| name.to_os_string());
+                    folder = path.parent().map(Path::to_path_buf);
+                } else {
+                    folder = Some(path);
+                }
+            }
         }
     }
 
@@ -145,6 +159,14 @@ fn main() -> Result<()> {
                     search,
                     ..Default::default()
                 });
+            }
+
+            if let Some(name) = on
+                && let Some(at) = (0..app.count()).find(|at| {
+                    app.photo(*at).and_then(|photo| photo.path.file_name()) == Some(&name)
+                })
+            {
+                app.select_only(at);
             }
 
             if compare > 0 {
@@ -301,6 +323,10 @@ pub struct App {
     theme: &'static palettes::Theme,
     status: String,
     show_diagnostics: bool,
+    /// Whether the window is filling the screen. Held rather than asked for,
+    /// because the toolkit reports it a frame late and a toggle read from a
+    /// stale answer flickers.
+    fullscreen: bool,
     show_settings: bool,
     /// The dock layout, read from the settings. Written back as soon as
     /// somebody moves a splitter.
@@ -320,6 +346,7 @@ pub struct App {
     pub edit_title: String,
     pub edit_description: String,
     pub edit_keywords: String,
+    pub edit_place: String,
     /// The folder dialog, at most one — and what it is being asked for. The
     /// same dialog serves opening a folder and choosing where files go; only
     /// what happens to the answer differs.
@@ -452,6 +479,7 @@ impl App {
             waker,
             status: i18n::t("gallery-pick-folder"),
             show_diagnostics: false,
+            fullscreen: false,
             show_settings: false,
             layout: layout::parse_or_default(&settings_layout),
             hidden: layout::hidden(&settings_hidden),
@@ -461,6 +489,7 @@ impl App {
             edit_title: String::new(),
             edit_description: String::new(),
             edit_keywords: String::new(),
+            edit_place: String::new(),
             folder_dialog: None,
             clipboard: clipboard::Held::default(),
             scroll_tree_to: None,
@@ -1086,6 +1115,11 @@ impl App {
                 self.settings.appearance.theme = next.id.to_owned();
                 self.dress(ctx);
             }
+            "view.as_list" => self.settings.gallery.as_list = !self.settings.gallery.as_list,
+            "view.fullscreen" => {
+                self.fullscreen = !self.fullscreen;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
+            }
             "view.settings" => self.show_settings = !self.show_settings,
             "view.filter" => self.show_filter = !self.show_filter,
             "view.clear_filter" => {
@@ -1451,7 +1485,11 @@ impl App {
                     }
 
                     let path = entry.photo.path.clone();
-                    match photosite_meta::write(&path, &entry.photo.organisation) {
+                    match photosite_meta::write(
+                        &path,
+                        &entry.photo.organisation,
+                        entry.photo.place,
+                    ) {
                         Ok(_) => match photosite_core::FileIdentity::read(&path) {
                             Ok(identity) => catalog.written(entry.photo.id, &identity)?,
                             // Written but we cannot see it any more: the
@@ -1599,33 +1637,46 @@ impl App {
         self.edit_title = photo.organisation.title.clone().unwrap_or_default();
         self.edit_description = photo.organisation.description.clone().unwrap_or_default();
         self.edit_keywords = photo.organisation.keywords.join(", ");
+        self.edit_place = photo.place.map(|place| place.typed()).unwrap_or_default();
     }
 
     /// Writes the title as it now stands. Called when the field is left, not
     /// while it is being typed in.
     pub fn commit_title(&mut self) {
-        let Some(photo) = self.current() else { return };
+        let chosen = self.chosen();
+        if chosen.is_empty() {
+            return;
+        }
+
         let text = self.edit_title.clone();
         let value = (!text.trim().is_empty()).then(|| text.trim().to_owned());
-        self.write_catalog(|catalog| catalog.set_title(photo, value.as_deref()));
-        self.queue_write(&[photo]);
-        if let Some(at) = self.selected
-            && let Some(photo) = self.photo_mut(at)
-        {
-            photo.organisation.title = value;
+        let written = value.clone();
+        self.write_catalog(move |catalog| catalog.set_title(&chosen, written.as_deref()));
+        let chosen = self.chosen();
+        self.queue_write(&chosen);
+        for at in self.acting_on() {
+            if let Some(photo) = self.photo_mut(at) {
+                photo.organisation.title = value.clone();
+            }
         }
     }
 
     pub fn commit_description(&mut self) {
-        let Some(photo) = self.current() else { return };
+        let chosen = self.chosen();
+        if chosen.is_empty() {
+            return;
+        }
+
         let text = self.edit_description.clone();
         let value = (!text.trim().is_empty()).then(|| text.trim().to_owned());
-        self.write_catalog(|catalog| catalog.set_description(photo, value.as_deref()));
-        self.queue_write(&[photo]);
-        if let Some(at) = self.selected
-            && let Some(photo) = self.photo_mut(at)
-        {
-            photo.organisation.description = value;
+        let written = value.clone();
+        self.write_catalog(move |catalog| catalog.set_description(&chosen, written.as_deref()));
+        let chosen = self.chosen();
+        self.queue_write(&chosen);
+        for at in self.acting_on() {
+            if let Some(photo) = self.photo_mut(at) {
+                photo.organisation.description = value.clone();
+            }
         }
     }
 
@@ -1633,37 +1684,108 @@ impl App {
     ///
     /// A comma and not a space, because a keyword can be two words —
     /// "Prague Castle" is one thing, not two.
+    /// The keywords, from the box.
+    ///
+    /// **On one photograph they replace; on a selection they are added.** A
+    /// person editing one photograph's keywords is editing a list they can
+    /// see, and deleting a word out of the box must delete the word. Forty
+    /// photographs have forty different lists and the box shows none of
+    /// them, so setting would throw away everything already on thirty-nine
+    /// of them — and nobody typing "holiday" into a box means that.
     pub fn commit_keywords(&mut self) {
-        let Some(photo) = self.current() else { return };
+        let chosen = self.chosen();
+        let Some(first) = chosen.first().copied() else {
+            return;
+        };
+
         let words: Vec<String> = self
             .edit_keywords
             .split(',')
             .map(|word| word.trim().to_owned())
             .filter(|word| !word.is_empty())
             .collect();
-        self.write_catalog(|catalog| catalog.set_keywords(photo, &words));
-        self.queue_write(&[photo]);
+
+        let many = chosen.len() > 1;
+        let written = words.clone();
+        let onto = chosen.clone();
+        self.write_catalog(move |catalog| {
+            if many {
+                catalog.add_keywords(&onto, &written)
+            } else {
+                catalog.set_keywords(first, &written)
+            }
+        });
+        self.queue_write(&chosen);
 
         // Read back what the catalogue made of it, so the field shows the
-        // tidied list rather than what was typed.
-        let tidied = self
-            .catalog
-            .as_ref()
-            .and_then(|catalog| catalog.keywords_of(photo).ok())
-            .unwrap_or(words);
-        self.edit_keywords = tidied.join(", ");
-        if let Some(at) = self.selected
-            && let Some(photo) = self.photo_mut(at)
-        {
-            photo.organisation.keywords = tidied;
+        // tidied list rather than what was typed. Only for one photograph —
+        // a selection has no single list to show.
+        let tidied = if many {
+            words
+        } else {
+            self.catalog
+                .as_ref()
+                .and_then(|catalog| catalog.keywords_of(first).ok())
+                .unwrap_or(words)
+        };
+        if !many {
+            self.edit_keywords = tidied.join(", ");
+        }
+
+        for at in self.acting_on() {
+            if let Some(photo) = self.photo_mut(at) {
+                if many {
+                    for word in &tidied {
+                        if !photo.organisation.keywords.contains(word) {
+                            photo.organisation.keywords.push(word.clone());
+                        }
+                    }
+
+                    photo.organisation.keywords.sort();
+                } else {
+                    photo.organisation.keywords = tidied.clone();
+                }
+            }
         }
     }
 
-    /// The photograph the details pane is showing.
-    fn current(&self) -> Option<PhotoId> {
-        self.selected
-            .and_then(|at| self.photo(at))
-            .map(|photo| photo.id)
+    /// A position typed by a person, which is worth more than one read off a
+    /// file: it goes into the catalogue as precise, and into the photograph
+    /// itself so that a rescan reads back what was typed.
+    ///
+    /// An empty box is not a position of nothing — it is somebody having
+    /// second thoughts, and nothing happens.
+    pub fn commit_place(&mut self) {
+        let Some(typed) = self.edit_place.trim().to_owned().into() else {
+            return;
+        };
+        let typed: String = typed;
+        if typed.is_empty() {
+            return;
+        }
+
+        let Some(place) = photosite_core::place::parse(&typed) else {
+            self.status = t!("info-place-unreadable");
+            return;
+        };
+
+        let chosen = self.chosen();
+        if chosen.is_empty() {
+            return;
+        }
+
+        let onto = chosen.clone();
+        self.write_catalog(move |catalog| catalog.set_place(&onto, Some(place)));
+        self.queue_write(&chosen);
+        for at in self.acting_on() {
+            if let Some(photo) = self.photo_mut(at) {
+                photo.place = Some(place);
+                photo.verdict = photosite_core::Verdict::Precise;
+                photo.reason = None;
+            }
+        }
+
+        self.edit_place = place.typed();
     }
 
     /// The stars, set from the details pane rather than the keyboard.
@@ -1707,7 +1829,7 @@ impl App {
 
     /// The limits come from the field descriptions, not from numbers written
     /// here.
-    fn resize_tiles(&mut self, factor: f64) {
+    pub fn resize_tiles(&mut self, factor: f64) {
         let (min, max) = match TUNABLES
             .iter()
             .find(|tunable| tunable.path == "gallery.tile_size")

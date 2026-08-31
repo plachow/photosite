@@ -457,6 +457,21 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Ctrl+Minus"),
         toolbar: true,
     },
+    // A bare F, the way every photo application spells it.
+    Command {
+        id: "view.as_list",
+        title_key: "command-view-as-list",
+        group: Group::View,
+        default_shortcut: Some("Ctrl+L"),
+        toolbar: true,
+    },
+    Command {
+        id: "view.fullscreen",
+        title_key: "command-view-fullscreen",
+        group: Group::View,
+        default_shortcut: Some("F"),
+        toolbar: false,
+    },
     Command {
         id: "view.next_theme",
         title_key: "command-view-next-theme",

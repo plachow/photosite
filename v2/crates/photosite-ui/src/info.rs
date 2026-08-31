@@ -35,9 +35,10 @@ pub fn pane(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
         .show(ui, |ui| {
             ui.add_space(6.0);
 
-            // With more than one tile selected the stars, the label and the
-            // verdict still work — they go on all of them. The words do not,
-            // and the pane says so rather than quietly writing to one.
+            // With more than one tile selected everything still works and
+            // goes on all of them — but the pane says how many, and says it
+            // in the accent colour, because writing a title over forty
+            // photographs by accident is not a small mistake.
             if many > 1 {
                 ui.horizontal(|ui| {
                     ui.add_space(8.0);
@@ -94,15 +95,13 @@ fn said(app: &mut App, ui: &mut egui::Ui, palette: &Palette, photo: &Photo, many
         }
     });
 
-    // The words belong to one photograph. Offering the fields for a whole
-    // selection would mean either writing the same title to all of them or
-    // silently picking one, and neither is what anybody meant.
-    if many {
-        return;
-    }
-
     ui.add_space(4.0);
-    place(app, ui, palette, photo);
+
+    // A position belongs to one photograph. Forty of them were not all taken
+    // in the same spot, and offering one box for the lot would say they were.
+    if !many {
+        place(app, ui, palette, photo);
+    }
 
     if field(ui, palette, &t!("info-title"), &mut app.edit_title, false) {
         app.commit_title();
@@ -128,12 +127,20 @@ fn said(app: &mut App, ui: &mut egui::Ui, palette: &Palette, photo: &Photo, many
         app.commit_keywords();
     }
 
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.add_space(8.0);
         ui.label(
-            egui::RichText::new(t!("info-keywords-hint"))
-                .small()
-                .color(theme::color(palette.dim)),
+            egui::RichText::new(if many {
+                // Added, not replaced. Setting the keywords of forty
+                // photographs to one word would throw away everything
+                // already said about each of them, and nobody typing a word
+                // into a box means that.
+                t!("info-keywords-hint-many")
+            } else {
+                t!("info-keywords-hint")
+            })
+            .small()
+            .color(theme::color(palette.dim)),
         );
     });
 }
@@ -144,6 +151,7 @@ fn said(app: &mut App, ui: &mut egui::Ui, palette: &Palette, photo: &Photo, many
 /// to be readable at a glance and it must not push the coordinates off the
 /// row. The sentence is there for whoever hovers, which is whoever wondered.
 fn place(app: &mut App, ui: &mut egui::Ui, palette: &Palette, photo: &Photo) {
+    let mut written = false;
     ui.horizontal(|ui| {
         ui.add_space(8.0);
         ui.label(
@@ -151,13 +159,6 @@ fn place(app: &mut App, ui: &mut egui::Ui, palette: &Palette, photo: &Photo) {
                 .small()
                 .color(theme::color(palette.dim)),
         );
-
-        match photo.place {
-            Some(place) => ui.label(egui::RichText::new(place.to_string())),
-            None => ui.label(
-                egui::RichText::new(t!("info-place-none")).color(theme::color(palette.disabled)),
-            ),
-        };
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             // Disabled without coordinates rather than hidden: a button that
@@ -181,8 +182,23 @@ fn place(app: &mut App, ui: &mut egui::Ui, palette: &Palette, photo: &Photo) {
                 ui.painter().circle_filled(rect.center(), 4.5, colour);
                 response.on_hover_text(i18n::t(photo.verdict.title_key()));
             }
+
+            // Typed rather than shown. A position read off a phone is a
+            // guess often enough that correcting one has to be as easy as
+            // reading one — and typing it is what clears the mark.
+            let box_ = ui.add(
+                egui::TextEdit::singleline(&mut app.edit_place)
+                    .desired_width(ui.available_width().max(120.0))
+                    .hint_text(t!("info-place-hint")),
+            );
+            written = box_.lost_focus()
+                && (ui.input(|input| input.key_pressed(egui::Key::Enter)) || !box_.has_focus());
         });
     });
+
+    if written {
+        app.commit_place();
+    }
 
     ui.add_space(4.0);
 }
@@ -396,6 +412,37 @@ fn read(photo: &Photo) -> Vec<(String, String)> {
     rows.push((t!("info-orientation"), photo.orientation.to_string()));
 
     let meta = photosite_image::exif::read_file(path);
+
+    // The exposure triangle, and the focal length beside it. One row rather
+    // than four: `1/250 . f/2.8 . ISO 400 . 24 mm` is how a photographer
+    // reads it, and four labelled lines are four times the panel for the
+    // same sentence.
+    let exposure = &meta.exposure;
+    if !exposure.is_empty() {
+        let mut parts: Vec<String> = Vec::with_capacity(4);
+        parts.extend(exposure.shutter());
+        parts.extend(exposure.f_number());
+        if let Some(iso) = exposure.sensitivity {
+            parts.push(t!("info-iso", iso = iso as i64));
+        }
+
+        if let Some(focal) = exposure.focal_mm {
+            parts.push(match exposure.focal_equivalent_mm {
+                // The equivalent only when it says something the real focal
+                // length does not. On a full-frame camera they are the same
+                // number twice.
+                Some(equivalent) if (equivalent as f64 - focal).abs() > 1.0 => t!(
+                    "info-focal-equivalent",
+                    mm = focal,
+                    equivalent = equivalent as i64
+                ),
+                _ => t!("info-focal", mm = focal),
+            });
+        }
+
+        rows.push((t!("info-exposure"), parts.join("  \u{b7}  ")));
+    }
+
     rows.push((
         t!("info-embedded"),
         match meta.thumbnail {

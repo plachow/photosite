@@ -53,6 +53,51 @@ impl Place {
     pub fn typed(&self) -> String {
         format!("{:.6}, {:.6}", self.latitude, self.longitude)
     }
+
+    /// The two halves as XMP spells them: `50,4.530000N` and
+    /// `14,26.268000E`.
+    ///
+    /// Degrees, a comma, minutes with a decimal fraction, and a letter for
+    /// the hemisphere. Not our choice — it is what `exif:GPSLatitude` is
+    /// defined to hold, and a decimal degree written there is read by
+    /// nothing.
+    pub fn as_xmp(&self) -> (String, String) {
+        (
+            xmp_half(self.latitude, 'N', 'S'),
+            xmp_half(self.longitude, 'E', 'W'),
+        )
+    }
+}
+
+fn xmp_half(value: f64, positive: char, negative: char) -> String {
+    let degrees = value.abs().trunc();
+    let minutes = (value.abs() - degrees) * 60.0;
+    let letter = if value >= 0.0 { positive } else { negative };
+    format!("{degrees:.0},{minutes:.6}{letter}")
+}
+
+/// Reads back what [`Place::as_xmp`] writes, and the whole-degree and
+/// seconds forms the specification also allows.
+pub fn from_xmp(latitude: &str, longitude: &str) -> Option<Place> {
+    Place::new(xmp_degrees(latitude)?, xmp_degrees(longitude)?)
+}
+
+fn xmp_degrees(text: &str) -> Option<f64> {
+    let text = text.trim();
+    let letter = text.chars().last().filter(|c| c.is_ascii_alphabetic());
+    let numbers = match letter {
+        Some(_) => &text[..text.len() - 1],
+        None => text,
+    };
+
+    let mut parts = numbers.split(',').map(str::trim);
+    let degrees: f64 = parts.next()?.parse().ok()?;
+    let minutes: f64 = parts.next().unwrap_or("0").parse().unwrap_or(0.0);
+    let seconds: f64 = parts.next().unwrap_or("0").parse().unwrap_or(0.0);
+    let value = degrees.abs() + minutes / 60.0 + seconds / 3_600.0;
+
+    let negative = matches!(letter, Some('S' | 's' | 'W' | 'w')) || degrees < 0.0;
+    Some(if negative { -value } else { value })
 }
 
 /// The map every new installation starts with. No account, no key, no
@@ -397,6 +442,40 @@ mod tests {
         assert_eq!(parse("somewhere nice"), None);
         assert_eq!(parse("50.0755"), None, "one number is not a place");
         assert_eq!(parse("500.1, 14.4"), None, "off the planet");
+    }
+
+    /// The form `exif:GPSLatitude` is defined to hold. A decimal degree
+    /// written there is read by nothing at all.
+    #[test]
+    fn a_place_goes_into_xmp_and_comes_back() {
+        for place in [
+            Place::new(50.0755, 14.4378).unwrap(),
+            Place::new(-33.8688, 151.2093).unwrap(),
+            Place::new(0.0, -0.1278).unwrap(),
+        ] {
+            let (latitude, longitude) = place.as_xmp();
+            let back = from_xmp(&latitude, &longitude)
+                .unwrap_or_else(|| panic!("{latitude} {longitude} was refused"));
+            assert!(
+                (back.latitude - place.latitude).abs() < 1e-6
+                    && (back.longitude - place.longitude).abs() < 1e-6,
+                "{place:?} became {back:?} through {latitude} {longitude}"
+            );
+        }
+
+        let prague = Place::new(50.0755, 14.4378).unwrap();
+        assert_eq!(prague.as_xmp().0, "50,4.530000N");
+        assert_eq!(prague.as_xmp().1, "14,26.268000E");
+    }
+
+    #[test]
+    fn the_other_xmp_spellings_are_read_too() {
+        // Whole degrees, and degrees-minutes-seconds, both allowed.
+        let whole = from_xmp("50N", "14E").unwrap();
+        assert_eq!((whole.latitude, whole.longitude), (50.0, 14.0));
+
+        let dms = from_xmp("50,4,32N", "14,26,16E").unwrap();
+        assert!((dms.latitude - 50.075_555).abs() < 1e-5, "{dms:?}");
     }
 
     #[test]

@@ -6,7 +6,7 @@ A clean sheet. Rust, egui over wgpu, Windows / macOS / Linux from one source.
 cd v2
 cargo run --release -p photosite-ui              # the application
 cargo run --release -p photosite-cli -- doctor   # where everything lives
-cargo test --workspace                           # 342 tests, no window, no GPU
+cargo test --workspace                           # 349 tests, no window, no GPU
 ```
 
 ## Layout
@@ -486,6 +486,38 @@ core, where the vocabulary lives, so it cannot come apart from a second copy.
 | Panasonic RW2 | camera, date and 5480x3656 read; drawn in 10 ms |
 | Adobe DNG | the same as the NEF it came from |
 
+## Saying things about many photographs at once
+
+The stars, the label and the verdict always went on the whole selection. The
+words now do too: a title, a description and keywords typed with forty tiles
+chosen land on all forty, and the panel says how many in the accent colour,
+because writing a title over forty photographs by accident is not a small
+mistake.
+
+**Keywords are the exception, and they add rather than replace.** Editing one
+photograph's keywords is editing a list somebody can see, so deleting a word
+out of the box deletes the word. Forty photographs have forty different lists
+and the box shows none of them, so setting would throw away everything already
+on thirty-nine — and nobody typing "holiday" into a box means that.
+
+A position stays with one photograph. Forty of them were not all taken in the
+same spot, and one box for the lot would say they were.
+
+## Two views of one folder
+
+`Ctrl+L` turns the wall of tiles into a list of rows: name, when it was taken,
+the camera, the frame, the size, and the stars, the label and the position mark
+in a column of their own. Both are virtualised the same way, so the number of
+photographs does not matter to either.
+
+v1 kept the list in a panel beside the grid. This is a **switch** instead: two
+views of one thing competing for the same width means both are too narrow, and
+nobody reads a table four columns wide.
+
+Along the way: `Ctrl` and the wheel resize the tiles the way they do in every
+file manager, `F` fills the screen, and a photograph named on the command line
+opens the folder it is in, standing on that photograph.
+
 ## Where it was taken
 
 A position in a file looks like a fact and often is not. A phone that cannot
@@ -533,6 +565,22 @@ precise for it.
 | precise | 2,684 |
 | probably far off, fixed by cell tower | 1,460 |
 | no position at all | 51 |
+
+**Correcting one.** The coordinates are a box, not a caption: a position read
+off a phone is a guess often enough that correcting one has to be as easy as
+reading one. What is typed goes into the catalogue *and* into the photograph —
+into the EXIF block and the XMP packet both — because the catalogue's copy is
+overwritten by the next rescan and the file is the only place a correction can
+live.
+
+Writing one also **rewrites the story of how it was found**: the method
+becomes `MANUAL`, and the camera's error estimate and the time of its fix are
+removed, because they describe a fix that has just been replaced. A real
+photograph taught us that: without it the mark came straight back the next
+time the file was read, and correcting a position visibly did nothing.
+
+A position is never *removed* from a file by us. A photograph whose
+coordinates we happen not to hold is not one whose coordinates are wrong.
 
 ## Copying and moving
 
@@ -642,12 +690,12 @@ and the AI describer are still v1's alone.
 
 | | |
 |---|---|
-| tests | 342 (including 6,000 fuzz cases over EXIF and 70 checked colour pairs) |
+| tests | 349 (including 6,000 fuzz cases over EXIF and 70 checked colour pairs) |
 | scan of 7,558 photographs | 0.3 s; 0.1 s on a repeat |
 | opening 134,990 photographs recursively | 727 ms |
 | `cargo clippy -D warnings` | clean |
 | themes | 5 plus following the system |
-| settings entries | 34, of which 25 are on the screen it generates |
+| settings entries | 35, of which 26 are on the screen it generates |
 | catalogue schema | 5 migrations |
 
 A cross-check from Windows passes for `photosite-image` against both targets.
@@ -662,10 +710,8 @@ The editor is deliberately last and will be rebuilt rather than ported.
 Importing from a memory card is **not** being brought across at all — this is
 a manager for files that are already on a disk.
 
-Of the manager itself, what is left is small and named: the exposure triangle
-in the details, correcting a position by hand, words on a whole selection at
-once, a compact list beside the grid, fullscreen, and a thumbnail cache that
-survives a restart.
+Of the manager itself, one thing is left: a thumbnail cache that survives a
+restart. Everything else v1 had is here.
 
 Three of the filter's facets are waiting on features that come later: people,
 the smiling and eyes-open scores, and the approximate-GPS verdict. All three
