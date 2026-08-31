@@ -6,7 +6,7 @@ A clean sheet. Rust, egui over wgpu, Windows / macOS / Linux from one source.
 cd v2
 cargo run --release -p photosite-ui              # the application
 cargo run --release -p photosite-cli -- doctor   # where everything lives
-cargo test --workspace                           # 114 tests, no window, no GPU
+cargo test --workspace                           # 174 tests, no window, no GPU
 ```
 
 ## Layout
@@ -254,20 +254,70 @@ application span at full speed.
 | before | 72% of a core |
 | after | **0%** |
 
+## Culling
+
+The first of v1's features to come across: **the stars, the colour labels, the
+pick and reject verdict, the keywords and the words**, on a whole selection at
+once, with `1`..`5`, `` ` ``, `6`..`9`, `0`, `P` and `X` — the same keys v1
+uses, purple included in having none, because five keys are five labels only
+if clearing is not one of them.
+
+Three decisions in it were expensive to learn and cost nothing to keep.
+
+**A rescan must never forget the stars.** The catalogue's update statement
+lists only the columns the disk owns — length, write time, date taken,
+dimensions, orientation. The rating, the label, the verdict and the words are
+deliberately absent from it: those come from a person and are not ours to
+overwrite because a file was touched. `a_rescan_does_not_forget_the_stars`
+is the test, and it is the most valuable one in the file.
+
+**A row before a file is opened.** Opening a folder writes an identity row for
+every photograph in one batch and reads not a single file, so a rating has
+somewhere to go from the first frame. Reading the headers is a separate pass
+on a thread, and an `indexed` column is how it knows what is left; without it
+a row that merely exists looks finished, and no date would ever be read.
+
+| a folder opening | |
+|---|---|
+| 2,861 photographs | 16 ms |
+| 134,990 photographs, recursive | **727 ms**, browsable and ratable at once |
+| reading their headers | 156 files/s, on a thread, while the grid works |
+
+Blocking on that read would have meant eighteen seconds of frozen window for
+one folder of three thousand — and Windows calls a window that quiet
+unresponsive.
+
+**The selection follows the photographs, not the positions.** Reordering the
+gallery rebuilds the selection by path. Otherwise the next rating lands on
+whatever tile slid into that slot, which is a mistake nobody notices until
+much later. For the same reason a rating deliberately does **not** reorder the
+folder, even when it is sorted by rating: the tile would move out from under
+the hand that just rated it, and culling is done by holding the keys down.
+
+Two smaller ones. Keywords are their own table rather than v1's delimited
+column, so finding every photograph with a word is an index lookup instead of
+a `LIKE` over every row, and `COLLATE NOCASE` means nobody ends up with both
+*Holiday* and *holiday* in the list. And the stars on a tile are **drawn, not
+written** — the default font has no `★`, the same reason the folder tree draws
+its own triangles.
+
+Nothing is written to the photographs themselves yet. That is the metadata
+outbox, and it comes next.
+
 ## Where this stands
 
-The scaffolding is done, the photographic features are not. The grid, the
-tree, the preview and three themes come from the prototype, so there is
-something to run.
+The scaffolding is done and the first block of photographic features is on
+top of it. Browsing, culling and organising work; editing, filtering, batch
+conversion, import, faces and the AI describer are still v1's alone.
 
 | | |
 |---|---|
-| tests | 114 (including 6,000 fuzz cases over EXIF and 70 checked colour pairs) |
+| tests | 174 (including 6,000 fuzz cases over EXIF and 70 checked colour pairs) |
 | scan of 7,558 photographs | 0.3 s; 0.1 s on a repeat |
-| opening a folder in the UI | 7,558 photographs, no blank tile after 160 ms |
+| opening 134,990 photographs recursively | 727 ms |
 | `cargo clippy -D warnings` | clean |
 | themes | 5 plus following the system |
-| settings entries | 27, screen generated from the descriptions |
+| settings entries | 29, screen generated from the descriptions |
 
 A cross-check from Windows passes for `photosite-image` against both targets.
 The rest does not, because `libsqlite3-sys` with `bundled` compiles C and that
@@ -276,7 +326,25 @@ done by CI**, where the runners are native.
 
 ## What is missing, and known to be
 
-Watching the disk for changes (`notify`), a single instance, accessibility,
-signing and notarisation for macOS, automatic updates. Of the languages, only
-English so far — cs-CZ is first in line.
+Of v1's features, in the order they are being brought across: filtering and
+search, writing metadata into the files themselves, file operations and
+navigation, RAW, comparison, import, the editor, batch conversion, faces, the
+AI describer.
+
+RAW is deliberately small: the embedded JPEG every camera puts in the file, so
+a folder off a card is never a grid of grey tiles. No demosaicing, no colour
+science, no `rawler` — showing is all that is wanted of it.
+
+Writing metadata will be pure Rust — `little_exif` for EXIF and `xmp-writer`
+for XMP, rather than shipping exiftool and a copy of Perl. What PhotoSite
+writes is some twenty tags in three namespaces; exiftool's worth is its
+breadth, which is not what is needed here. Two things it did quietly will have
+to be done on purpose: Windows Explorer reads the stars from EXIF `Rating`
+while Lightroom reads `xmp:Rating`, so both get written; and the offline
+reverse geocoding the AI describer used came out of exiftool's database and
+needs a GeoNames extract in its place.
+
+Beyond the features: watching the disk for changes (`notify`), a single
+instance, accessibility, signing and notarisation for macOS, automatic
+updates. Of the languages, only English so far — cs-CZ is first in line.
 None of it requires rewriting what is done.

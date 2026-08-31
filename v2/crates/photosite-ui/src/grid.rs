@@ -44,7 +44,7 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
 
             let mut wanted_quick: Vec<(usize, PathBuf)> = Vec::new();
             let mut wanted_sharp: Vec<(usize, PathBuf)> = Vec::new();
-            let mut clicked = None;
+            let mut clicked: Option<(usize, egui::Modifiers)> = None;
 
             for row in first..last {
                 for col in 0..cols {
@@ -61,10 +61,10 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
                             ),
                         Vec2::new(tile_w, tile_h),
                     );
-                    let path = app.photos[index].clone();
+                    let path = app.photos[index].path.clone();
                     let response = ui.interact(rect, ui.id().with(index), Sense::click());
                     if response.clicked() {
-                        clicked = Some(index);
+                        clicked = Some((index, ui.input(|input| input.modifiers)));
                     }
 
                     let name = path
@@ -77,7 +77,7 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
                         palette,
                         &gallery,
                         &name,
-                        app.selected == Some(index),
+                        app.is_selected(index),
                         response.hovered(),
                     );
 
@@ -105,6 +105,8 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
                         }
                         None => wanted_quick.push((index, path.clone())),
                     }
+
+                    theme::badges(ui.painter(), well, palette, &app.photos[index].organisation);
                 }
             }
 
@@ -125,7 +127,7 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
             let ahead_from = first.saturating_sub(margin) * cols;
             let ahead_to = ((last + margin) * cols).min(count);
             for index in ahead_from..ahead_to {
-                let path = app.photos[index].clone();
+                let path = app.photos[index].path.clone();
                 if !app.has(&path, Want::Thumb) && !app.wanted_sharp.contains(&path) {
                     app.wanted_sharp.push(path);
                 }
@@ -141,13 +143,22 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
             // otherwise they are the first to go and are ordered again at
             // once.
             for index in ahead_from..ahead_to {
-                let path = app.photos[index].clone();
+                let path = app.photos[index].path.clone();
                 app.touch(&(path.clone(), Want::Thumb));
                 app.touch(&(path, Want::Quick));
             }
 
-            if let Some(index) = clicked {
-                app.selected = Some(index);
+            // Plain, Ctrl and Shift, the way every file list has worked for
+            // thirty years. Getting this wrong is not a small thing: the
+            // rating keys land on whatever is selected.
+            if let Some((index, modifiers)) = clicked {
+                if modifiers.command || modifiers.ctrl {
+                    app.select_also(index);
+                } else if modifiers.shift {
+                    app.select_through(index);
+                } else {
+                    app.select_only(index);
+                }
             }
         });
 }
@@ -161,7 +172,7 @@ pub fn preview(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
         return;
     };
 
-    let path = app.photos[index].clone();
+    let path = app.photos[index].path.clone();
     let area = ui.available_rect_before_wrap();
     ui.painter()
         .rect_filled(area, 0, theme::color(palette.well));

@@ -21,12 +21,29 @@ pub struct Exif {
     /// decoded in a fraction of a millisecond, which makes it the cheapest
     /// way to put something real on screen.
     pub thumbnail: Option<Thumbnail>,
+    /// When the shutter fired, in seconds since the epoch.
+    ///
+    /// **EXIF records no time zone.** `DateTimeOriginal` is the wall clock
+    /// where the photographer stood, and this is that clock read as if it
+    /// were UTC. For ordering a folder — which is what it is for — that is
+    /// right: photographs taken in one place stay in the order they were
+    /// taken, whatever zone anybody is in later. It is not a moment in time
+    /// and must not be presented as one.
+    pub taken_at: Option<i64>,
+    /// The size of the frame, from the SOF marker rather than from decoding
+    /// it. Sorting a folder by dimensions cannot mean decoding every file
+    /// in it.
+    pub width: Option<u32>,
+    pub height: Option<u32>,
 }
 
 impl Exif {
     pub const NONE: Self = Self {
         orientation: 1,
         thumbnail: None,
+        taken_at: None,
+        width: None,
+        height: None,
     };
 }
 
@@ -48,10 +65,42 @@ pub fn read(raw: &[u8]) -> Exif {
     parse(raw).unwrap_or(Exif::NONE)
 }
 
+/// The same, straight from a file.
+///
+/// Reads the header and no more. A file that cannot be opened gives the
+/// default rather than an error: in a library of tens of thousands one
+/// unreadable file is ordinary, and the caller has nothing useful to do with
+/// the failure beyond what the log already says.
+pub fn read_file(path: &std::path::Path) -> Exif {
+    use std::io::Read as _;
+
+    let mut header = Vec::with_capacity(HEADER_BYTES);
+    match std::fs::File::open(path) {
+        Ok(file) => {
+            if let Err(error) = file.take(HEADER_BYTES as u64).read_to_end(&mut header) {
+                tracing::warn!(path = %path.display(), %error, "the header cannot be read");
+            }
+        }
+        Err(error) => {
+            tracing::warn!(path = %path.display(), %error, "the file cannot be opened");
+            return Exif::NONE;
+        }
+    }
+
+    read(&header)
+}
+
 fn parse(raw: &[u8]) -> Option<Exif> {
     if raw.len() < 4 || raw[0] != 0xFF || raw[1] != 0xD8 {
         return None;
     }
+
+    // Both are wanted and they sit in different segments: APP1 carries the
+    // EXIF block, SOF the size of the frame, and APP1 comes first. So the
+    // walk collects rather than returning at the first find — it used to
+    // return at APP1, which is why the size had to be got by decoding.
+    let mut found = Exif::NONE;
+    let mut anything = false;
 
     let limit = raw.len().min(HEADER_BYTES);
     let mut at = 2usize;
@@ -70,33 +119,103 @@ fn parse(raw: &[u8]) -> Option<Exif> {
 
         let len = u16::from_be_bytes([raw[at + 2], raw[at + 3]]) as usize;
         if len < 2 {
-            return None;
+            break;
         }
 
         let body = at + 4;
         let end = at.checked_add(2)?.checked_add(len)?.min(raw.len());
-        if marker == 0xE1 && body + 6 <= end && &raw[body..body + 6] == b"Exif\x00\x00" {
+        if marker == 0xE1
+            && body + 6 <= end
+            && raw.get(body..body + 6) == Some(&b"Exif\x00\x00"[..])
+        {
             let tiff_at = body + 6;
-            let tiff = raw.get(tiff_at..end)?;
-            let reader = TiffReader::new(tiff)?;
-            return Some(Exif {
-                orientation: reader.orientation().unwrap_or(1),
-                thumbnail: reader.thumbnail().map(|found| Thumbnail {
-                    offset: tiff_at + found.offset,
-                    len: found.len,
-                }),
-            });
+            if let Some(tiff) = raw.get(tiff_at..end)
+                && let Some(reader) = TiffReader::new(tiff)
+            {
+                anything = true;
+                found.orientation = reader.orientation().unwrap_or(1);
+                found.thumbnail = reader.thumbnail().map(|thumb| Thumbnail {
+                    offset: tiff_at + thumb.offset,
+                    len: thumb.len,
+                });
+                found.taken_at = reader.taken_at();
+            }
+        }
+
+        // The frame's size: precision, then height, then width. C4, C8 and
+        // CC share the range and are not frame headers at all.
+        if matches!(marker, 0xC0..=0xCF) && !matches!(marker, 0xC4 | 0xC8 | 0xCC) {
+            if let Some(bytes) = raw.get(body + 1..body + 5) {
+                let height = u16::from_be_bytes([bytes[0], bytes[1]]) as u32;
+                let width = u16::from_be_bytes([bytes[2], bytes[3]]) as u32;
+                if width > 0 && height > 0 {
+                    anything = true;
+                    found.width = Some(width);
+                    found.height = Some(height);
+                }
+            }
+
+            // SOF is the last thing worth reading; the scan follows.
+            break;
         }
 
         // Past the start of the image data there are no more markers.
         if marker == 0xDA {
-            return None;
+            break;
         }
 
         at = end;
     }
 
-    None
+    anything.then_some(found)
+}
+
+/// Turns `YYYY:MM:DD HH:MM:SS` into seconds since the epoch.
+///
+/// Cameras write `0000:00:00 00:00:00` for a date they do not have, so the
+/// ranges are checked rather than trusted — an unset date must come back as
+/// nothing, not as the year zero sorting first in every folder.
+fn parse_datetime(bytes: &[u8]) -> Option<i64> {
+    let text = std::str::from_utf8(bytes).ok()?;
+    let text = text.trim_end_matches('\0').trim();
+    if text.len() < 19 {
+        return None;
+    }
+
+    let field = |from: usize, to: usize| -> Option<i64> { text.get(from..to)?.trim().parse().ok() };
+    let year = field(0, 4)?;
+    let month = field(5, 7)?;
+    let day = field(8, 10)?;
+    let hour = field(11, 13)?;
+    let minute = field(14, 16)?;
+    let second = field(17, 19)?;
+
+    if !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || !(0..=23).contains(&hour)
+        || !(0..=59).contains(&minute)
+        // A leap second really is written as 60.
+        || !(0..=60).contains(&second)
+        || !(1826..=9999).contains(&year)
+    {
+        return None;
+    }
+
+    Some(days_from_civil(year, month, day) * 86_400 + hour * 3_600 + minute * 60 + second)
+}
+
+/// Days from 1970-01-01 to the given date, proleptic Gregorian.
+///
+/// Howard Hinnant's algorithm, which is exact for every year we could meet
+/// and needs no calendar library. Bringing in a date crate for one
+/// subtraction would be the more expensive answer.
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let year_of_era = year - era * 400;
+    let day_of_year = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
 }
 
 /// Reads the TIFF block inside APP1. Every access is checked, so a corrupt
@@ -142,20 +261,72 @@ impl<'a> TiffReader<'a> {
         ifd.checked_add(2)?.checked_add(index.checked_mul(12)?)
     }
 
-    fn orientation(&self) -> Option<u8> {
-        let ifd0 = self.ifd0()?;
-        let count = self.u16(ifd0)? as usize;
-        for index in 0..count {
-            let at = self.entry(ifd0, index)?;
-            if self.u16(at) == Some(0x0112) {
-                let value = self.u16(at + 8)?;
-                if (1..=8).contains(&value) {
-                    return Some(value as u8);
-                }
-            }
+    /// Where the entry for `tag` sits in the given IFD.
+    ///
+    /// The entry count is capped: a corrupt file can claim sixty thousand
+    /// entries, and walking them costs real time on every photograph in a
+    /// folder for an answer that was never going to come.
+    fn find(&self, ifd: usize, tag: u16) -> Option<usize> {
+        let count = (self.u16(ifd)? as usize).min(4096);
+        (0..count).find_map(|index| {
+            let at = self.entry(ifd, index)?;
+            (self.u16(at) == Some(tag)).then_some(at)
+        })
+    }
+
+    /// The ASCII value of an entry, whether it fits in the entry itself or
+    /// sits elsewhere in the block.
+    fn ascii(&self, at: usize) -> Option<&'a [u8]> {
+        // Type 2 is ASCII. A date under any other type is not a date.
+        if self.u16(at.checked_add(2)?)? != 2 {
+            return None;
         }
 
-        None
+        // A timestamp is twenty bytes. A count in the thousands means we are
+        // reading something that is not one.
+        let count = self.u32(at.checked_add(4)?)? as usize;
+        if !(1..=64).contains(&count) {
+            return None;
+        }
+
+        // Four bytes or fewer live in the entry; anything longer is at an
+        // offset from the start of the TIFF block.
+        let from = if count <= 4 {
+            at.checked_add(8)?
+        } else {
+            self.u32(at.checked_add(8)?)? as usize
+        };
+
+        self.bytes.get(from..from.checked_add(count)?)
+    }
+
+    fn orientation(&self) -> Option<u8> {
+        let at = self.find(self.ifd0()?, 0x0112)?;
+        let value = self.u16(at + 8)?;
+        (1..=8).contains(&value).then_some(value as u8)
+    }
+
+    /// The EXIF sub-block, where everything about the exposure lives.
+    fn sub_ifd(&self) -> Option<usize> {
+        let at = self.find(self.ifd0()?, 0x8769)?;
+        Some(self.u32(at + 8)? as usize)
+    }
+
+    fn taken_at(&self) -> Option<i64> {
+        // DateTimeOriginal is when the shutter fired. DateTime is when the
+        // file was last written — the same moment straight out of a camera,
+        // and the wrong one for anything ever edited. Hence the order, and
+        // hence taking the second only when there is no first.
+        self.sub_ifd()
+            .and_then(|ifd| self.find(ifd, 0x9003))
+            .and_then(|at| self.ascii(at))
+            .and_then(parse_datetime)
+            .or_else(|| {
+                self.ifd0()
+                    .and_then(|ifd| self.find(ifd, 0x0132))
+                    .and_then(|at| self.ascii(at))
+                    .and_then(parse_datetime)
+            })
     }
 
     /// The thumbnail lives in IFD1, pointed at by the four bytes following
@@ -249,5 +420,142 @@ mod tests {
         let raw = with_tiff(&tiff_with_orientation(3, 0xFFFF_FF00));
         assert_eq!(read(&raw).orientation, 3);
         assert_eq!(read(&raw).thumbnail, None);
+    }
+
+    /// A TIFF block holding one date, either in the EXIF sub-block under
+    /// `DateTimeOriginal` or in IFD0 under `DateTime`.
+    fn tiff_with_date(text: &str, in_sub_block: bool) -> Vec<u8> {
+        // The header is 8 bytes, an IFD with one entry is 2 + 12 + 4 = 18.
+        const IFD0: u32 = 8;
+        const SUB: u32 = 26;
+        let text_at = if in_sub_block { SUB + 18 } else { SUB };
+
+        let entry = |tag: u16, kind: u16, value: u32| {
+            let mut bytes = Vec::new();
+            bytes.extend_from_slice(&tag.to_le_bytes());
+            bytes.extend_from_slice(&kind.to_le_bytes());
+            bytes.extend_from_slice(&1u32.to_le_bytes());
+            bytes.extend_from_slice(&value.to_le_bytes());
+            bytes
+        };
+        // ASCII entries carry their length, not a count of one.
+        let ascii_entry = |tag: u16, at: u32, len: u32| {
+            let mut bytes = Vec::new();
+            bytes.extend_from_slice(&tag.to_le_bytes());
+            bytes.extend_from_slice(&2u16.to_le_bytes());
+            bytes.extend_from_slice(&len.to_le_bytes());
+            bytes.extend_from_slice(&at.to_le_bytes());
+            bytes
+        };
+
+        let mut tiff = Vec::new();
+        tiff.extend_from_slice(b"II");
+        tiff.extend_from_slice(&42u16.to_le_bytes());
+        tiff.extend_from_slice(&IFD0.to_le_bytes());
+
+        let len = text.len() as u32 + 1;
+        tiff.extend_from_slice(&1u16.to_le_bytes());
+        if in_sub_block {
+            tiff.extend_from_slice(&entry(0x8769, 4, SUB));
+        } else {
+            tiff.extend_from_slice(&ascii_entry(0x0132, text_at, len));
+        }
+
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+        assert_eq!(tiff.len() as u32, SUB, "the sub-block moved");
+
+        if in_sub_block {
+            tiff.extend_from_slice(&1u16.to_le_bytes());
+            tiff.extend_from_slice(&ascii_entry(0x9003, text_at, len));
+            tiff.extend_from_slice(&0u32.to_le_bytes());
+        }
+
+        assert_eq!(tiff.len() as u32, text_at, "the text moved");
+        tiff.extend_from_slice(text.as_bytes());
+        tiff.push(0);
+        tiff
+    }
+
+    /// A frame header, as it sits behind the EXIF block in every JPEG.
+    fn sof(width: u16, height: u16) -> Vec<u8> {
+        let mut raw = vec![0xFF, 0xC0];
+        raw.extend_from_slice(&17u16.to_be_bytes());
+        raw.push(8);
+        raw.extend_from_slice(&height.to_be_bytes());
+        raw.extend_from_slice(&width.to_be_bytes());
+        raw.push(3);
+        raw.extend_from_slice(&[1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1]);
+        raw
+    }
+
+    #[test]
+    fn the_size_of_the_frame_comes_from_the_sof_marker() {
+        let mut raw = with_tiff(&tiff_with_orientation(6, 0));
+        raw.extend_from_slice(&sof(6000, 4000));
+        let meta = read(&raw);
+        assert_eq!((meta.width, meta.height), (Some(6000), Some(4000)));
+        // Reading on for the size must not lose what came before it.
+        assert_eq!(meta.orientation, 6);
+    }
+
+    #[test]
+    fn a_frame_with_no_sof_simply_has_no_size() {
+        let meta = read(&with_tiff(&tiff_with_orientation(1, 0)));
+        assert_eq!((meta.width, meta.height), (None, None));
+    }
+
+    #[test]
+    fn the_date_is_read_from_the_exif_sub_block() {
+        let raw = with_tiff(&tiff_with_date("2024:07:14 09:30:00", true));
+        // 2024-07-14 09:30:00 UTC.
+        assert_eq!(read(&raw).taken_at, Some(1_720_949_400));
+    }
+
+    #[test]
+    fn without_an_original_the_date_falls_back_to_the_one_in_ifd0() {
+        let raw = with_tiff(&tiff_with_date("2024:07:14 09:30:00", false));
+        assert_eq!(read(&raw).taken_at, Some(1_720_949_400));
+    }
+
+    #[test]
+    fn a_date_the_camera_never_set_is_no_date() {
+        let raw = with_tiff(&tiff_with_date("0000:00:00 00:00:00", true));
+        assert_eq!(read(&raw).taken_at, None);
+    }
+
+    #[test]
+    fn nonsense_where_a_date_should_be_is_no_date() {
+        for text in [
+            "not a date at all",
+            "2024:13:01 00:00:00",
+            "2024:01:32 00:00:00",
+            "2024:01:01 25:00:00",
+            "1200:01:01 00:00:00",
+        ] {
+            let raw = with_tiff(&tiff_with_date(text, true));
+            assert_eq!(read(&raw).taken_at, None, "{text}");
+        }
+    }
+
+    #[test]
+    fn the_calendar_arithmetic_lands_where_it_should() {
+        assert_eq!(days_from_civil(1970, 1, 1), 0);
+        assert_eq!(days_from_civil(1970, 1, 2), 1);
+        assert_eq!(days_from_civil(1969, 12, 31), -1);
+        assert_eq!(
+            days_from_civil(2000, 3, 1) - days_from_civil(2000, 2, 28),
+            2
+        );
+        assert_eq!(
+            days_from_civil(1900, 3, 1) - days_from_civil(1900, 2, 28),
+            1
+        );
+        assert_eq!(days_from_civil(2000, 1, 1) * 86_400, 946_684_800);
+    }
+
+    #[test]
+    fn a_leap_second_is_a_second_like_any_other() {
+        let raw = with_tiff(&tiff_with_date("2016:12:31 23:59:60", true));
+        assert!(read(&raw).taken_at.is_some());
     }
 }

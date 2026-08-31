@@ -178,3 +178,105 @@ cli-info-size-px = { $width }×{ $height } in { NUMBER($ms, maximumFractionDigit
 
 error-not-a-folder = { $path } is not a folder
 error-not-a-file = { $path } is not a file
+
+## Culling
+#
+# The stars, the labels and the verdict. The keys 1..5 and 6..9 do these;
+# the names are here so a menu and a tooltip say the same thing.
+
+group-photo = Photo
+group-sort = Sort
+
+command-photo-rate-0 = No rating
+command-photo-rate-1 = One star
+command-photo-rate-2 = Two stars
+command-photo-rate-3 = Three stars
+command-photo-rate-4 = Four stars
+command-photo-rate-5 = Five stars
+
+command-photo-label-none = No label
+command-photo-label-red = Red label
+command-photo-label-yellow = Yellow label
+command-photo-label-green = Green label
+command-photo-label-blue = Blue label
+command-photo-label-purple = Purple label
+
+command-photo-pick = Pick
+command-photo-reject = Reject
+command-photo-select-all = Select all
+
+# The label on its own, for a swatch or a chip. Shorter than the command,
+# which has to say what pressing it does.
+label-none = None
+label-red = Red
+label-yellow = Yellow
+label-green = Green
+label-blue = Blue
+label-purple = Purple
+
+flag-none = Undecided
+flag-picked = Picked
+flag-rejected = Rejected
+
+## Sorting
+
+sort-taken = Date taken
+sort-name = File name
+sort-rating = Rating
+sort-modified = Date modified
+sort-size = File size
+sort-dimensions = Dimensions
+
+command-sort-reverse = Reverse the order
+toolbar-sort = Sort
+toolbar-sort-ascending = Oldest and smallest first
+toolbar-sort-descending = Newest and largest first
+
+setting-sort-field = Sort the gallery by
+setting-sort-descending = Sort the other way round
+
+## The selection
+#
+# Three plural forms are coming in Czech, so the count goes through the same
+# selector as everything else counted.
+
+gallery-selected =
+    { $count ->
+        [one] { $count } selected
+       *[other] { $count } selected
+    }
+
+## What somebody said about a photograph
+
+info-rating = rating
+info-label = label
+info-flag = verdict
+info-title = title
+info-description = description
+info-keywords = keywords
+info-keywords-hint = Separate them with commas
+info-nothing-said = nothing yet
+info-many-selected =
+    { $count ->
+        [one] { $count } photograph selected
+       *[other] { $count } photographs selected
+    }
+info-many-hint = The stars, the label and the verdict go on all of them. The
+    words are written one photograph at a time.
+
+## Reading a folder
+
+task-reading-folder = Reading the folder
+task-reading-headers = headers
+
+diagnostics-selected = selected
+
+info-taken = taken
+info-taken-none = not yet known
+info-dimensions = dimensions
+info-dimensions-px = { $width } × { $height }
+
+cli-info-taken = taken at
+cli-info-taken-none = no date in the file
+cli-info-frame = frame
+cli-info-frame-none = no size in the header

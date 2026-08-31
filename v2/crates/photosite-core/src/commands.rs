@@ -17,15 +17,23 @@ use std::str::FromStr;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Group {
     File,
+    Photo,
+    Sort,
     View,
     Help,
 }
 
 impl Group {
+    /// Every group there is. Listing the variants a second time in a test or
+    /// a menu is how one of them ends up forgotten.
+    pub const ALL: [Self; 5] = [Self::File, Self::Photo, Self::Sort, Self::View, Self::Help];
+
     /// A translation key, not text. The core must hold nothing that is seen.
     pub fn title_key(self) -> &'static str {
         match self {
             Group::File => "group-file",
+            Group::Photo => "group-photo",
+            Group::Sort => "group-sort",
             Group::View => "group-view",
             Group::Help => "group-help",
         }
@@ -76,6 +84,174 @@ pub const COMMANDS: &[Command] = &[
         title_key: "command-file-quit",
         group: Group::File,
         default_shortcut: Some("Ctrl+Q"),
+        toolbar: false,
+    },
+    // What somebody says about a photograph. None of these is on the
+    // toolbar: twelve buttons for the stars and the labels would crowd out
+    // everything else, and the keys are how anybody culls a folder anyway.
+    //
+    // The keys follow v1 exactly, purple included — it has none there
+    // either, because 6..9 and 0 are five keys for five labels only if
+    // clearing is not one of them.
+    Command {
+        id: "photo.rate_0",
+        title_key: "command-photo-rate-0",
+        group: Group::Photo,
+        default_shortcut: Some("Backtick"),
+        toolbar: false,
+    },
+    Command {
+        id: "photo.rate_1",
+        title_key: "command-photo-rate-1",
+        group: Group::Photo,
+        default_shortcut: Some("1"),
+        toolbar: false,
+    },
+    Command {
+        id: "photo.rate_2",
+        title_key: "command-photo-rate-2",
+        group: Group::Photo,
+        default_shortcut: Some("2"),
+        toolbar: false,
+    },
+    Command {
+        id: "photo.rate_3",
+        title_key: "command-photo-rate-3",
+        group: Group::Photo,
+        default_shortcut: Some("3"),
+        toolbar: false,
+    },
+    Command {
+        id: "photo.rate_4",
+        title_key: "command-photo-rate-4",
+        group: Group::Photo,
+        default_shortcut: Some("4"),
+        toolbar: false,
+    },
+    Command {
+        id: "photo.rate_5",
+        title_key: "command-photo-rate-5",
+        group: Group::Photo,
+        default_shortcut: Some("5"),
+        toolbar: false,
+    },
+    Command {
+        id: "photo.label_none",
+        title_key: "command-photo-label-none",
+        group: Group::Photo,
+        default_shortcut: Some("0"),
+        toolbar: false,
+    },
+    Command {
+        id: "photo.label_red",
+        title_key: "command-photo-label-red",
+        group: Group::Photo,
+        default_shortcut: Some("6"),
+        toolbar: false,
+    },
+    Command {
+        id: "photo.label_yellow",
+        title_key: "command-photo-label-yellow",
+        group: Group::Photo,
+        default_shortcut: Some("7"),
+        toolbar: false,
+    },
+    Command {
+        id: "photo.label_green",
+        title_key: "command-photo-label-green",
+        group: Group::Photo,
+        default_shortcut: Some("8"),
+        toolbar: false,
+    },
+    Command {
+        id: "photo.label_blue",
+        title_key: "command-photo-label-blue",
+        group: Group::Photo,
+        default_shortcut: Some("9"),
+        toolbar: false,
+    },
+    Command {
+        id: "photo.label_purple",
+        title_key: "command-photo-label-purple",
+        group: Group::Photo,
+        default_shortcut: None,
+        toolbar: false,
+    },
+    // Both toggle. Pressing P on a photograph already picked takes the pick
+    // off — otherwise there is no way back to undecided without the mouse,
+    // and culling is done with one hand.
+    Command {
+        id: "photo.pick",
+        title_key: "command-photo-pick",
+        group: Group::Photo,
+        default_shortcut: Some("P"),
+        toolbar: false,
+    },
+    Command {
+        id: "photo.reject",
+        title_key: "command-photo-reject",
+        group: Group::Photo,
+        default_shortcut: Some("X"),
+        toolbar: false,
+    },
+    Command {
+        id: "photo.select_all",
+        title_key: "command-photo-select-all",
+        group: Group::Photo,
+        default_shortcut: Some("Ctrl+A"),
+        toolbar: false,
+    },
+    // Sorting is a choice among six, not six buttons. The commands exist so
+    // the choice can be bound to a key and named in one place; the toolbar
+    // draws it as one control, the way it already does the recursive
+    // checkbox.
+    Command {
+        id: "sort.taken",
+        title_key: "sort-taken",
+        group: Group::Sort,
+        default_shortcut: None,
+        toolbar: false,
+    },
+    Command {
+        id: "sort.name",
+        title_key: "sort-name",
+        group: Group::Sort,
+        default_shortcut: None,
+        toolbar: false,
+    },
+    Command {
+        id: "sort.rating",
+        title_key: "sort-rating",
+        group: Group::Sort,
+        default_shortcut: None,
+        toolbar: false,
+    },
+    Command {
+        id: "sort.modified",
+        title_key: "sort-modified",
+        group: Group::Sort,
+        default_shortcut: None,
+        toolbar: false,
+    },
+    Command {
+        id: "sort.size",
+        title_key: "sort-size",
+        group: Group::Sort,
+        default_shortcut: None,
+        toolbar: false,
+    },
+    Command {
+        id: "sort.dimensions",
+        title_key: "sort-dimensions",
+        group: Group::Sort,
+        default_shortcut: None,
+        toolbar: false,
+    },
+    Command {
+        id: "sort.reverse",
+        title_key: "command-sort-reverse",
+        group: Group::Sort,
+        default_shortcut: Some("Ctrl+Shift+R"),
         toolbar: false,
     },
     Command {
@@ -334,7 +510,7 @@ mod tests {
 
     #[test]
     fn every_group_has_a_translation() {
-        for group in [Group::File, Group::View, Group::Help] {
+        for group in Group::ALL {
             assert!(crate::i18n::has(group.title_key()), "{:?}", group);
         }
     }

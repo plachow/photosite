@@ -16,6 +16,7 @@ pub mod jobs;
 pub mod paths;
 pub mod settings;
 pub mod theme;
+pub mod time;
 
 pub use catalog::{Catalog, NewPhoto};
 pub use docks::Layout;

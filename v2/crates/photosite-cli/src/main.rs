@@ -40,7 +40,11 @@ enum Command {
         recursive: bool,
     },
     /// Prints what the catalogue knows about a folder.
-    List { folder: PathBuf },
+    List {
+        folder: PathBuf,
+        #[arg(long, short)]
+        recursive: bool,
+    },
     /// Reads one file and prints what could be got out of it.
     Info { file: PathBuf },
     /// Where everything lives and what it runs on. The first question any
@@ -58,7 +62,7 @@ fn main() -> Result<()> {
 
     match cli.command {
         Command::Scan { folder, recursive } => scan(&paths, &folder, recursive),
-        Command::List { folder } => list(&paths, &folder),
+        Command::List { folder, recursive } => list(&paths, &folder, recursive),
         Command::Info { file } => info(&file),
         Command::Doctor => {
             let mut rows = diagnostics::about(&paths);
@@ -178,16 +182,16 @@ fn read_one(identity: &domain::FileIdentity) -> Result<NewPhoto> {
         path: identity.path.clone(),
         file_size: identity.file_size,
         modified_at: identity.modified_at,
-        taken_at: None,
-        width: None,
-        height: None,
+        taken_at: meta.taken_at,
+        width: meta.width,
+        height: meta.height,
         orientation: meta.orientation,
     })
 }
 
-fn list(paths: &Paths, folder: &Path) -> Result<()> {
+fn list(paths: &Paths, folder: &Path, recursive: bool) -> Result<()> {
     let catalog = Catalog::open(&paths.catalog())?;
-    let photos = catalog.in_folder(folder)?;
+    let photos = catalog.in_folder(folder, recursive)?;
     for photo in &photos {
         println!(
             "{:>8}  {:>10}  o{}  {}",
@@ -218,6 +222,20 @@ fn info(file: &Path) -> Result<()> {
     let raw = std::fs::read(file).context("the file cannot be read")?;
     let meta = photosite_image::exif::read(&raw);
     rows.push((t!("cli-info-orientation"), meta.orientation.to_string()));
+    rows.push((
+        t!("cli-info-taken"),
+        match meta.taken_at {
+            Some(seconds) => seconds.to_string(),
+            None => t!("cli-info-taken-none"),
+        },
+    ));
+    rows.push((
+        t!("cli-info-frame"),
+        match (meta.width, meta.height) {
+            (Some(width), Some(height)) => format!("{width}x{height}"),
+            _ => t!("cli-info-frame-none"),
+        },
+    ));
     rows.push((
         t!("cli-info-embedded"),
         match meta.thumbnail {

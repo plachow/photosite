@@ -5,6 +5,7 @@
 //! does one thing: take them and draw by them.
 
 use egui::{Color32, CornerRadius, FontId, Rect, Stroke, StrokeKind, Vec2};
+use photosite_core::domain::{Flag, Organisation};
 use photosite_core::settings::Gallery;
 use photosite_core::theme::{Color, Palette};
 
@@ -110,6 +111,124 @@ pub fn tile_height(gallery: &Gallery) -> f32 {
     (gallery.tile_size * gallery.tile_aspect) as f32
         + caption_height(gallery)
         + gallery.tile_padding as f32
+}
+
+/// A five-pointed star, drawn rather than written.
+///
+/// The default font has no `★` — the same reason the folder tree draws its
+/// own triangles. A glyph that is not there comes out as an empty box, and a
+/// rating is the last thing that should be guesswork.
+///
+/// Ten points around the centre, filled as a fan. A star is concave, so a
+/// convex polygon would fill it wrong.
+pub fn star(painter: &egui::Painter, centre: egui::Pos2, radius: f32, fill: Color32) {
+    use std::f32::consts::{FRAC_PI_2, PI};
+
+    let mut mesh = egui::Mesh::default();
+    mesh.colored_vertex(centre, fill);
+    for point in 0..10 {
+        let angle = -FRAC_PI_2 + point as f32 * PI / 5.0;
+        let reach = if point % 2 == 0 {
+            radius
+        } else {
+            radius * 0.42
+        };
+        mesh.colored_vertex(centre + Vec2::angled(angle) * reach, fill);
+    }
+
+    for point in 0..10u32 {
+        mesh.add_triangle(0, 1 + point, 1 + (point + 1) % 10);
+    }
+
+    painter.add(egui::Shape::mesh(mesh));
+}
+
+/// What somebody said about a photograph, over the photograph.
+///
+/// Everything sits on a dark plate rather than straight on the picture. A
+/// rating drawn in the palette's own colours disappears against a bright sky
+/// or a dark forest depending on the theme, and which of the two is pure
+/// chance.
+///
+/// A tile nobody has said anything about gets nothing drawn at all, which is
+/// most tiles in most libraries.
+pub fn badges(painter: &egui::Painter, well: Rect, palette: &Palette, organisation: &Organisation) {
+    // A rejected photograph is still there — it only fades. Deleting is a
+    // separate, deliberate step, and dimming is what says so.
+    if organisation.flag == Flag::Rejected {
+        painter.rect_filled(well, CornerRadius::ZERO, Color32::from_black_alpha(150));
+    }
+
+    if organisation.is_empty() {
+        return;
+    }
+
+    let size = (well.height() * 0.09).clamp(5.0, 11.0);
+    let pad = size * 0.6;
+
+    if organisation.rating > 0 {
+        let width = size * 2.0 * Organisation::MAX_RATING as f32 + pad;
+        let plate = Rect::from_min_size(
+            egui::pos2(well.min.x + pad, well.max.y - pad - size * 2.2),
+            Vec2::new(width, size * 2.2),
+        );
+        painter.rect_filled(plate, CornerRadius::same(2), Color32::from_black_alpha(120));
+
+        for index in 0..Organisation::MAX_RATING {
+            let centre = egui::pos2(
+                plate.min.x + pad * 0.5 + size + index as f32 * size * 2.0,
+                plate.center().y,
+            );
+            let lit = index < organisation.rating;
+            star(
+                painter,
+                centre,
+                size * 0.9,
+                if lit {
+                    Color32::from_rgb(0xF2, 0xC5, 0x4E)
+                } else {
+                    Color32::from_white_alpha(60)
+                },
+            );
+        }
+    }
+
+    // The label goes in the corner as its own colour, never the palette's —
+    // red has to look red in every theme or the word and the colour stop
+    // agreeing.
+    if let Some(swatch) = organisation.label.color() {
+        let side = size * 2.0;
+        let spot = Rect::from_min_size(
+            egui::pos2(well.max.x - pad - side, well.min.y + pad),
+            Vec2::splat(side),
+        );
+        painter.rect_filled(spot, CornerRadius::same(2), Color32::from_black_alpha(120));
+        painter.rect_filled(
+            spot.shrink(1.5),
+            CornerRadius::same(2),
+            Color32::from_rgb(swatch.r, swatch.g, swatch.b),
+        );
+    }
+
+    if organisation.flag == Flag::Picked {
+        let side = size * 2.0;
+        let spot = Rect::from_min_size(
+            egui::pos2(well.min.x + pad, well.min.y + pad),
+            Vec2::splat(side),
+        );
+        painter.rect_filled(spot, CornerRadius::same(2), Color32::from_black_alpha(120));
+        // A tick, drawn for the same reason as the star.
+        let centre = spot.center();
+        let arm = side * 0.28;
+        painter.add(egui::Shape::line(
+            vec![
+                egui::pos2(centre.x - arm, centre.y),
+                egui::pos2(centre.x - arm * 0.25, centre.y + arm * 0.8),
+                egui::pos2(centre.x + arm, centre.y - arm * 0.7),
+            ],
+            Stroke::new((size * 0.28).max(1.5), color(palette.accent)),
+        ));
+    }
 }
 
 /// Draws the slide and returns the rectangle the photograph belongs in.

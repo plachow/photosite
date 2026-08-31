@@ -90,6 +90,12 @@ pub struct Gallery {
     pub prefetch_rows: i64,
     pub show_captions: bool,
     pub recursive: bool,
+    /// What the gallery is ordered by, under the stable name from
+    /// [`crate::domain::SortField::id`]. A name rather than a number, so the
+    /// file stays readable and reordering the enum cannot silently change
+    /// what somebody chose.
+    pub sort_field: String,
+    pub sort_descending: bool,
     pub last_folder: Option<String>,
 }
 
@@ -104,6 +110,10 @@ impl Default for Gallery {
             prefetch_rows: 3,
             show_captions: true,
             recursive: false,
+            // Date taken, oldest first: the order the photographs happened
+            // in, which is the one nobody has to think about.
+            sort_field: crate::domain::SortField::TakenAt.id().to_owned(),
+            sort_descending: false,
             last_folder: None,
         }
     }
@@ -527,6 +537,16 @@ pub const TUNABLES: &[Tunable] = &[
     Tunable {
         path: "gallery.recursive",
         label_key: "setting-recursive",
+        kind: Kind::Bool,
+    },
+    Tunable {
+        path: "gallery.sort_field",
+        label_key: "setting-sort-field",
+        kind: Kind::Choice(crate::domain::SORT_FIELD_IDS),
+    },
+    Tunable {
+        path: "gallery.sort_descending",
+        label_key: "setting-sort-descending",
         kind: Kind::Bool,
     },
     Tunable {
