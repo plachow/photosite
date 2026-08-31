@@ -8,6 +8,7 @@
 
 pub mod catalog;
 pub mod commands;
+pub mod compare;
 pub mod diagnostics;
 pub mod docks;
 pub mod domain;
@@ -21,6 +22,7 @@ pub mod theme;
 pub mod time;
 
 pub use catalog::{Catalog, NewPhoto};
+pub use compare::Compare;
 pub use docks::Layout;
 pub use domain::{FileIdentity, Photo, PhotoId, is_photo};
 pub use filter::{Facets, Filter, Shape};

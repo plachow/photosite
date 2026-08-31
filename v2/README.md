@@ -6,7 +6,7 @@ A clean sheet. Rust, egui over wgpu, Windows / macOS / Linux from one source.
 cd v2
 cargo run --release -p photosite-ui              # the application
 cargo run --release -p photosite-cli -- doctor   # where everything lives
-cargo test --workspace                           # 280 tests, no window, no GPU
+cargo test --workspace                           # 303 tests, no window, no GPU
 ```
 
 ## Layout
@@ -486,22 +486,62 @@ core, where the vocabulary lives, so it cannot come apart from a second copy.
 | Panasonic RW2 | camera, date and 5480x3656 read; drawn in 10 ms |
 | Adobe DNG | the same as the NEF it came from |
 
+## Comparison
+
+`Ctrl+K` puts two to four photographs side by side, and the same key closes
+them again. It is what a folder full of near-identical frames is for: three
+of the same moment, one of them sharp, and no way to tell which without
+looking at them together.
+
+**One view, shared by all of them.** The pan and the zoom are a single thing,
+so the wheel over any cell moves every cell and the same part of the scene is
+in front of you in each. They are held as a fraction of the frame rather than
+in pixels, which is what makes that true when the photographs are not the
+same size — a phone shot beside a RAW shows the same part of the scene, not
+the same number of pixels from the top left.
+
+**The arrangement is worked out, not looked up.** Four portraits in a wide
+window want a single row; four landscapes want two by two; three of anything
+are usually better in a two by two with one cell empty than squeezed into a
+row. Every arrangement is tried and the one that draws the photographs
+largest wins, which is the only thing anybody opened a comparison for.
+
+**A hundred per cent means a hundred per cent.** The percentage in the corner
+is measured against the photograph as the file holds it — not against
+whatever has been decoded so far, which would make the number mean nothing.
+The comparison asks for its own decode at `loading.compare_size`, larger than
+the preview: it is the one place somebody looks at pixel level to decide, and
+a preview blown up past its own pixels answers that question wrongly.
+
+The keys are the gallery's keys — the stars, the labels, pick and reject —
+and they land on the photograph with the focus, not on the selection the
+comparison opened with. `Tab` moves the focus round the ring; `Delete` takes
+one out of the comparison and leaves the file exactly where it was; `Esc`
+closes. `Delete` meaning two different things is deliberate and it is the
+same thing said twice: get this out of what I am looking at. It is only in
+the gallery that what one is looking at is the folder itself.
+
+The arithmetic is all in the core and none of it needs a window: where each
+photograph goes, which part of it is seen, how far in it will go and how the
+space is divided. What is left in the drawing layer is a wheel notch turning
+into a view, and a view turning into rectangles.
+
 ## Where this stands
 
 The scaffolding is done and the photographic features are being brought over
 on top of it. Browsing, culling, organising, filtering, searching, writing
-metadata back into the files, getting about, the everyday file operations and
-showing RAW all work; editing, batch conversion, import, faces and the AI
-describer are still v1's alone.
+metadata back into the files, getting about, the everyday file operations,
+showing RAW and comparing all work; editing, batch conversion, import, faces
+and the AI describer are still v1's alone.
 
 | | |
 |---|---|
-| tests | 280 (including 6,000 fuzz cases over EXIF and 70 checked colour pairs) |
+| tests | 303 (including 6,000 fuzz cases over EXIF and 70 checked colour pairs) |
 | scan of 7,558 photographs | 0.3 s; 0.1 s on a repeat |
 | opening 134,990 photographs recursively | 727 ms |
 | `cargo clippy -D warnings` | clean |
 | themes | 5 plus following the system |
-| settings entries | 29, screen generated from the descriptions |
+| settings entries | 32, of which 24 are on the screen it generates |
 | catalogue schema | 4 migrations |
 
 A cross-check from Windows passes for `photosite-image` against both targets.
@@ -511,22 +551,17 @@ done by CI**, where the runners are native.
 
 ## What is missing, and known to be
 
-Of v1's features, in the order they are being brought across: comparison,
-import, the editor, batch conversion, faces, the AI describer. Of the file
+Of v1's features, in the order they are being brought across: import, the
+editor, batch conversion, faces, the AI describer. Of the file
 operations, copying and moving to a chosen folder are not done — the rest are.
 
 Three of the filter's facets are waiting on features that come later: people,
 the smiling and eyes-open scores, and the approximate-GPS verdict. All three
 need something to filter on first.
 
-Writing metadata will be pure Rust — `little_exif` for EXIF and `xmp-writer`
-for XMP, rather than shipping exiftool and a copy of Perl. What PhotoSite
-writes is some twenty tags in three namespaces; exiftool's worth is its
-breadth, which is not what is needed here. Two things it did quietly will have
-to be done on purpose: Windows Explorer reads the stars from EXIF `Rating`
-while Lightroom reads `xmp:Rating`, so both get written; and the offline
-reverse geocoding the AI describer used came out of exiftool's database and
-needs a GeoNames extract in its place.
+One thing exiftool did quietly is still owed: the offline reverse geocoding
+the AI describer used came out of its database, and needs a GeoNames extract
+in its place.
 
 Beyond the features: a single instance, accessibility, signing and
 notarisation for macOS, automatic updates. Of the languages, only English so far — cs-CZ is first in line.

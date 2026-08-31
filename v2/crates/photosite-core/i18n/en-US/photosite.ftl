@@ -97,6 +97,7 @@ setting-last-folder = Last folder
 
 setting-thumb-size = Thumbnail size
 setting-preview-size = Preview size
+setting-compare-size = Comparison size (px)
 setting-uploads-per-frame = Uploads per frame
 setting-texture-budget = Images kept in memory
 setting-worker-threads = Decoding threads
@@ -381,3 +382,19 @@ files-deleted =
         [one] { $count } photograph moved to the recycle bin
        *[other] { $count } photographs moved to the recycle bin
     }
+
+command-photo-compare = Compare
+command-photo-compare-next = Focus the next
+command-photo-compare-previous = Focus the previous
+
+compare-needs-two = Pick at least two photographs to compare
+compare-only-four =
+    { $count ->
+        [one] Only the first is being compared
+       *[other] Only the first { $count } are being compared
+    }
+compare-fit = Fit
+compare-actual = 100 %
+compare-magnification = { $percent } %
+compare-hint = Tab focuses the next · Delete takes one out · Esc closes
+compare-unreadable = Not decoded yet

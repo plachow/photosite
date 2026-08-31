@@ -267,6 +267,32 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Ctrl+A"),
         toolbar: false,
     },
+    // Two to four photographs at once. It toggles: the same key that opens
+    // the comparison closes it, so nobody has to hunt for the way out.
+    Command {
+        id: "photo.compare",
+        title_key: "command-photo-compare",
+        group: Group::Photo,
+        default_shortcut: Some("Ctrl+K"),
+        toolbar: false,
+    },
+    // Tab does nothing outside a comparison. It is here rather than read
+    // straight off the keyboard because every key this application answers
+    // to is in this list — that is what makes the list worth having.
+    Command {
+        id: "photo.compare_next",
+        title_key: "command-photo-compare-next",
+        group: Group::Photo,
+        default_shortcut: Some("Tab"),
+        toolbar: false,
+    },
+    Command {
+        id: "photo.compare_previous",
+        title_key: "command-photo-compare-previous",
+        group: Group::Photo,
+        default_shortcut: Some("Shift+Tab"),
+        toolbar: false,
+    },
     // Sorting is a choice among six, not six buttons. The commands exist so
     // the choice can be bound to a key and named in one place; the toolbar
     // draws it as one control, the way it already does the recursive

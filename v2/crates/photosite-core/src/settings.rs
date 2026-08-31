@@ -128,6 +128,14 @@ pub struct Loading {
     pub thumb_size: i64,
     /// The longer edge of the full preview.
     pub preview_size: i64,
+    /// The longer edge of a photograph in the comparison.
+    ///
+    /// Larger than the preview on purpose: a comparison is where somebody
+    /// looks at a hundred per cent to decide which frame is the sharp one,
+    /// and a preview blown up past its own pixels answers that question
+    /// wrongly. At most four of these exist at a time, which is what makes
+    /// the size affordable.
+    pub compare_size: i64,
     /// How many finished images are uploaded to the GPU per frame. Without a
     /// ceiling, one batch would stall the thread that draws.
     pub uploads_per_frame: i64,
@@ -151,6 +159,7 @@ impl Default for Loading {
         Self {
             thumb_size: 320,
             preview_size: 2560,
+            compare_size: 4096,
             uploads_per_frame: 32,
             texture_budget: 900,
             worker_threads: 0,
@@ -565,6 +574,14 @@ pub const TUNABLES: &[Tunable] = &[
         kind: Kind::Int {
             min: 512,
             max: 8192,
+        },
+    },
+    Tunable {
+        path: "loading.compare_size",
+        label_key: "setting-compare-size",
+        kind: Kind::Int {
+            min: 1024,
+            max: 16384,
         },
     },
     Tunable {

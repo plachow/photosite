@@ -181,7 +181,7 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
 }
 
 pub fn preview(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
-    app.wanted_preview = None;
+    app.wanted_preview.clear();
     let Some(index) = app.selected else {
         ui.centered_and_justified(|ui| {
             ui.label(egui::RichText::new(t!("preview-pick-tile")).color(theme::color(palette.dim)));
@@ -203,7 +203,7 @@ pub fn preview(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
         .map(|want| (path.clone(), want))
         .find(|key| app.texture(key).is_some());
     if !app.has(&path, Want::Preview) {
-        app.wanted_preview = Some(path.clone());
+        app.wanted_preview.push(path.clone());
     }
 
     if let Some(key) = chosen {

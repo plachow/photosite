@@ -8,6 +8,7 @@
 //! from [`Settings`], because what is hard-wired cannot be configured — and
 //! what cannot be configured gets rewritten sooner or later.
 
+mod compare;
 mod docks;
 mod files;
 mod filter;
@@ -20,6 +21,7 @@ use anyhow::Result;
 use eframe::egui;
 use photosite_core::catalog::NewPhoto;
 use photosite_core::commands::{Bindings, Group, Shortcut};
+use photosite_core::compare::Compare;
 use photosite_core::domain::{ColorLabel, Flag, Photo, PhotoId, Sort, SortField};
 use photosite_core::filter::{Facets, Filter};
 use photosite_core::history::History;
@@ -40,6 +42,10 @@ pub enum Want {
     Quick,
     Thumb,
     Preview,
+    /// For the comparison, where somebody looks at a hundred per cent to
+    /// decide which frame is the sharp one. Only ever asked for the two to
+    /// four photographs being compared, which is what makes it affordable.
+    Close,
 }
 
 pub type Key = (PathBuf, Want);
@@ -66,6 +72,7 @@ fn main() -> Result<()> {
     let mut reset = false;
     let mut open_settings = false;
     let mut open_filter = false;
+    let mut compare = 0usize;
     let mut search: Option<String> = None;
     let mut folder: Option<PathBuf> = None;
     while let Some(arg) = args.next() {
@@ -78,6 +85,10 @@ fn main() -> Result<()> {
             "--reset-settings" => reset = true,
             "--open-settings" => open_settings = true,
             "--open-filter" => open_filter = true,
+            // Opens straight into a comparison of the first few. Like
+            // `--open-filter`, it exists so that a view which normally needs
+            // a selection and a key can be seen from a command line.
+            "--compare" => compare = args.next().and_then(|n| n.parse().ok()).unwrap_or(2),
             // Start already narrowed. The filter is not saved between
             // runs on purpose, so this is the only way to open on one.
             "--search" => search = args.next(),
@@ -124,6 +135,13 @@ fn main() -> Result<()> {
             app.shot = shot;
             app.show_settings = open_settings;
             app.show_filter = open_filter;
+            if compare > 0 {
+                for at in 0..compare.min(app.count()) {
+                    app.select_also(at);
+                }
+
+                app.run_for_shot("photo.compare");
+            }
             if let Some(search) = search {
                 app.set_filter(photosite_core::filter::Filter {
                     search,
@@ -241,6 +259,10 @@ pub struct App {
     /// Positions and not paths, because the grid works in positions and the
     /// set is rebuilt whenever the order changes — see [`App::relist`].
     pub selection: BTreeSet<usize>,
+    /// Two to four photographs side by side, while somebody is looking at
+    /// them. It is drawn in place of the docks, not over them: a comparison
+    /// wants the whole window, which is the reason for opening one.
+    pub compare: Option<Compare>,
     /// The background pass reading this folder's headers, while one runs.
     indexing: Option<u64>,
     /// The background pass writing what somebody said into the files.
@@ -250,7 +272,8 @@ pub struct App {
     order: Vec<Key>,
     pub wanted_quick: Vec<PathBuf>,
     pub wanted_sharp: Vec<PathBuf>,
-    pub wanted_preview: Option<PathBuf>,
+    pub wanted_preview: Vec<PathBuf>,
+    pub wanted_close: Vec<PathBuf>,
     pub blank: usize,
     pub unsharp: usize,
     /// How many textures the grid currently wishes to keep. The cache
@@ -321,6 +344,7 @@ impl App {
         };
         let thumb = settings.loading.thumb_size.clamp(32, 4096) as u32;
         let preview = settings.loading.preview_size.clamp(64, 16384) as u32;
+        let close = settings.loading.compare_size.clamp(64, 16384) as u32;
         let embedded = settings.loading.use_embedded_thumbnails;
         let waker: Arc<OnceLock<egui::Context>> = Arc::new(OnceLock::new());
         let wake = waker.clone();
@@ -332,6 +356,7 @@ impl App {
                 Want::Quick => img::quick(path).map(|found| found.map(into_pixels)),
                 Want::Thumb => img::sized(path, thumb).map(|rgb| Some(into_pixels(rgb))),
                 Want::Preview => img::sized(path, preview).map(|rgb| Some(into_pixels(rgb))),
+                Want::Close => img::sized(path, close).map(|rgb| Some(into_pixels(rgb))),
             };
 
             let outcome = match outcome {
@@ -398,7 +423,9 @@ impl App {
             order: Vec::new(),
             wanted_quick: Vec::new(),
             wanted_sharp: Vec::new(),
-            wanted_preview: None,
+            wanted_preview: Vec::new(),
+            wanted_close: Vec::new(),
+            compare: None,
             blank: 0,
             unsharp: 0,
             needed: 0,
@@ -476,6 +503,10 @@ impl App {
         self.folder = Some(folder.clone());
         self.selected = None;
         self.selection.clear();
+        // A comparison is of photographs in front of us. Somewhere else is
+        // somewhere else, and a comparison that outlived the folder it came
+        // from would rate rows that are no longer on screen.
+        self.compare = None;
         self.relist();
         self.start_indexing();
         // Anything left unwritten from last time goes now.
@@ -726,6 +757,15 @@ impl App {
         self.all.get_mut(at)
     }
 
+    /// A photograph by its path, wherever the filter has left it.
+    ///
+    /// The whole folder and not the visible part of it: the comparison holds
+    /// paths and has to go on knowing how large a photograph is even after
+    /// the filter has hidden its tile.
+    pub fn photo_named(&self, path: &Path) -> Option<&Photo> {
+        self.all.iter().find(|photo| photo.path == path)
+    }
+
     /// The one the preview and the details follow.
     pub fn photo_at_cursor(&self) -> Option<&Photo> {
         self.photo(self.selected?)
@@ -937,6 +977,12 @@ impl App {
     /// among them.
     #[cfg(test)]
     fn run_for_test(&mut self, id: &str) {
+        self.run_for_shot(id);
+    }
+
+    /// The same, for the command line flags that open a view before the
+    /// first frame — there is no context to hand them yet either.
+    fn run_for_shot(&mut self, id: &str) {
         let ctx = egui::Context::default();
         self.run(id, &ctx);
     }
@@ -1016,6 +1062,11 @@ impl App {
                     self.reopen();
                 }
             }
+            // Delete takes a photograph out of the comparison rather than
+            // off the disk. The same key, and in both places it means "get
+            // this out of what I am looking at" — it is only in the gallery
+            // that what one is looking at is the folder itself.
+            "file.delete" if self.compare.is_some() => self.drop_from_comparison(),
             "file.delete" => {
                 let chosen = self.chosen_paths();
                 if chosen.is_empty() {
@@ -1055,6 +1106,9 @@ impl App {
             "photo.pick" => self.flag(Flag::Picked),
             "photo.reject" => self.flag(Flag::Rejected),
             "photo.select_all" => self.select_all(),
+            "photo.compare" => self.compare_chosen(),
+            "photo.compare_next" => self.move_comparison_focus(1),
+            "photo.compare_previous" => self.move_comparison_focus(-1),
             "sort.taken" => self.sort_by(SortField::TakenAt),
             "sort.name" => self.sort_by(SortField::Name),
             "sort.rating" => self.sort_by(SortField::Rating),
@@ -1073,11 +1127,72 @@ impl App {
 
     /// The photographs the next rating lands on.
     fn chosen(&self) -> Vec<PhotoId> {
-        self.selection
-            .iter()
-            .filter_map(|at| self.photo(*at))
+        self.acting_on()
+            .into_iter()
+            .filter_map(|at| self.photo(at))
             .map(|photo| photo.id)
             .collect()
+    }
+
+    /// Where in the gallery the next rating lands.
+    ///
+    /// The selection — unless a comparison is open, and then it is the one
+    /// photograph with the focus. The keys are the same keys; what they land
+    /// on is whatever is being looked at, which is the only thing anybody
+    /// pressing `3` ever means.
+    fn acting_on(&self) -> Vec<usize> {
+        match &self.compare {
+            Some(compare) => self.position_of(compare.focused()).into_iter().collect(),
+            None => self.selection.iter().copied().collect(),
+        }
+    }
+
+    /// Where a photograph sits in the gallery right now.
+    ///
+    /// By path, because a comparison outlives a re-sort. It answers `None`
+    /// for a photograph the filter has since hidden, and then the rating
+    /// keys do nothing rather than landing on the wrong row.
+    fn position_of(&self, path: &Path) -> Option<usize> {
+        (0..self.count()).find(|at| self.photo(*at).map(|photo| photo.path.as_path()) == Some(path))
+    }
+
+    /// Opens the comparison on what is chosen, or closes the one that is
+    /// open. One key, both ways: nobody should have to hunt for the way out.
+    fn compare_chosen(&mut self) {
+        if self.compare.take().is_some() {
+            return;
+        }
+
+        let chosen = self.chosen_paths();
+        match Compare::open(&chosen) {
+            Some(compare) => {
+                if chosen.len() > photosite_core::compare::MOST {
+                    self.status = t!(
+                        "compare-only-four",
+                        count = photosite_core::compare::MOST as i64
+                    );
+                }
+
+                self.compare = Some(compare);
+            }
+            None => self.status = t!("compare-needs-two"),
+        }
+    }
+
+    fn move_comparison_focus(&mut self, by: isize) {
+        if let Some(compare) = &mut self.compare {
+            compare.move_focus(by);
+        }
+    }
+
+    /// Takes the focused photograph out of the comparison, and closes the
+    /// comparison when what is left is no longer one. The file is untouched.
+    fn drop_from_comparison(&mut self) {
+        if let Some(compare) = &mut self.compare
+            && !compare.drop_focused()
+        {
+            self.compare = None;
+        }
     }
 
     pub fn is_selected(&self, at: usize) -> bool {
@@ -1284,7 +1399,7 @@ impl App {
         self.write_catalog(|catalog| catalog.set_rating(&chosen, stars));
         self.queue_write(&chosen);
         let stars = stars.min(photosite_core::domain::Organisation::MAX_RATING);
-        for at in self.selection.clone() {
+        for at in self.acting_on() {
             if let Some(photo) = self.photo_mut(at) {
                 photo.organisation.rating = stars;
             }
@@ -1299,7 +1414,7 @@ impl App {
 
         self.write_catalog(|catalog| catalog.set_label(&chosen, label));
         self.queue_write(&chosen);
-        for at in self.selection.clone() {
+        for at in self.acting_on() {
             if let Some(photo) = self.photo_mut(at) {
                 photo.organisation.label = label;
             }
@@ -1318,9 +1433,9 @@ impl App {
         }
 
         let already = self
-            .selection
-            .iter()
-            .filter_map(|at| self.photo(*at))
+            .acting_on()
+            .into_iter()
+            .filter_map(|at| self.photo(at))
             .all(|photo| photo.organisation.flag == flag);
         let wanted = if already { Flag::None } else { flag };
 
@@ -1329,7 +1444,7 @@ impl App {
         // is rewritten from the catalogue as a whole and this keeps one code
         // path rather than two.
         self.write_catalog(|catalog| catalog.set_flag(&chosen, wanted));
-        for at in self.selection.clone() {
+        for at in self.acting_on() {
             if let Some(photo) = self.photo_mut(at) {
                 photo.organisation.flag = wanted;
             }
@@ -1508,6 +1623,25 @@ impl App {
         for shortcut in pressed {
             if let Some(command) = self.bindings.command_for(&shortcut) {
                 tracing::debug!(command = command.id, "shortcut");
+                // Taken out of the input as well as acted on. Otherwise the
+                // toolkit has its own use for the key afterwards — Tab moves
+                // the focus to the search box while it is also moving the
+                // focus in the comparison, and both happen at once.
+                if let Some(key) = egui::Key::from_name(&shortcut.key) {
+                    ctx.input_mut(|input| {
+                        input.consume_key(
+                            egui::Modifiers {
+                                alt: shortcut.alt,
+                                ctrl: shortcut.ctrl,
+                                shift: shortcut.shift,
+                                mac_cmd: false,
+                                command: shortcut.ctrl,
+                            },
+                            key,
+                        )
+                    });
+                }
+
                 self.run(command.id, ctx);
             }
         }
@@ -1624,7 +1758,13 @@ impl eframe::App for App {
 
         egui::CentralPanel::no_frame()
             .frame(egui::Frame::NONE.fill(window))
-            .show(ui, |ui| docks::show(self, ui, &palette));
+            .show(ui, |ui| {
+                if self.compare.is_some() {
+                    compare::show(self, ui, &palette);
+                } else {
+                    docks::show(self, ui, &palette);
+                }
+            });
 
         self.diagnostics_window(&ctx);
         self.settings_window(&ctx);
@@ -1639,8 +1779,11 @@ impl eframe::App for App {
                 .into_iter()
                 .map(|path| (path, Want::Quick))
                 .collect(),
-            self.wanted_preview
-                .clone()
+            std::mem::take(&mut self.wanted_close)
+                .into_iter()
+                .map(|path| (path, Want::Close))
+                .collect(),
+            std::mem::take(&mut self.wanted_preview)
                 .into_iter()
                 .map(|path| (path, Want::Preview))
                 .collect(),
@@ -2845,6 +2988,192 @@ mod culling {
             .map(|photo| photo.path.file_name().unwrap().to_str().unwrap())
             .collect();
         assert_eq!(rated, ["c.jpg"], "the stars went on the wrong photograph");
+    }
+
+    #[test]
+    fn a_comparison_needs_two_and_takes_at_most_four() {
+        let (mut app, _data, _photos) = three();
+        app.select_only(0);
+        app.run_for_test("photo.compare");
+        assert!(app.compare.is_none(), "one photograph is not a comparison");
+        assert!(!app.status.is_empty(), "and nothing was said about it");
+
+        app.select_also(1);
+        app.run_for_test("photo.compare");
+        assert_eq!(app.compare.as_ref().map(Compare::len), Some(2));
+
+        // The same key again closes it. Nobody should have to hunt for the
+        // way out of a view that filled the window.
+        app.run_for_test("photo.compare");
+        assert!(app.compare.is_none());
+    }
+
+    #[test]
+    fn the_focus_moves_round_the_comparison() {
+        let (mut app, _data, _photos) = three();
+        app.run_for_test("photo.select_all");
+        app.run_for_test("photo.compare");
+
+        app.run_for_test("photo.compare_next");
+        assert_eq!(compared(&app), "b.jpg");
+        app.run_for_test("photo.compare_previous");
+        assert_eq!(compared(&app), "a.jpg");
+        app.run_for_test("photo.compare_previous");
+        assert_eq!(compared(&app), "c.jpg", "the focus fell off the front");
+    }
+
+    /// The one that would be expensive to get wrong. Delete in a comparison
+    /// means "take this out of what I am looking at" — the file is on disk
+    /// and nobody asked for it to go anywhere.
+    #[test]
+    fn delete_in_a_comparison_touches_the_comparison_and_not_the_disk() {
+        let (mut app, _data, photos) = three();
+        app.run_for_test("photo.select_all");
+        app.run_for_test("photo.compare");
+        assert_eq!(compared(&app), "a.jpg");
+
+        app.run_for_test("file.delete");
+        assert!(photos.path().join("a.jpg").exists(), "the file was deleted");
+        assert_eq!(app.total(), 3, "the folder lost a photograph");
+        assert_eq!(app.compare.as_ref().map(Compare::len), Some(2));
+        assert_eq!(compared(&app), "b.jpg");
+
+        // Down to one, and it is not a comparison any more.
+        app.run_for_test("file.delete");
+        assert!(app.compare.is_none());
+        assert_eq!(app.total(), 3);
+        assert!(photos.path().join("b.jpg").exists());
+    }
+
+    /// The keys are the gallery's keys. What they land on is whatever is
+    /// being looked at — which in a comparison is one photograph, not the
+    /// three that were selected when it opened.
+    #[test]
+    fn the_rating_keys_land_on_the_focused_photograph_alone() {
+        let (mut app, _data, _photos) = three();
+        app.run_for_test("photo.select_all");
+        app.run_for_test("photo.compare");
+        app.run_for_test("photo.compare_next");
+        app.run_for_test("photo.rate_4");
+
+        let rated: Vec<String> = app
+            .all
+            .iter()
+            .filter(|photo| photo.organisation.rating == 4)
+            .map(|photo| {
+                photo
+                    .path
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        assert_eq!(rated, ["b.jpg"], "the stars went on the whole selection");
+
+        // And with the comparison closed they land on the selection again.
+        app.run_for_test("photo.compare");
+        app.run_for_test("photo.rate_1");
+        assert!(
+            app.all.iter().all(|photo| photo.organisation.rating == 1),
+            "the selection stopped being what the keys act on"
+        );
+    }
+
+    #[test]
+    fn going_somewhere_else_closes_the_comparison() {
+        let (mut app, _data, photos) = three();
+        app.run_for_test("photo.select_all");
+        app.run_for_test("photo.compare");
+        assert!(app.compare.is_some());
+
+        app.open(photos.path().to_owned());
+        assert!(app.compare.is_none(), "it outlived the folder it came from");
+    }
+
+    /// Runs one frame of the comparison against a real context, with the
+    /// pointer somewhere and the wheel turned.
+    ///
+    /// The arithmetic is tested where it lives; what this proves is the
+    /// wiring — that the cell under the pointer is the one that answers, and
+    /// that its answer reaches the shared view.
+    fn a_frame_of_comparison(app: &mut App, ctx: &egui::Context, pointer: egui::Pos2, wheel: f32) {
+        let palette = *app.palette();
+        let mut input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                egui::vec2(1200.0, 800.0),
+            )),
+            ..Default::default()
+        };
+        input.events.push(egui::Event::PointerMoved(pointer));
+        if wheel != 0.0 {
+            input.events.push(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, wheel),
+                phase: egui::TouchPhase::Move,
+                modifiers: egui::Modifiers::default(),
+            });
+        }
+
+        let mut out = ctx.run_ui(input, |ui| compare::show(app, ui, &palette));
+        // With no renderer nothing is ever uploaded, and epaint says so with
+        // a panic when the output is dropped.
+        out.textures_delta.clear();
+    }
+
+    /// One view, shared. The wheel over either cell moves both, because
+    /// there is only one thing to move.
+    #[test]
+    fn the_wheel_over_a_cell_reaches_the_shared_view() {
+        let (mut app, _data, _photos) = three();
+        for photo in &mut app.all {
+            photo.width = Some(6000);
+            photo.height = Some(4000);
+            photo.orientation = 1;
+        }
+
+        app.select_only(0);
+        app.select_also(1);
+        app.run_for_test("photo.compare");
+
+        let ctx = egui::Context::default();
+        // Twice: the first frame is where the cells come into being, so
+        // there is nothing to be hovering over until the second.
+        for _ in 0..2 {
+            a_frame_of_comparison(&mut app, &ctx, egui::pos2(300.0, 400.0), 300.0);
+        }
+
+        let view = app.compare.as_ref().expect("the comparison closed").view;
+        assert!(
+            view.zoom > 1.0,
+            "the wheel never reached the view: {view:?}"
+        );
+
+        // And with the pointer outside the cells nothing moves, or the wheel
+        // would be a global gesture rather than one aimed at a photograph.
+        let before = view;
+        for _ in 0..2 {
+            a_frame_of_comparison(&mut app, &ctx, egui::pos2(1199.0, 1.0), 300.0);
+        }
+
+        assert_eq!(
+            app.compare.as_ref().unwrap().view,
+            before,
+            "the wheel moved the view from outside every cell"
+        );
+    }
+
+    /// Which photograph the focused path is, by name.
+    fn compared(app: &App) -> String {
+        app.compare
+            .as_ref()
+            .expect("no comparison is open")
+            .focused()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned()
     }
 
     #[test]

@@ -39,6 +39,25 @@ pub struct Photo {
     pub organisation: Organisation,
 }
 
+impl Photo {
+    /// The pixel size as it appears on screen, which is not always the size
+    /// in the file: a camera held on its side writes the frame the way the
+    /// sensor read it and records the turn separately. Everything that
+    /// decodes turns it back, so everything that measures must agree.
+    pub fn shown(&self) -> Option<(u32, u32)> {
+        let (width, height) = (self.width?, self.height?);
+        if width == 0 || height == 0 {
+            return None;
+        }
+
+        Some(if matches!(self.orientation, 5..=8) {
+            (height, width)
+        } else {
+            (width, height)
+        })
+    }
+}
+
 /// What somebody has said about a photograph: the stars, the label, the
 /// culling verdict and the words.
 ///
