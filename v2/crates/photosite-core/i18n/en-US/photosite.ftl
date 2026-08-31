@@ -1,16 +1,16 @@
 # PhotoSite — en-US
 #
-# Zdrojový jazyk a zároveň záloha: co v jiném překladu chybí, se vezme odsud.
-# Klíče se nikdy nemění ani nepřejmenovávají, jen přibývají — na cizích
-# discích jsou podle nich složené překlady.
+# The source language and the fallback in one: whatever is missing from
+# another translation is taken from here. Keys are never changed or renamed,
+# only added — translations on other people's disks are built from them.
 
-## Skupiny příkazů
+## Command groups
 
 group-file = File
 group-view = View
 group-help = Help
 
-## Příkazy
+## Commands
 
 command-file-open-folder = Open folder…
 command-file-rescan = Reload folder
@@ -26,9 +26,9 @@ command-view-next-theme = Next theme
 command-view-settings = Settings…
 command-help-diagnostics = Diagnostics
 
-## Doky
+## Docks
 #
-# Názvy ploch, ze kterých se skládá rozložení okna.
+# The names of the panes the window layout is assembled from.
 
 dock-tree = Folders
 dock-gallery = Photographs
@@ -36,7 +36,7 @@ dock-preview = Preview
 dock-info = Photo info
 docks-all-hidden = Every dock is hidden
 
-## Motivy
+## Themes
 
 theme-dark = Dark
 theme-light = Light
@@ -45,31 +45,33 @@ theme-sepia = Sepia
 theme-seabreeze = Sea Breeze
 theme-automatic = Follow the system
 
-## Mřížka
+## The grid
 
 toolbar-recursive = Recursive
 gallery-empty = No photographs here
 gallery-pick-folder = Open a folder to begin
 preview-pick-tile = Click a tile to see it here
 
-# Plurál je tu schválně: čeština bude potřebovat tři tvary a formát, který
-# to neumí, by se musel později přepisovat i s voláními.
+# The plural is here on purpose: Czech will need three forms, and a format
+# that cannot do that would later have to be rewritten along with its call
+# sites.
 gallery-count =
     { $count ->
         [one] { $count } photograph
        *[other] { $count } photographs
     } in { NUMBER($ms, maximumFractionDigits: 0) } ms
 
-## Dialogy
+## Dialogs
 
-# Titulek nativního dialogu. Windows i macOS ho ukazují v záhlaví, XDG portál
-# v pruhu nahoře — nikde se nezahodí, takže musí být přeložený.
+# The title of the native dialog. Windows and macOS show it in the title bar,
+# the XDG portal in the strip at the top — nowhere is it discarded, so it has
+# to be translated.
 dialog-pick-folder = Choose a folder with photographs
 
-## Nastavení
+## Settings
 #
-# Popisky polí. Klíče se drží tvaru setting-<cesta s pomlčkami>, aby šlo
-# od jednoho k druhému dojít bez hledání.
+# Field labels. The keys keep the shape setting-<path with dashes>, so one can
+# be reached from the other without searching.
 
 settings-title = Settings
 settings-reset = Reset to defaults
@@ -107,7 +109,7 @@ setting-theme-light = Theme when the system is light
 setting-language = Language
 setting-ui-scale = Interface scale
 
-## Informace o fotce
+## Photo details
 
 info-pick-tile = Click a tile to see its details
 info-name = name
@@ -122,7 +124,7 @@ info-preview-px = { $width }×{ $height }
 info-preview = preview decoded
 info-preview-waiting = decoding…
 
-## Diagnostika
+## Diagnostics
 
 diagnostics-title = Diagnostics
 diagnostics-version = version
@@ -145,7 +147,7 @@ diagnostics-blank = blank tiles
 diagnostics-unsharp = tiles not yet sharp
 diagnostics-language = language
 
-## Samokontrola
+## Self-check
 
 selftest-ok =
     self-check passed: { $count } photographs, no blank tile, { NUMBER($ms, maximumFractionDigits: 0) } ms
@@ -153,7 +155,7 @@ selftest-no-photos = SELF-CHECK FAILED: the folder holds no photographs
 selftest-blank =
     SELF-CHECK FAILED: { $count } tiles still blank after { NUMBER($seconds, maximumFractionDigits: 0) } s
 
-## Příkazová řádka
+## Command line
 
 cli-scan-found = found { $count } photographs in { NUMBER($ms, maximumFractionDigits: 0) } ms
 cli-scan-done =
@@ -172,7 +174,7 @@ cli-info-quick-none = cannot be produced
 cli-info-tile = tile
 cli-info-size-px = { $width }×{ $height } in { NUMBER($ms, maximumFractionDigits: 1) } ms
 
-## Chyby
+## Errors
 
 error-not-a-folder = { $path } is not a folder
 error-not-a-file = { $path } is not a file

@@ -1,12 +1,13 @@
-//! Plocha s informacemi o vybrané fotce.
+//! The pane with details of the selected photograph.
 //!
-//! Existuje hlavně proto, že dokazuje, k čemu je rozložení daty: je to druhá
-//! plocha ve svislém sloupci pod náhledem a nestálo to jediný zásah do
-//! kreslení ostatních.
+//! It exists mainly because it proves what layout-as-data is for: it is a
+//! second pane in the vertical column below the preview, and it cost not one
+//! change to how anything else is drawn.
 //!
-//! Údaje se počítají **jednou na vybranou fotku**, ne každý snímek. Čte se
-//! jen hlavička souboru, ne celý — u čtyřicetimegabajtového snímku na síťovém
-//! disku by to jinak bylo znát na každém kliknutí.
+//! The values are worked out **once per selected photograph**, not once per
+//! frame. Only the file header is read, not the whole file — on a forty
+//! megabyte frame on a network drive, anything else would be felt on every
+//! click.
 
 use crate::{App, Want, theme};
 use eframe::egui;
@@ -28,8 +29,8 @@ pub fn pane(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
         app.info_of = Some(path.clone());
     }
 
-    // Rozměr náhledu se mění, jak dekódování dobíhá, takže se nedá schovat
-    // do vyrobených řádků.
+    // The preview's size changes as decoding catches up, so it cannot be
+    // baked into the rows built above.
     let decoded = app
         .texture(&(path.clone(), Want::Preview))
         .map(|texture| {
@@ -76,7 +77,7 @@ pub fn pane(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
         });
 }
 
-/// Co se dá o souboru zjistit, aniž by se dekódoval.
+/// What can be learned about a file without decoding it.
 fn read(path: &Path) -> Vec<(String, String)> {
     let mut rows = vec![(
         t!("info-name"),
@@ -97,9 +98,9 @@ fn read(path: &Path) -> Vec<(String, String)> {
                 mb = identity.file_size as f64 / (1024.0 * 1024.0)
             ),
         )),
-        // Soubor, který zmizel mezi skenem a kliknutím, není důvod k pádu ani
-        // k prázdné ploše — ostatní řádky platí dál.
-        Err(error) => tracing::warn!(path = %path.display(), %error, "soubor nelze přečíst"),
+        // A file that vanished between the scan and the click is no reason to
+        // panic, nor to leave the pane empty — the other rows still hold.
+        Err(error) => tracing::warn!(path = %path.display(), %error, "the file cannot be read"),
     }
 
     let header = header(path);
@@ -116,8 +117,8 @@ fn read(path: &Path) -> Vec<(String, String)> {
     rows
 }
 
-/// Jen začátek souboru. EXIF je v prvních stovkách kilobajtů; načítat kvůli
-/// němu celou fotku by znamenalo čekání na každé kliknutí.
+/// Only the start of the file. EXIF lives in the first few hundred kilobytes;
+/// reading the whole photograph for it would mean a wait on every click.
 fn header(path: &Path) -> Vec<u8> {
     use std::io::Read as _;
 
@@ -128,7 +129,7 @@ fn header(path: &Path) -> Vec<u8> {
                 .take(photosite_image::exif::HEADER_BYTES as u64)
                 .read_to_end(&mut buffer);
         }
-        Err(error) => tracing::warn!(path = %path.display(), %error, "hlavičku nelze přečíst"),
+        Err(error) => tracing::warn!(path = %path.display(), %error, "the header cannot be read"),
     }
 
     buffer

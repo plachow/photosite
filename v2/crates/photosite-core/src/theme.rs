@@ -1,24 +1,25 @@
-//! Motivy jako data — a test, který hlídá, že jsou čitelné.
+//! Themes as data — and a test that keeps them legible.
 //!
-//! Barvy nejsou konstanty v kódu, ale hodnoty, které jde serializovat. Dnes
-//! jsou vestavěné, ale právě proto, že jsou to data, půjde je časem načíst ze
-//! souboru, aniž by se čehokoliv dotklo v kódu.
+//! Colours are not constants in code but values that can be serialised. Today
+//! they are built in, but precisely because they are data they will one day
+//! be loadable from a file without touching anything in the code.
 //!
-//! Paleta pokrývá **všechny** role, které grafická vrstva potřebuje, včetně
-//! zakázaného textu, varování a chyb. Co paleta neurčí, dokreslí si toolkit
-//! po svém — a jeho výchozí barvy se s cizí paletou pohádají. Tak vzniká
-//! tmavě šedý text na šedém pozadí, který se pak hledá po jednom.
+//! The palette covers **every** role the drawing layer needs, disabled text,
+//! warnings and errors included. Whatever the palette does not settle, the
+//! toolkit fills in its own way — and its defaults argue with a foreign
+//! palette. That is how dark grey text on a grey background appears, to be
+//! hunted down one instance at a time.
 //!
-//! Aby se nehledal, je tu [`contrast`] a test, který projde **každý motiv
-//! krát každou dvojici popředí a pozadí**. Nečitelná kombinace je od téhle
-//! chvíle spadlý test, ne hlášení od uživatele.
+//! So that it need not be hunted, there is [`contrast`] and a test that walks
+//! **every theme times every foreground-background pair**. An illegible
+//! combination is from now on a failing test, not a report from a user.
 //!
-//! Jádro o žádné grafické knihovně neví — [`Color`] je trojice bajtů.
+//! The core knows of no graphics library — [`Color`] is three bytes.
 
 use crate::settings::Appearance;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-/// Barva v podobě, kterou člověk přečte i napíše: `#2A2A2C`.
+/// A colour in the form a person can read and write: `#2A2A2C`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Color {
     pub r: u8,
@@ -52,7 +53,7 @@ impl Color {
         })
     }
 
-    /// Relativní jas podle WCAG. Podklad pro [`contrast`].
+    /// Relative luminance by WCAG. The basis for [`contrast`].
     pub fn luminance(self) -> f64 {
         fn channel(value: u8) -> f64 {
             let c = value as f64 / 255.0;
@@ -67,10 +68,11 @@ impl Color {
     }
 }
 
-/// Poměr kontrastu dvou barev, 1,0 až 21,0.
+/// The contrast ratio of two colours, 1.0 to 21.0.
 ///
-/// Pro běžný text se doporučuje aspoň 4,5; pro druhotný a zakázaný text stačí
-/// míň, ale nikdy tak málo, aby text splynul s pozadím.
+/// At least 4.5 is recommended for ordinary text; secondary and disabled text
+/// can do with less, but never so little that the text merges into the
+/// background.
 pub fn contrast(a: Color, b: Color) -> f64 {
     let (first, second) = (a.luminance(), b.luminance());
     let (lighter, darker) = if first > second {
@@ -90,52 +92,54 @@ impl Serialize for Color {
 impl<'de> Deserialize<'de> for Color {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let text = String::deserialize(deserializer)?;
-        Color::parse(&text)
-            .ok_or_else(|| serde::de::Error::custom(format!("{text:?} není barva jako #RRGGBB")))
+        Color::parse(&text).ok_or_else(|| {
+            serde::de::Error::custom(format!("{text:?} is not a colour like #RRGGBB"))
+        })
     }
 }
 
-/// Sada barev jednoho motivu.
+/// One theme's set of colours.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Palette {
-    /// Pozadí za vším.
+    /// The background behind everything.
     pub window: Color,
-    /// Doky a lišty.
+    /// Docks and bars.
     pub panel: Color,
-    /// Rám diapozitivu.
+    /// The slide frame.
     pub tile: Color,
-    /// Plocha pod fotkou. Tmavší než rám, aby fotka „seděla v okně".
+    /// The surface under the photograph. Darker than the frame, so the
+    /// photograph sits in a window.
     pub well: Color,
-    /// Proužek s názvem.
+    /// The caption strip.
     pub caption: Color,
-    /// Hlavní text.
+    /// Primary text.
     pub text: Color,
-    /// Druhotný text: popisky, cesty, stavový řádek.
+    /// Secondary text: labels, paths, the status bar.
     pub dim: Color,
-    /// Text zakázaného prvku. „Zakázáno" neznamená „neviditelné".
+    /// The text of a disabled control. Disabled does not mean invisible.
     pub disabled: Color,
     pub accent: Color,
-    /// Varování a chyby. Bez nich by je toolkit kreslil po svém.
+    /// Warnings and errors. Without them the toolkit would draw its own.
     pub warn: Color,
     pub error: Color,
-    /// Horní a levá hrana rámu. Jen náznak, ne vypouklé tlačítko.
+    /// The top and left edge of the frame. A hint only, not a raised button.
     pub bevel_light: Color,
     pub bevel_dark: Color,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Theme {
-    /// Klíč do nastavení. Nikdy se nemění.
+    /// The settings key. Never changes.
     pub id: &'static str,
-    /// Klíč do překladu. Ani tady nejsou texty.
+    /// A translation key. There is no text here either.
     pub label_key: &'static str,
-    /// Je to tmavý motiv? Podle tohohle se řídí automatická volba.
+    /// Is this a dark theme? The automatic choice goes by this.
     pub dark: bool,
     pub palette: Palette,
 }
 
-/// Hodnota `appearance.theme`, která znamená „podle systému".
+/// The value of `appearance.theme` that means "follow the system".
 pub const AUTOMATIC: &str = "automatic";
 
 pub const THEMES: &[Theme] = &[
@@ -245,11 +249,12 @@ pub fn theme(id: &str) -> Option<&'static Theme> {
     THEMES.iter().find(|theme| theme.id == id)
 }
 
-/// Který motiv se má použít.
+/// Which theme to use.
 ///
-/// `system_dark` je to, co hlásí systém — `None` znamená, že se ho nepodařilo
-/// zeptat. Neznámé jméno motivu spadne na první v seznamu, ne na paniku;
-/// překlep v nastavení nesmí aplikaci připravit o barvy.
+/// `system_dark` is what the system reports — `None` means it could not be
+/// asked. An unknown theme name falls back to the first in the list, not to a
+/// panic; a typo in the settings must not rob the application of its
+/// colours.
 pub fn resolve(appearance: &Appearance, system_dark: Option<bool>) -> &'static Theme {
     if appearance.theme == AUTOMATIC {
         let wanted = if system_dark.unwrap_or(true) {
@@ -267,13 +272,13 @@ pub fn resolve(appearance: &Appearance, system_dark: Option<bool>) -> &'static T
 mod tests {
     use super::*;
 
-    /// Nejmenší přijatelný kontrast pro danou roli textu.
-    const HLAVNI: f64 = 4.5;
-    const DRUHOTNY: f64 = 3.0;
-    const ZAKAZANY: f64 = 2.2;
+    /// The smallest acceptable contrast for a given role of text.
+    const PRIMARY: f64 = 4.5;
+    const SECONDARY: f64 = 3.0;
+    const DISABLED: f64 = 2.2;
 
     #[test]
-    fn barva_tam_a_zpatky() {
+    fn a_colour_there_and_back() {
         for text in ["#000000", "#FFFFFF", "#2A2A2C", "#4FC3D9"] {
             assert_eq!(Color::parse(text).unwrap().to_hex(), text);
         }
@@ -289,91 +294,98 @@ mod tests {
         let white = Color::hex(0xFF_FFFF);
         assert!((contrast(black, white) - 21.0).abs() < 0.01);
         assert!((contrast(white, white) - 1.0).abs() < 0.01);
-        // Na pořadí nezáleží.
+        // The order does not matter.
         assert_eq!(contrast(black, white), contrast(white, black));
     }
 
-    /// Tohle je ten test, kvůli kterému to celé vzniklo: projít každý motiv
-    /// krát každou dvojici popředí a pozadí. Tmavě šedý text na šedém pozadí
-    /// je od teď spadlý test, ne hlášení od uživatele.
+    /// This is the test the whole thing was built for: walk every theme
+    /// times every foreground-background pair. Dark grey text on a grey
+    /// background is from now on a failing test, not a report from a user.
     #[test]
-    fn kazdy_motiv_je_citelny() {
-        let mut hrichy = Vec::new();
+    fn every_theme_is_legible() {
+        let mut sins = Vec::new();
         for theme in THEMES {
             let p = &theme.palette;
-            let dvojice: &[(&str, Color, Color, f64)] = &[
-                ("text na okně", p.text, p.window, HLAVNI),
-                ("text na panelu", p.text, p.panel, HLAVNI),
-                ("text na dlaždici", p.text, p.tile, HLAVNI),
-                ("text na proužku", p.text, p.caption, HLAVNI),
-                ("text na ploše pod fotkou", p.text, p.well, HLAVNI),
-                ("druhotný na okně", p.dim, p.window, DRUHOTNY),
-                ("druhotný na panelu", p.dim, p.panel, DRUHOTNY),
-                ("druhotný na proužku", p.dim, p.caption, DRUHOTNY),
-                ("zakázaný na panelu", p.disabled, p.panel, ZAKAZANY),
-                ("zakázaný na okně", p.disabled, p.window, ZAKAZANY),
-                ("zvýraznění na panelu", p.accent, p.panel, DRUHOTNY),
-                ("zvýraznění na dlaždici", p.accent, p.tile, DRUHOTNY),
-                ("varování na panelu", p.warn, p.panel, DRUHOTNY),
-                ("chyba na panelu", p.error, p.panel, DRUHOTNY),
+            let pairs: &[(&str, Color, Color, f64)] = &[
+                ("text on the window", p.text, p.window, PRIMARY),
+                ("text on a panel", p.text, p.panel, PRIMARY),
+                ("text on a tile", p.text, p.tile, PRIMARY),
+                ("text on the caption strip", p.text, p.caption, PRIMARY),
+                ("text on the well", p.text, p.well, PRIMARY),
+                ("secondary on the window", p.dim, p.window, SECONDARY),
+                ("secondary on a panel", p.dim, p.panel, SECONDARY),
+                (
+                    "secondary on the caption strip",
+                    p.dim,
+                    p.caption,
+                    SECONDARY,
+                ),
+                ("disabled on a panel", p.disabled, p.panel, DISABLED),
+                ("disabled on the window", p.disabled, p.window, DISABLED),
+                ("accent on a panel", p.accent, p.panel, SECONDARY),
+                ("accent on a tile", p.accent, p.tile, SECONDARY),
+                ("warning on a panel", p.warn, p.panel, SECONDARY),
+                ("error on a panel", p.error, p.panel, SECONDARY),
             ];
 
-            for (kde, popredi, pozadi, prah) in dvojice {
-                let pomer = contrast(*popredi, *pozadi);
-                if pomer < *prah {
-                    hrichy.push(format!(
-                        "{}: {kde} má kontrast {pomer:.2}, potřebuje {prah:.1} ({} na {})",
+            for (where_, foreground, background, threshold) in pairs {
+                let ratio = contrast(*foreground, *background);
+                if ratio < *threshold {
+                    sins.push(format!(
+                        "{}: {where_} has contrast {ratio:.2}, needs {threshold:.1} ({} on {})",
                         theme.id,
-                        popredi.to_hex(),
-                        pozadi.to_hex()
+                        foreground.to_hex(),
+                        background.to_hex()
                     ));
                 }
             }
         }
 
         assert!(
-            hrichy.is_empty(),
-            "nečitelné kombinace:\n  {}",
-            hrichy.join("\n  ")
+            sins.is_empty(),
+            "illegible combinations:\n  {}",
+            sins.join("\n  ")
         );
     }
 
-    /// Zakázaný text musí být slabší než běžný, ale ne neviditelný. Kdyby
-    /// splynul s hlavním, nepoznal by se zakázaný prvek od živého.
+    /// Disabled text has to be weaker than ordinary text, but not invisible.
+    /// Were it to merge with the primary, a disabled control could not be
+    /// told from a live one.
     #[test]
-    fn zakazany_text_je_slabsi_nez_bezny_ale_je_videt() {
+    fn disabled_text_is_weaker_than_ordinary_but_still_visible() {
         for theme in THEMES {
             let p = &theme.palette;
-            let bezny = contrast(p.text, p.panel);
-            let zakazany = contrast(p.disabled, p.panel);
+            let ordinary = contrast(p.text, p.panel);
+            let disabled = contrast(p.disabled, p.panel);
             assert!(
-                zakazany < bezny,
-                "{}: zakázaný text není slabší ({zakazany:.2} proti {bezny:.2})",
+                disabled < ordinary,
+                "{}: disabled text is not weaker ({disabled:.2} against {ordinary:.2})",
                 theme.id
             );
             assert!(
-                zakazany >= ZAKAZANY,
-                "{}: zakázaný text je neviditelný ({zakazany:.2})",
+                disabled >= DISABLED,
+                "{}: disabled text is invisible ({disabled:.2})",
                 theme.id
             );
         }
     }
 
-    /// Náznak plastičnosti musí být vidět, ale nesmí z rámu udělat tlačítko.
+    /// The hint of relief has to be visible without turning the frame into a
+    /// button.
     #[test]
-    fn bevel_je_znat_ale_nekrici() {
+    fn the_bevel_shows_without_shouting() {
         for theme in THEMES {
             let p = &theme.palette;
-            for (kde, hrana) in [("světlá", p.bevel_light), ("tmavá", p.bevel_dark)] {
-                let pomer = contrast(hrana, p.tile);
+            for (where_, edge) in [("light", p.bevel_light), ("dark", p.bevel_dark)] {
+                let ratio = contrast(edge, p.tile);
                 assert!(
-                    pomer > 1.1,
-                    "{}: {kde} hrana splývá s rámem ({pomer:.2})",
+                    ratio > 1.1,
+                    "{}: the {where_} edge merges with the frame ({ratio:.2})",
                     theme.id
                 );
                 assert!(
-                    pomer < 6.0,
-                    "{}: {kde} hrana je příliš ostrá ({pomer:.2})",
+                    ratio < 6.0,
+                    "{}: the {where_} edge is too harsh ({ratio:.2})",
                     theme.id
                 );
             }
@@ -381,29 +393,29 @@ mod tests {
     }
 
     #[test]
-    fn tmavost_motivu_odpovida_barvam() {
+    fn the_dark_flag_matches_the_colours() {
         for theme in THEMES {
-            let svetle_pozadi = theme.palette.window.luminance() > 0.35;
+            let light_background = theme.palette.window.luminance() > 0.35;
             assert_eq!(
-                theme.dark, !svetle_pozadi,
-                "{}: příznak dark neodpovídá barvě pozadí",
+                theme.dark, !light_background,
+                "{}: the dark flag does not match the background colour",
                 theme.id
             );
         }
     }
 
     #[test]
-    fn motiv_se_da_ulozit_a_nacist() {
-        // Tohle je celý důvod, proč jsou barvy data: uživatelský motiv bude
-        // jen tenhle TOML v souboru.
+    fn a_theme_can_be_saved_and_loaded() {
+        // This is the whole reason colours are data: a user theme will be
+        // exactly this TOML in a file.
         let text = toml::to_string(&THEMES[0].palette).unwrap();
         assert!(text.contains("#22"), "{text}");
-        let zpatky: Palette = toml::from_str(&text).unwrap();
-        assert_eq!(zpatky, THEMES[0].palette);
+        let back: Palette = toml::from_str(&text).unwrap();
+        assert_eq!(back, THEMES[0].palette);
     }
 
     #[test]
-    fn identifikatory_motivu_jsou_jedinecne() {
+    fn theme_identifiers_are_unique() {
         let mut ids: Vec<_> = THEMES.iter().map(|theme| theme.id).collect();
         let count = ids.len();
         ids.sort();
@@ -412,24 +424,25 @@ mod tests {
     }
 
     #[test]
-    fn kazdy_motiv_ma_preklad() {
+    fn every_theme_has_a_translation() {
         for theme in THEMES {
             assert!(crate::i18n::has(theme.label_key), "{}", theme.id);
         }
     }
 
     #[test]
-    fn automaticky_motiv_jde_podle_systemu() {
+    fn the_automatic_theme_follows_the_system() {
         let appearance = Appearance::default();
         assert_eq!(appearance.theme, AUTOMATIC);
         assert_eq!(resolve(&appearance, Some(true)).id, "dark");
         assert_eq!(resolve(&appearance, Some(false)).id, "light");
-        // Když se systému nedá zeptat, tmavý je pro fotky bezpečnější volba.
+        // When the system cannot be asked, dark is the safer choice for
+        // photographs.
         assert!(resolve(&appearance, None).dark);
     }
 
     #[test]
-    fn vyslovny_motiv_prebije_automatiku() {
+    fn an_explicit_theme_overrides_the_automatic_one() {
         let appearance = Appearance {
             theme: "sepia".to_owned(),
             ..Appearance::default()
@@ -438,7 +451,7 @@ mod tests {
     }
 
     #[test]
-    fn preklep_v_nastaveni_neshodi_barvy() {
+    fn a_typo_in_the_settings_does_not_lose_the_colours() {
         let appearance = Appearance {
             theme: "neexistuje".to_owned(),
             ..Appearance::default()
@@ -447,7 +460,7 @@ mod tests {
     }
 
     #[test]
-    fn vychozi_motivy_pro_automatiku_existuji() {
+    fn the_default_themes_for_automatic_mode_exist() {
         let appearance = Appearance::default();
         assert!(theme(&appearance.theme_dark).is_some());
         assert!(theme(&appearance.theme_light).is_some());

@@ -1,33 +1,35 @@
-//! Překlady.
+//! Translations.
 //!
-//! Všechno, co uvidí člověk, se bere odsud — v UI ani v CLI nesmí být jediný
-//! natvrdo napsaný řetězec. Hlídají to dva testy: jeden ověří, že každý klíč
-//! použitý v kódu v balíčku existuje, druhý prochází zdrojáky UI a hledá
-//! literály předané widgetům.
+//! Everything a person will see comes from here — neither the UI nor the CLI
+//! may hold a single hard-written string. Two tests guard it: one checks that
+//! every key used in the code exists in the bundle, the other walks the UI
+//! sources looking for literals handed to widgets.
 //!
-//! Formát je [Fluent](https://projectfluent.org). Není to nejjednodušší
-//! volba, ale je jediná, která unese jazyky s netriviálními plurály — a
-//! čeština je přesně takový: *1 fotka, 2 fotky, 5 fotek*. Prostý slovník
-//! „klíč → řetězec" by se na tom zasekl a přepisovat to pak znamená projít
-//! všechna volání.
+//! The format is [Fluent](https://projectfluent.org). It is not the simplest
+//! choice, but it is the only one that carries languages with non-trivial
+//! plurals — and Czech is exactly that: *1 fotka, 2 fotky, 5 fotek*. A plain
+//! key-to-string dictionary would choke on it, and rewriting later means
+//! going through every call site.
 //!
-//! Výchozí jazyk je `en-US` a je zároveň záložní: co v jiném jazyce chybí,
-//! se vezme z angličtiny, aby na obrazovce nikdy nezůstal holý klíč.
+//! The default language is `en-US` and it doubles as the fallback: whatever
+//! is missing in another language is taken from English, so a bare key never
+//! stays on screen.
 
 use fluent_bundle::concurrent::FluentBundle;
 use fluent_bundle::{FluentArgs, FluentResource};
 
-/// Znovu vystavené, aby volající crate nemusely znát Fluent. Makro `t!`
-/// odkazuje sem, ne na cizí jméno v kořeni volajícího.
+/// Re-exported so that calling crates need not know about Fluent. The `t!`
+/// macro points here, not at a foreign name in the caller's root.
 pub use fluent_bundle::FluentValue;
 use std::sync::{OnceLock, RwLock};
 use unic_langid::{LanguageIdentifier, langid};
 
-/// Jazyk, ve kterém je napsaný zdroj a na který se spadne, když překlad chybí.
+/// The language the source is written in, and the one we fall back to when
+/// a translation is missing.
 pub const FALLBACK: LanguageIdentifier = langid!("en-US");
 
-/// Jazyky, které jsou v balíčku. Přibývat sem budou po jednom, jak budou
-/// hotové; cs-CZ je první na řadě.
+/// The languages in the bundle. They will be added one at a time as they are
+/// finished; cs-CZ is first in line.
 pub fn available() -> Vec<(LanguageIdentifier, &'static str)> {
     vec![(
         langid!("en-US"),
@@ -43,24 +45,26 @@ struct Loaded {
 static LOADED: OnceLock<RwLock<Loaded>> = OnceLock::new();
 
 fn build(language: &LanguageIdentifier) -> Loaded {
-    // Nejdřív angličtina jako záloha, pak požadovaný jazyk navrch. Fluent
-    // vrací první nalezenou zprávu, takže pořadí je právě takhle.
+    // English first as the fallback, then the requested language on top.
+    // Fluent returns the first message it finds, which is why the order is
+    // this way round.
     let mut bundle = FluentBundle::new_concurrent(vec![language.clone(), FALLBACK]);
-    // Bez tohohle Fluent obaluje dosazené hodnoty neviditelnými znaky pro
-    // obousměrný text. Na štítku tlačítka to dělá nepořádek.
+    // Without this, Fluent wraps interpolated values in invisible
+    // bidirectional-text marks. On a button label that makes a mess.
     bundle.set_use_isolating(false);
 
-    // `NUMBER()` si fluent-bundle sám nezaregistruje, a bez ní se v textu
-    // objeví doslova `{NUMBER()}`. Je potřeba, aby si mohl každý překlad říct,
-    // na kolik míst se čísla zaokrouhlují — to je rozhodnutí jazyka, ne kódu.
+    // fluent-bundle does not register `NUMBER()` on its own, and without it
+    // the text literally reads `{NUMBER()}`. It is needed so every
+    // translation can say how many places numbers are rounded to — that is a
+    // decision of the language, not of the code.
     let registered = bundle.add_function("NUMBER", |positional, named| {
         match positional.first() {
             Some(FluentValue::Number(number)) => {
                 let mut number = number.clone();
-                // fluent-bundle 0.16 umí `maximumFractionDigits` jen přijmout,
-                // ne podle něj zaokrouhlit — `as_string` se dívá výhradně na
-                // minimum. Zaokrouhlíme tedy sami, jinak by z 4,1667 ms nikdy
-                // nebyly 4 ms.
+                // fluent-bundle 0.16 will accept `maximumFractionDigits` but
+                // will not round by it — `as_string` looks only at the
+                // minimum. So we round ourselves, otherwise 4.1667 ms would
+                // never become 4 ms.
                 if let Some(FluentValue::Number(digits)) = named.get("maximumFractionDigits") {
                     let factor = 10f64.powi(digits.value.max(0.0) as i32);
                     number.value = (number.value * factor).round() / factor;
@@ -74,20 +78,21 @@ fn build(language: &LanguageIdentifier) -> Loaded {
         }
     });
     if let Err(error) = registered {
-        tracing::error!(%error, "NUMBER se nepodařilo zaregistrovat");
+        tracing::error!(%error, "NUMBER could not be registered");
     }
 
     let mut add = |source: &'static str, name: &LanguageIdentifier| {
         match FluentResource::try_new(source.to_owned()) {
             Ok(resource) => {
                 if let Err(errors) = bundle.add_resource(resource) {
-                    // Duplicitní klíč mezi jazykem a zálohou je normální;
-                    // cokoliv jiného je chyba v balíčku a musí být vidět.
-                    tracing::debug!(jazyk = %name, ?errors, "část překladu se nepřidala");
+                    // A key duplicated between the language and the fallback
+                    // is normal; anything else is a fault in the bundle and
+                    // has to be visible.
+                    tracing::debug!(language = %name, ?errors, "part of the translation was not added");
                 }
             }
             Err((_, errors)) => {
-                tracing::error!(jazyk = %name, ?errors, "překlad je poškozený")
+                tracing::error!(language = %name, ?errors, "the translation is damaged")
             }
         }
     };
@@ -109,22 +114,25 @@ fn build(language: &LanguageIdentifier) -> Loaded {
     }
 }
 
-/// Vybere jazyk podle přání uživatele a toho, co je k dispozici.
+/// Picks a language from what the user wants and what is available.
 ///
-/// `wanted` je to, co stojí v nastavení nebo přišlo z příkazové řádky;
-/// neznámý nebo prázdný jazyk skončí na angličtině, ne na pádu.
+/// `wanted` is whatever stands in the settings or arrived on the command
+/// line; an unknown or empty language ends at English, not at a panic.
 ///
-/// Vyjednávání je schválně ruční a krátké: nejdřív přesná shoda, pak shoda
-/// na samotném jazyce bez regionu (`en-GB` → `en-US`), jinak záloha. Knihovna
-/// na tohle existuje, ale táhne si vlastní verzi `unic-langid`, která se
-/// s tou Fluentovou nepotká.
+/// The negotiation is deliberately hand-written and short: an exact match
+/// first, then a match on the language alone without the region (`en-GB` to
+/// `en-US`), otherwise the fallback. A library exists for this, but it drags
+/// in its own version of `unic-langid`, which will not meet Fluent's.
 pub fn negotiate(wanted: Option<&str>) -> LanguageIdentifier {
     let Some(wanted) = wanted.filter(|text| !text.is_empty()) else {
         return FALLBACK;
     };
 
     let Ok(requested) = wanted.parse::<LanguageIdentifier>() else {
-        tracing::warn!(jazyk = wanted, "neznámé označení jazyka, jedeme anglicky");
+        tracing::warn!(
+            language = wanted,
+            "unknown language tag, carrying on in English"
+        );
         return FALLBACK;
     };
 
@@ -140,22 +148,26 @@ pub fn negotiate(wanted: Option<&str>) -> LanguageIdentifier {
         return found.clone();
     }
 
-    tracing::info!(jazyk = wanted, "překlad není k dispozici, jedeme anglicky");
+    tracing::info!(
+        language = wanted,
+        "no translation available, carrying on in English"
+    );
     FALLBACK
 }
 
-/// Nastaví jazyk. Volá se jednou při startu; podruhé při změně v nastavení.
+/// Sets the language. Called once at startup, and again when the setting
+/// changes.
 pub fn set_language(language: &LanguageIdentifier) {
     let lock = LOADED.get_or_init(|| RwLock::new(build(language)));
-    let mut loaded = lock.write().expect("otrávený zámek");
+    let mut loaded = lock.write().expect("poisoned lock");
     if &loaded.language != language {
         *loaded = build(language);
     }
 
-    tracing::info!(jazyk = %language, "jazyk nastaven");
+    tracing::info!(language = %language, "language set");
 }
 
-/// Který jazyk je právě zapnutý.
+/// Which language is currently switched on.
 pub fn language() -> LanguageIdentifier {
     LOADED
         .get()
@@ -171,22 +183,22 @@ fn lookup(key: &str, args: Option<&FluentArgs<'_>>) -> Option<String> {
     let mut errors = Vec::new();
     let text = loaded.bundle.format_pattern(pattern, args, &mut errors);
     if !errors.is_empty() {
-        tracing::warn!(klic = key, ?errors, "překlad se nepodařilo složit");
+        tracing::warn!(key, ?errors, "the translation could not be assembled");
     }
 
     Some(text.into_owned())
 }
 
-/// Přeloží klíč. Chybějící klíč se vrátí v hranatých závorkách — na obrazovce
-/// je to vidět na první pohled a v testu to spadne.
+/// Translates a key. A missing key comes back in square brackets — on screen
+/// that is visible at a glance, and in a test it fails.
 pub fn t(key: &str) -> String {
     lookup(key, None).unwrap_or_else(|| {
-        tracing::error!(klic = key, "chybějící překlad");
+        tracing::error!(key, "missing translation");
         format!("[{key}]")
     })
 }
 
-/// Přeloží klíč s dosazenými hodnotami.
+/// Translates a key with values interpolated into it.
 pub fn t_args(key: &str, args: &[(&str, FluentValue<'_>)]) -> String {
     let mut fluent = FluentArgs::new();
     for (name, value) in args {
@@ -194,12 +206,12 @@ pub fn t_args(key: &str, args: &[(&str, FluentValue<'_>)]) -> String {
     }
 
     lookup(key, Some(&fluent)).unwrap_or_else(|| {
-        tracing::error!(klic = key, "chybějící překlad");
+        tracing::error!(key, "missing translation");
         format!("[{key}]")
     })
 }
 
-/// Existuje takový klíč? Pro testy, které hlídají úplnost balíčku.
+/// Does such a key exist? For the tests that guard the bundle's completeness.
 pub fn has(key: &str) -> bool {
     let lock = LOADED.get_or_init(|| RwLock::new(build(&FALLBACK)));
     lock.read()
@@ -208,7 +220,7 @@ pub fn has(key: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// `t!("klic")` nebo `t!("klic", pocet = 5)`.
+/// `t!("key")` or `t!("key", count = 5)`.
 #[macro_export]
 macro_rules! t {
     ($key:expr) => {
@@ -227,41 +239,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn anglicky_balicek_se_da_prelozit() {
+    fn the_english_bundle_parses() {
         for (language, source) in available() {
             let result = FluentResource::try_new(source.to_owned());
-            assert!(result.is_ok(), "překlad {language} se nepodařilo načíst");
+            assert!(result.is_ok(), "the {language} translation failed to load");
         }
     }
 
     #[test]
-    fn neznamy_jazyk_skonci_na_anglictine() {
+    fn an_unknown_language_ends_at_english() {
         assert_eq!(negotiate(None), FALLBACK);
         assert_eq!(negotiate(Some("")), FALLBACK);
-        assert_eq!(negotiate(Some("tohle není jazyk")), FALLBACK);
+        assert_eq!(negotiate(Some("this is not a language")), FALLBACK);
         assert_eq!(negotiate(Some("sv-SE")), FALLBACK);
     }
 
     #[test]
-    fn anglictina_se_najde_i_bez_regionu() {
+    fn english_is_found_without_a_region_too() {
         assert_eq!(negotiate(Some("en")), langid!("en-US"));
         assert_eq!(negotiate(Some("en-GB")), langid!("en-US"));
     }
 
     #[test]
-    fn chybejici_klic_je_videt_a_neshodi_aplikaci() {
-        assert_eq!(t("takovy-klic-neexistuje"), "[takovy-klic-neexistuje]");
-        assert!(!has("takovy-klic-neexistuje"));
+    fn a_missing_key_is_visible_and_does_not_bring_the_app_down() {
+        assert_eq!(t("no-such-key"), "[no-such-key]");
+        assert!(!has("no-such-key"));
     }
 
     #[test]
-    fn cisla_se_zaokrouhluji_podle_balicku() {
-        // Bez zaregistrované funkce NUMBER by tu stálo doslova "{NUMBER()}".
+    fn numbers_are_rounded_the_way_the_bundle_asks() {
+        // Without NUMBER registered, this would literally read "{NUMBER()}".
         let text = t!("gallery-count", count = 2i64, ms = 4.1667f64);
         assert!(text.contains("4 ms"), "{text}");
         assert!(!text.contains("NUMBER"), "{text}");
 
-        // A na jedno desetinné místo, jak to chce výpis skenu.
+        // And to one decimal place, the way the scan output wants it.
         let text = t!(
             "cli-scan-done",
             added = 1i64,
@@ -275,9 +287,12 @@ mod tests {
     }
 
     #[test]
-    fn dosazeni_hodnoty_funguje() {
+    fn interpolating_a_value_works() {
         let text = t!("gallery-count", count = 3);
         assert!(text.contains('3'), "{text}");
-        assert!(!text.starts_with('['), "klíč gallery-count chybí v balíčku");
+        assert!(
+            !text.starts_with('['),
+            "the gallery-count key is missing from the bundle"
+        );
     }
 }

@@ -8,7 +8,7 @@ edition = "2024"
 rust-version = "1.90"
 license = "MIT"
 
-# Verze se drží tady, aby se crate nikdy nerozešly.
+# Versions are kept here, so the crates never drift apart.
 [workspace.dependencies]
 photosite-core = { path = "crates/photosite-core" }
 photosite-image = { path = "crates/photosite-image" }
@@ -26,12 +26,12 @@ crossbeam-channel = "0.5"
 fluent-bundle = "0.16"
 unic-langid = { version = "0.9", features = ["macros"] }
 walkdir = "2"
-# Nativní dialogy. Na Linuxu jde přes XDG portál, ne přes GTK: portál umí
-# Wayland i Flatpak a k překladu nepotřebuje céčkové hlavičky navíc.
+# Native dialogs. On Linux through the XDG portal rather than GTK: the portal
+# handles Wayland and Flatpak and needs no extra C headers to build.
 rfd = "0.17"
-# Jediné `block_on`. Dialog se vyrábí na hlavním vlákně a čeká se na něj
-# jinde; na to celý asynchronní běh nepotřebujeme. Stejnou verzi už má
-# `eframe`, takže tenhle řádek do stromu nic nepřidává.
+# One `block_on`, nothing more. The dialog is created on the main thread and
+# awaited elsewhere; that needs no async runtime. `eframe` already carries the
+# same version, so this line adds nothing to the tree.
 pollster = "1"
 clap = { version = "4", features = ["derive"] }
 jpeg-decoder = "0.3"
@@ -54,8 +54,8 @@ tempfile = "3"
 proptest = "1"
 
 [workspace.lints.rust]
-# Chyba, která nikam nedojde, je horší než pád: dnešní prototyp kvůli jednomu
-# spolknutému výsledku tiše nevykreslil jediný náhled.
+# An error that reaches nobody is worse than a crash: over one swallowed
+# result, the prototype quietly drew not a single thumbnail.
 unused_must_use = "deny"
 missing_debug_implementations = "warn"
 
@@ -68,6 +68,6 @@ opt-level = 3
 lto = "thin"
 codegen-units = 1
 
-# Dekódování obrázků je v ladicím buildu jinak nepoužitelně pomalé.
+# Image decoding is unusably slow in a debug build otherwise.
 [profile.dev.package."*"]
 opt-level = 2

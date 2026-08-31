@@ -1,38 +1,38 @@
-//! Kam aplikace ukládá svoje věci.
+//! Where the application keeps its things.
 //!
-//! Jediné pravidlo, které tu za něco stojí: **cesty musí jít přebít.** Ve v1
-//! byly natvrdo na `LOCALAPPDATA` a znamenalo to, že cokoliv se dalo změřit
-//! nebo vyzkoušet jen na ostrých datech. Tady se dá celý strom přesměrovat
-//! jedním přepínačem nebo proměnnou prostředí, takže benchmark, test i druhá
-//! rozdělaná knihovna běží stranou a nikdy si nesáhnou na to, co má člověk
-//! rozdělané.
+//! The one rule here worth anything: **paths must be overridable.** In v1 they
+//! were hard-wired to `LOCALAPPDATA`, which meant nothing could be measured or
+//! tried out except against real data. Here the whole tree can be redirected
+//! with one switch or one environment variable, so a benchmark, a test and a
+//! second half-finished library all run to the side and never touch what
+//! somebody has open.
 
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
-/// Proměnná prostředí, která přesměruje celý strom do jedné složky.
+/// Environment variable that redirects the whole tree into one folder.
 pub const DATA_OVERRIDE: &str = "PHOTOSITE_DATA";
 
-/// Kde co leží. Ve výchozím stavu podle zvyklostí platformy, po přebití
-/// všechno pod jedním kořenem — tomu se říká přenosný režim a je to přesně to,
-/// co chce test i flash disk.
+/// Where everything lives. By platform convention out of the box; once
+/// overridden, all of it under a single root — that is portable mode, and it
+/// is exactly what a test and a memory stick both want.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Paths {
-    /// Katalog a další data, o která člověk nechce přijít.
+    /// The catalogue and anything else nobody wants to lose.
     pub data: PathBuf,
-    /// Nastavení.
+    /// Settings.
     pub config: PathBuf,
-    /// Náhledy a spol. Smazatelné bez následků.
+    /// Thumbnails and the like. Deletable without consequence.
     pub cache: PathBuf,
-    /// Záznamy běhu a hlášení o pádech.
+    /// Run logs and crash reports.
     pub logs: PathBuf,
-    /// Je tohle přenosný režim?
+    /// Is this portable mode?
     pub portable: bool,
 }
 
 impl Paths {
-    /// Pořadí přednosti: výslovný kořen, pak `PHOTOSITE_DATA`, pak zvyklosti
-    /// platformy.
+    /// Order of precedence: an explicit root, then `PHOTOSITE_DATA`, then the
+    /// platform's conventions.
     pub fn resolve(explicit: Option<&Path>) -> Result<Self> {
         if let Some(root) = explicit {
             return Ok(Self::portable(root));
@@ -43,7 +43,7 @@ impl Paths {
         }
 
         let dirs = directories::ProjectDirs::from("cz", "PhotoSite", "PhotoSite")
-            .context("systém neumí říct, kam patří data aplikace")?;
+            .context("the system cannot say where application data belongs")?;
         Ok(Self {
             data: dirs.data_dir().to_path_buf(),
             config: dirs.config_dir().to_path_buf(),
@@ -53,7 +53,7 @@ impl Paths {
         })
     }
 
-    /// Všechno pod jedním kořenem.
+    /// Everything under one root.
     pub fn portable(root: &Path) -> Self {
         Self {
             data: root.join("data"),
@@ -76,11 +76,11 @@ impl Paths {
         self.cache.join("thumbnails")
     }
 
-    /// Vytvoří, co chybí. Volá se jednou při startu.
+    /// Creates whatever is missing. Called once at startup.
     pub fn ensure(&self) -> Result<()> {
         for dir in [&self.data, &self.config, &self.cache, &self.logs] {
             std::fs::create_dir_all(dir)
-                .with_context(|| format!("nelze vytvořit {}", dir.display()))?;
+                .with_context(|| format!("cannot create {}", dir.display()))?;
         }
 
         Ok(())
@@ -92,7 +92,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn prebiti_slozi_vsechno_pod_jeden_koren() {
+    fn an_override_puts_everything_under_one_root() {
         let paths = Paths::portable(Path::new("/tmp/x"));
         assert!(paths.portable);
         assert!(paths.catalog().starts_with("/tmp/x"));
@@ -101,20 +101,21 @@ mod tests {
     }
 
     #[test]
-    fn vyslovny_koren_ma_prednost_pred_promennou() {
-        // Proměnná se tu nenastavuje, aby test nezávisel na prostředí; jde
-        // o to, že výslovná cesta prostředí vůbec nečte.
+    fn an_explicit_root_beats_the_environment() {
+        // The variable is deliberately not set here, so the test does not
+        // depend on the environment; the point is that an explicit path never
+        // reads the environment at all.
         let paths = Paths::resolve(Some(Path::new("/tmp/y"))).unwrap();
         assert_eq!(paths, Paths::portable(Path::new("/tmp/y")));
     }
 
     #[test]
-    fn ensure_vyrobi_cely_strom() {
+    fn ensure_builds_the_whole_tree() {
         let root = tempfile::tempdir().unwrap();
         let paths = Paths::portable(root.path());
         paths.ensure().unwrap();
         for dir in [&paths.data, &paths.config, &paths.cache, &paths.logs] {
-            assert!(dir.is_dir(), "{} nevznikla", dir.display());
+            assert!(dir.is_dir(), "{} was not created", dir.display());
         }
     }
 }

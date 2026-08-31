@@ -1,19 +1,19 @@
-//! Práce na pozadí. Dva druhy, protože se chovají opačně.
+//! Background work. Two kinds, because they behave in opposite ways.
 //!
-//! **Seznam přání** ([`Wishlist`]) je pro práci, která má smysl jen dokud je
-//! na ni vidět — náhledy dlaždic. Nejde o frontu: volající seznam každý snímek
-//! přepíše na to, co je právě potřeba, a co z něj vypadne, se nikdy neudělá.
-//! Rušení je tím implicitní a zdarma.
+//! A **wishlist** ([`Wishlist`]) is for work that only makes sense while it
+//! can be seen — tile thumbnails. It is not a queue: the caller overwrites
+//! the list every frame with whatever is needed right now, and whatever drops
+//! out of it is never done. Cancellation is implicit and free.
 //!
-//! Fronta se tu nepoužívá schválně. Prototyp ji měl a znamenala tohle: při
-//! tažení scrollbarem přes knihovnu se do ní zařadily tisíce fotek, a po
-//! puštění handle se těch patnáct, na které se člověk skutečně díval, dostalo
-//! na řadu až za několika tisíci mrtvými požadavky. Sedm sekund prázdných
-//! dlaždic.
+//! A queue is deliberately not used here. The prototype had one and it meant
+//! this: dragging the scrollbar across a library enqueued thousands of
+//! photographs, and once the handle was released, the fifteen somebody was
+//! actually looking at came up behind several thousand dead requests. Seven
+//! seconds of blank tiles.
 //!
-//! **Úloha** ([`Tasks`]) je opak: sken složky, generování náhledů, export.
-//! Doběhne do konce nebo do výslovného zrušení, hlásí průběh a nesmí zmizet
-//! bez povšimnutí, když selže.
+//! A **task** ([`Tasks`]) is the opposite: scanning a folder, generating
+//! thumbnails, exporting. It runs to the end or to an explicit cancellation,
+//! reports progress, and must not disappear unnoticed when it fails.
 
 use crossbeam_channel::{Receiver, Sender};
 use std::collections::HashSet;
@@ -21,23 +21,24 @@ use std::hash::Hash;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
-/// Kolik vláken nechat na práci, aby zbylo na UI a na systém.
+/// How many threads to leave to the work, so the UI and the system still
+/// get some.
 pub fn worker_count() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get().saturating_sub(2).max(1))
         .unwrap_or(4)
 }
 
-// ---------------------------------------------------------------- seznam přání
+// -------------------------------------------------------------------- wishlist
 
 struct WishState<K> {
-    /// Skupiny podle priority; nižší index se obsluhuje dřív.
+    /// Groups by priority; a lower index is served first.
     lanes: Vec<Vec<K>>,
-    /// Co právě drží nějaké vlákno.
+    /// What some thread is holding right now.
     running: HashSet<K>,
-    /// Co už bylo hotové a odesláno. Bez tohohle by vlákno dokončilo položku,
-    /// volající by ji ještě nestihl převzít, příští přání by ji obsahovalo
-    /// znovu — a jiné vlákno by ji udělalo podruhé.
+    /// What is already done and sent. Without this, a thread would finish an
+    /// item, the caller would not have collected it yet, the next wish would
+    /// contain it again — and another thread would do it a second time.
     done: HashSet<K>,
     stop: bool,
 }
@@ -59,7 +60,7 @@ impl<K: Eq + Hash + Clone> WishState<K> {
     }
 }
 
-/// Bazén vláken, který dělá jen to, co je právě na seznamu.
+/// A thread pool that does only what is on the list right now.
 #[derive(Debug)]
 pub struct Wishlist<K, V> {
     shared: Arc<WishShared<K>>,
@@ -82,8 +83,9 @@ where
     K: Eq + Hash + Clone + Send + Sync + 'static,
     V: Send + 'static,
 {
-    /// `work` dostane klíč a vrátí výsledek, nebo `None`, když to nešlo.
-    /// Neúspěch se pamatuje, aby se totéž nezkoušelo donekonečna dokola.
+    /// `work` is handed a key and returns a result, or `None` when it could
+    /// not be done. A failure is remembered, so the same thing is not
+    /// attempted over and over forever.
     pub fn new<F>(threads: usize, work: F) -> Self
     where
         F: Fn(&K) -> Option<V> + Send + Sync + 'static,
@@ -106,9 +108,9 @@ where
         Self { shared, rx }
     }
 
-    /// Přepíše seznam. Volá se tak často, jak je potřeba — klidně každý snímek.
+    /// Overwrites the list. Called as often as needed — every frame is fine.
     pub fn wish(&self, lanes: Vec<Vec<K>>) {
-        let mut state = self.shared.state.lock().expect("otrávený zámek");
+        let mut state = self.shared.state.lock().expect("poisoned lock");
         if state.lanes == lanes {
             return;
         }
@@ -118,8 +120,8 @@ where
         self.shared.wake.notify_all();
     }
 
-    /// Vybere hotové, nejvýš `limit` najednou. Volající si tím řídí, kolik
-    /// práce si na sebe naloží v jednom snímku.
+    /// Collects what is finished, at most `limit` at a time. That is how the
+    /// caller decides how much work it takes on in one frame.
     pub fn drain(&self, limit: usize) -> Vec<(K, V)> {
         let mut out = Vec::new();
         while out.len() < limit {
@@ -132,23 +134,23 @@ where
         out
     }
 
-    /// Zapomene, že se klíč už udělal. Volá se, když výsledek vypadl z cache
-    /// a bude potřeba znovu.
+    /// Forgets that a key was done. Called when the result fell out of the
+    /// cache and will be needed again.
     pub fn forget(&self, key: &K) {
         self.shared
             .state
             .lock()
-            .expect("otrávený zámek")
+            .expect("poisoned lock")
             .done
             .remove(key);
     }
 
-    /// Kolik položek je právě rozpracovaných.
+    /// How many items are in flight right now.
     pub fn running(&self) -> usize {
         self.shared
             .state
             .lock()
-            .expect("otrávený zámek")
+            .expect("poisoned lock")
             .running
             .len()
     }
@@ -173,7 +175,7 @@ where
     std::thread::spawn(move || {
         loop {
             let key = {
-                let mut state = shared.state.lock().expect("otrávený zámek");
+                let mut state = shared.state.lock().expect("poisoned lock");
                 loop {
                     if state.stop {
                         return;
@@ -183,13 +185,13 @@ where
                         break key;
                     }
 
-                    state = shared.wake.wait(state).expect("otrávený zámek");
+                    state = shared.wake.wait(state).expect("poisoned lock");
                 }
             };
 
             let value = work(&key);
             {
-                let mut state = shared.state.lock().expect("otrávený zámek");
+                let mut state = shared.state.lock().expect("poisoned lock");
                 state.running.remove(&key);
                 state.done.insert(key.clone());
             }
@@ -203,9 +205,9 @@ where
     });
 }
 
-// ---------------------------------------------------------------------- úlohy
+// ----------------------------------------------------------------------- tasks
 
-/// Podává úloze zprávu, že už ji nikdo nechce.
+/// Tells a task that nobody wants it any more.
 #[derive(Debug, Clone, Default)]
 pub struct Cancel(Arc<AtomicBool>);
 
@@ -219,7 +221,7 @@ impl Cancel {
     }
 }
 
-/// Kudy úloha hlásí, jak jí to jde.
+/// How a task reports on how it is getting on.
 #[derive(Debug, Clone)]
 pub struct Progress {
     id: u64,
@@ -239,7 +241,7 @@ impl Progress {
     }
 }
 
-/// Jak na tom úloha je. Tohle vidí uživatel ve stavovém řádku.
+/// How a task stands. This is what a person sees in the status bar.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskStatus {
     pub id: u64,
@@ -249,12 +251,12 @@ pub struct TaskStatus {
     pub message: String,
     pub finished: bool,
     pub cancelled: bool,
-    /// Proč to spadlo. Úloha nikdy neselže mlčky.
+    /// Why it failed. A task never fails in silence.
     pub error: Option<String>,
 }
 
 impl TaskStatus {
-    /// Podíl hotového, když je známý celek.
+    /// The fraction done, when the whole is known.
     pub fn fraction(&self) -> Option<f32> {
         self.total
             .filter(|total| *total > 0)
@@ -262,7 +264,7 @@ impl TaskStatus {
     }
 }
 
-/// Dlouho běžící práce s průběhem a rušením.
+/// Long-running work with progress and cancellation.
 #[derive(Debug, Clone, Default)]
 pub struct Tasks {
     board: Arc<Mutex<Vec<TaskStatus>>>,
@@ -282,7 +284,7 @@ impl Tasks {
         let id = self.next.fetch_add(1, Ordering::Relaxed) + 1;
         let title = title.into();
         let cancel = Cancel::default();
-        self.board.lock().expect("otrávený zámek").push(TaskStatus {
+        self.board.lock().expect("poisoned lock").push(TaskStatus {
             id,
             title: title.clone(),
             done: 0,
@@ -294,7 +296,7 @@ impl Tasks {
         });
         self.cancels
             .lock()
-            .expect("otrávený zámek")
+            .expect("poisoned lock")
             .push((id, cancel.clone()));
 
         let board = self.board.clone();
@@ -315,11 +317,11 @@ impl Tasks {
             }
 
             match outcome {
-                Ok(()) => tracing::info!(%id, %title, "úloha hotová"),
-                // Selhaná úloha se musí objevit; tohle je to místo, kde se
-                // aplikace typicky tváří, že je všechno v pořádku.
+                Ok(()) => tracing::info!(%id, %title, "task finished"),
+                // A failed task has to surface; this is the spot where an
+                // application typically pretends all is well.
                 Err(error) => {
-                    tracing::error!(%id, %title, error = %format!("{error:#}"), "úloha selhala")
+                    tracing::error!(%id, %title, error = %format!("{error:#}"), "task failed")
                 }
             }
         });
@@ -328,10 +330,10 @@ impl Tasks {
     }
 
     pub fn snapshot(&self) -> Vec<TaskStatus> {
-        self.board.lock().expect("otrávený zámek").clone()
+        self.board.lock().expect("poisoned lock").clone()
     }
 
-    /// Běžící úlohy, tedy to, co patří do stavového řádku.
+    /// Running tasks, which is what belongs in the status bar.
     pub fn running(&self) -> Vec<TaskStatus> {
         self.snapshot()
             .into_iter()
@@ -339,7 +341,7 @@ impl Tasks {
             .collect()
     }
 
-    /// Úlohy, které selhaly a člověk o nich ještě neví.
+    /// Tasks that failed and that nobody has been told about yet.
     pub fn failures(&self) -> Vec<TaskStatus> {
         self.snapshot()
             .into_iter()
@@ -351,7 +353,7 @@ impl Tasks {
         if let Some((_, cancel)) = self
             .cancels
             .lock()
-            .expect("otrávený zámek")
+            .expect("poisoned lock")
             .iter()
             .find(|(task, _)| *task == id)
         {
@@ -359,9 +361,9 @@ impl Tasks {
         }
     }
 
-    /// Uklidí dokončené úlohy, o kterých už není co říct.
+    /// Clears away finished tasks there is nothing left to say about.
     pub fn forget_finished(&self) {
-        let mut board = self.board.lock().expect("otrávený zámek");
+        let mut board = self.board.lock().expect("poisoned lock");
         board.retain(|task| !task.finished || task.error.is_some());
     }
 }
@@ -385,7 +387,7 @@ mod tests {
     }
 
     #[test]
-    fn seznam_prani_udela_co_je_na_nem() {
+    fn a_wishlist_does_what_is_on_it() {
         let pool: Wishlist<u32, u32> = Wishlist::new(4, |key| Some(key * 2));
         pool.wish(vec![vec![1, 2, 3]]);
 
@@ -399,9 +401,9 @@ mod tests {
     }
 
     #[test]
-    fn co_ze_seznamu_vypadne_se_nikdy_neudela() {
-        // Tohle je ta chyba, kvůli které prototyp čekal sedm sekund: práce
-        // objednaná při tažení se musí dát zahodit dřív, než se udělá.
+    fn what_drops_off_the_list_is_never_done() {
+        // This is the fault that cost the prototype seven seconds: work
+        // ordered while dragging has to be discardable before it is done.
         let started = Arc::new(Mutex::new(Vec::new()));
         let seen = started.clone();
         let pool: Wishlist<u32, u32> = Wishlist::new(1, move |key| {
@@ -412,19 +414,19 @@ mod tests {
 
         pool.wish(vec![vec![1]]);
         assert!(wait_for(|| !started.lock().unwrap().is_empty()));
-        // Ještě než první doběhne, přepíšeme přání úplně jinam.
+        // Before the first one finishes, the wish is rewritten elsewhere.
         pool.wish(vec![vec![99]]);
 
         assert!(wait_for(|| started.lock().unwrap().contains(&99)));
         let done = started.lock().unwrap().clone();
         assert!(
             !done.contains(&2),
-            "zahozené přání se nesmí udělat: {done:?}"
+            "a discarded wish must not be carried out: {done:?}"
         );
     }
 
     #[test]
-    fn prednost_ma_prvni_skupina() {
+    fn the_first_group_takes_precedence() {
         let order = Arc::new(Mutex::new(Vec::new()));
         let seen = order.clone();
         let pool: Wishlist<u32, u32> = Wishlist::new(1, move |key| {
@@ -434,11 +436,15 @@ mod tests {
         pool.wish(vec![vec![10], vec![20, 21]]);
 
         assert!(wait_for(|| order.lock().unwrap().len() == 3));
-        assert_eq!(order.lock().unwrap()[0], 10, "přednostní skupina jde první");
+        assert_eq!(
+            order.lock().unwrap()[0],
+            10,
+            "the priority group goes first"
+        );
     }
 
     #[test]
-    fn totez_se_nedela_dvakrat() {
+    fn the_same_thing_is_not_done_twice() {
         let count = Arc::new(AtomicU64::new(0));
         let counter = count.clone();
         let pool: Wishlist<u32, u32> = Wishlist::new(4, move |key| {
@@ -452,13 +458,13 @@ mod tests {
 
         assert!(wait_for(|| count.load(Ordering::Relaxed) >= 2));
         std::thread::sleep(Duration::from_millis(50));
-        assert_eq!(count.load(Ordering::Relaxed), 2, "každý klíč právě jednou");
+        assert_eq!(count.load(Ordering::Relaxed), 2, "every key exactly once");
     }
 
     #[test]
-    fn uloha_hlasi_prubeh_a_dobehne() {
+    fn a_task_reports_progress_and_finishes() {
         let tasks = Tasks::new();
-        let id = tasks.spawn("sken", |_, progress| {
+        let id = tasks.spawn("scan", |_, progress| {
             for done in 1..=4 {
                 progress.report(done, Some(4), format!("krok {done}"));
             }
@@ -477,23 +483,23 @@ mod tests {
     }
 
     #[test]
-    fn selhani_ulohy_se_nikde_neztrati() {
+    fn a_failed_task_is_lost_nowhere() {
         let tasks = Tasks::new();
-        tasks.spawn("rozbitá", |_, _| anyhow::bail!("prasklo to"));
+        tasks.spawn("broken", |_, _| anyhow::bail!("it burst"));
         assert!(wait_for(|| !tasks.failures().is_empty()));
         assert!(
             tasks.failures()[0]
                 .error
                 .as_ref()
                 .unwrap()
-                .contains("prasklo to")
+                .contains("it burst")
         );
     }
 
     #[test]
-    fn zruseni_uloha_pozna() {
+    fn a_task_notices_cancellation() {
         let tasks = Tasks::new();
-        let id = tasks.spawn("dlouhá", |cancel, _| {
+        let id = tasks.spawn("long one", |cancel, _| {
             while !cancel.cancelled() {
                 std::thread::sleep(Duration::from_millis(2));
             }

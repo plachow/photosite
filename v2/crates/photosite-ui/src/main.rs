@@ -1,12 +1,12 @@
 //! PhotoSite.
 //!
-//! Tahle crate je jediná, která ví o egui a o GPU. Všechno ostatní —
-//! katalog, cesty, nastavení, motivy, úlohy, příkazy — bydlí v jádře a dá se
-//! otestovat bez okna.
+//! This crate is the only one that knows about egui and about the GPU.
+//! Everything else — the catalogue, paths, settings, themes, tasks, commands
+//! — lives in the core and can be tested without a window.
 //!
-//! Nejsou tu žádné konstanty ovlivňující vzhled ani chování. Všechno jde
-//! z [`Settings`], protože co je zadrátované, to nejde nastavit — a co nejde
-//! nastavit, to se jednou přepisuje.
+//! There are no constants here affecting looks or behaviour. It all comes
+//! from [`Settings`], because what is hard-wired cannot be configured — and
+//! what cannot be configured gets rewritten sooner or later.
 
 mod docks;
 mod grid;
@@ -26,10 +26,10 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
-/// Co se z obrázku chce. Pořadí je zároveň priorita.
+/// What is wanted from an image. The order is also the priority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Want {
-    /// Náhled z EXIFu: rozmazaný, ale hned.
+    /// The EXIF thumbnail: blurry, but immediate.
     Quick,
     Thumb,
     Preview,
@@ -37,7 +37,7 @@ pub enum Want {
 
 pub type Key = (PathBuf, Want);
 
-/// Hotový obrázek čekající na nahrání do GPU.
+/// A finished image waiting to be uploaded to the GPU.
 pub struct Pixels {
     pub size: [usize; 2],
     pub rgb: Vec<u8>,
@@ -82,7 +82,7 @@ fn main() -> Result<()> {
     if reset {
         settings.reset_all();
         settings.save(&paths)?;
-        tracing::info!("nastavení vráceno na výchozí");
+        tracing::info!("settings returned to their defaults");
     }
 
     i18n::set_language(&i18n::negotiate(
@@ -114,10 +114,10 @@ fn main() -> Result<()> {
             Ok(Box::new(app))
         }),
     )
-    .map_err(|error| anyhow::anyhow!("okno se nepodařilo otevřít: {error}"))
+    .map_err(|error| anyhow::anyhow!("the window could not be opened: {error}"))
 }
 
-/// Uzel stromu složek. Děti se načtou až při rozbalení.
+/// A node of the folder tree. Children are loaded only on expansion.
 pub struct Node {
     pub path: PathBuf,
     pub name: String,
@@ -182,33 +182,34 @@ pub struct App {
     pub wanted_preview: Option<PathBuf>,
     pub blank: usize,
     pub unsharp: usize,
-    /// Kolik textur si mřížka právě přeje udržet. Strop cache nesmí být pod
-    /// tímhle číslem, jinak se každý snímek něco vyhodí a hned znovu dekóduje.
+    /// How many textures the grid currently wishes to keep. The cache
+    /// ceiling must not fall below this number, or something is evicted every
+    /// frame and decoded again at once.
     pub needed: usize,
 
-    /// Motiv, který se právě kreslí. Přepočítá se, když se změní nastavení
-    /// nebo když systém přepne mezi světlým a tmavým režimem.
+    /// The theme currently being drawn. Recomputed when the settings change
+    /// or when the system switches between light and dark mode.
     theme: &'static palettes::Theme,
     status: String,
     show_diagnostics: bool,
     show_settings: bool,
-    /// Rozložení doků, přečtené z nastavení. Zapisuje se zpátky, jakmile
-    /// někdo pohne dělítkem.
+    /// The dock layout, read from the settings. Written back as soon as
+    /// somebody moves a splitter.
     pub layout: layout::Layout,
-    /// Které plochy jsou schované.
+    /// Which panes are hidden.
     pub hidden: Vec<String>,
-    /// Pro kterou fotku platí vyrobené řádky s informacemi.
+    /// Which photograph the prepared detail rows belong to.
     pub info_of: Option<PathBuf>,
     pub info_rows: Vec<(String, String)>,
-    /// Otevřený dialog na výběr složky, nejvýš jeden.
+    /// The open folder dialog, at most one.
     folder_dialog: Option<picker::Picker>,
-    /// Složka, na kterou má strom vlevo odrolovat. Nastaví se při otevření
-    /// a strom si ji hned vezme.
+    /// The folder the tree on the left should scroll to. Set on opening, and
+    /// taken by the tree straight away.
     pub scroll_tree_to: Option<PathBuf>,
 
-    /// Jak se dá dekódovacím vláknům říct, že se má překreslit. Bez toho by
-    /// UI muselo pravidelně kontrolovat, jestli něco nedorazilo, a to znamená
-    /// budit se pořád dokola i když se nic neděje.
+    /// How the decoding threads can ask for a repaint. Without it the UI
+    /// would have to check regularly whether anything had arrived, which
+    /// means waking over and over even when nothing is happening.
     waker: Arc<OnceLock<egui::Context>>,
 
     pub selftest: bool,
@@ -217,15 +218,15 @@ pub struct App {
     started: std::time::Instant,
 }
 
-// TextureHandle Debug neimplementuje, takže si ho napíšeme sami — a rovnou
-// tak, aby vypisoval to, co je při ladění zajímavé.
+// TextureHandle does not implement Debug, so we write our own — and write it
+// to print what is actually interesting while debugging.
 impl std::fmt::Debug for App {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("App")
             .field("folder", &self.folder)
-            .field("fotek", &self.photos.len())
-            .field("textur", &self.textures.len())
-            .field("prázdných", &self.blank)
+            .field("photos", &self.photos.len())
+            .field("textures", &self.textures.len())
+            .field("blank", &self.blank)
             .finish()
     }
 }
@@ -254,15 +255,15 @@ impl App {
             let outcome = match outcome {
                 Ok(pixels) => pixels,
                 Err(error) => {
-                    // Nečitelný soubor je v knihovně o desítkách tisíc fotek
-                    // normální jev. Tichý není.
-                    tracing::warn!(path = %path.display(), ?want, error = %format!("{error:#}"), "obrázek nelze načíst");
+                    // In a library of tens of thousands, an unreadable file
+                    // is ordinary. A silent one is not.
+                    tracing::warn!(path = %path.display(), ?want, error = %format!("{error:#}"), "the image cannot be loaded");
                     None
                 }
             };
 
-            // Probudit UI, aby si výsledek vyzvedlo. Jinak by muselo koukat,
-            // jestli něco nepřišlo, a to stojí procesor i v naprostém klidu.
+            // Wake the UI so it collects the result. Otherwise it would have
+            // to keep looking, and that costs processor even at rest.
             if let Some(ctx) = wake.get() {
                 ctx.request_repaint();
             }
@@ -316,10 +317,11 @@ impl App {
         app
     }
 
-    /// Přepočítá motiv a prožene ho skrz egui. Volá se při startu a po každé
-    /// změně, která se vzhledu týká.
+    /// Recomputes the theme and runs it through egui. Called at startup and
+    /// after every change that concerns the look.
     fn dress(&mut self, ctx: &egui::Context) {
-        // Dekódovací vlákna potřebují kontext, aby si mohla říct o překreslení.
+        // The decoding threads need the context so they can ask for a
+        // repaint.
         let _ = self.waker.set(ctx.clone());
         let system_dark = ctx.system_theme().map(|theme| theme == egui::Theme::Dark);
         self.theme = palettes::resolve(&self.settings.appearance, system_dark);
@@ -360,14 +362,15 @@ impl App {
             count = photos.len() as i64,
             ms = started.elapsed().as_secs_f64() * 1000.0
         );
-        tracing::info!(folder = %folder.display(), pocet = photos.len(), "složka otevřena");
+        tracing::info!(folder = %folder.display(), count = photos.len(), "folder opened");
         self.photos = photos;
         self.selected = None;
         self.settings.gallery.last_folder = Some(folder.to_string_lossy().into_owned());
 
-        // Strom vlevo jde za galerií, ať se do složky člověk dostal odkudkoliv.
-        // Bez tohohle svítí v mřížce sedm tisíc fotek a strom zatím ukazuje
-        // zabalené kořeny — zvýrazněná složka je někde uvnitř a není vidět.
+        // The tree on the left follows the gallery, however somebody got to
+        // the folder. Without this, seven thousand photographs glow in the
+        // grid while the tree still shows collapsed roots — the highlighted
+        // folder is somewhere inside and cannot be seen.
         let mut roots = std::mem::take(&mut self.roots);
         reveal(&mut roots, &folder);
         self.roots = roots;
@@ -375,7 +378,7 @@ impl App {
         self.folder = Some(folder);
     }
 
-    /// Zeptá se na složku nativním dialogem.
+    /// Asks for a folder with the native dialog.
     fn ask_for_folder(&mut self, ctx: &egui::Context) {
         if self.folder_dialog.is_some() {
             return;
@@ -388,8 +391,8 @@ impl App {
         self.folder_dialog = Some(picker::ask(ctx, t!("dialog-pick-folder"), start));
     }
 
-    /// Vyzvedne, co dialog vrátil. Zrušený dialog se nikam nehlásí — zavřít
-    /// ho je odpověď jako každá jiná, ne chyba.
+    /// Collects whatever the dialog returned. A cancelled dialog is reported
+    /// nowhere — closing it is an answer like any other, not a failure.
     fn take_picked_folder(&mut self) {
         let Some(dialog) = &self.folder_dialog else {
             return;
@@ -413,7 +416,8 @@ impl App {
         self.textures.contains_key(&(path.to_path_buf(), want))
     }
 
-    /// Označí texturu jako právě použitou, aby ji LRU nevyhodila zpod ruky.
+    /// Marks a texture as just used, so the LRU does not evict it from under
+    /// our hands.
     pub fn touch(&mut self, key: &Key) {
         if let Some(at) = self.order.iter().position(|existing| existing == key) {
             let key = self.order.remove(at);
@@ -421,8 +425,8 @@ impl App {
         }
     }
 
-    /// Vrací, kolik obrázků dorazilo — podle toho se pozná, jestli se ještě
-    /// něco děje, nebo se dá přestat překreslovat.
+    /// Returns how many images arrived — that is how we know whether
+    /// anything is still happening or repainting can stop.
     fn collect(&mut self, ctx: &egui::Context) -> usize {
         let uploads = self.settings.loading.uploads_per_frame.clamp(1, 4096) as usize;
         let delivered = self.images.drain(uploads);
@@ -434,8 +438,9 @@ impl App {
             self.order.retain(|existing| existing != &key);
             self.order.push(key.clone());
 
-            // Jakmile je ostrá verze na místě, ta rychlá z EXIFu je k ničemu.
-            // Držet obojí znamená dvojnásobný tlak na cache úplně zadarmo.
+            // Once the sharp version is in place, the quick one from EXIF is
+            // no use. Keeping both doubles the pressure on the cache for
+            // nothing.
             if key.1 == Want::Thumb {
                 let quick = (key.0.clone(), Want::Quick);
                 self.textures.remove(&quick);
@@ -449,7 +454,7 @@ impl App {
         while self.order.len() > budget {
             let oldest = self.order.remove(0);
             self.textures.remove(&oldest);
-            // Vyhozenou texturu bude potřeba vyrobit znovu.
+            // An evicted texture will have to be made again.
             self.images.forget(&oldest);
         }
 
@@ -493,12 +498,12 @@ impl App {
             }
             "help.diagnostics" => self.show_diagnostics = !self.show_diagnostics,
             "file.open_folder" => self.ask_for_folder(ctx),
-            other => tracing::warn!(prikaz = other, "příkaz bez obsluhy"),
+            other => tracing::warn!(command = other, "command with no handler"),
         }
     }
 
-    /// Schová nebo vrátí plochu. Schované plochy jdou do nastavení, aby si
-    /// aplikace pamatovala, co má člověk zavřené.
+    /// Hides a pane or brings it back. Hidden panes go into the settings, so
+    /// the application remembers what somebody has closed.
     fn toggle_dock(&mut self, id: &str) {
         match self.hidden.iter().position(|hidden| hidden == id) {
             Some(at) => {
@@ -510,7 +515,8 @@ impl App {
         self.settings.window.docks_hidden = layout::hidden_to_text(&self.hidden);
     }
 
-    /// Meze bere z popisu polí, ne z čísel napsaných tady.
+    /// The limits come from the field descriptions, not from numbers written
+    /// here.
     fn resize_tiles(&mut self, factor: f64) {
         let (min, max) = match TUNABLES
             .iter()
@@ -524,7 +530,8 @@ impl App {
             (self.settings.gallery.tile_size * factor).clamp(min, max);
     }
 
-    /// Zkratky se čtou z registru, ne z natvrdo napsaných podmínek.
+    /// Shortcuts are read from the registry, not from hard-written
+    /// conditions.
     fn shortcuts(&mut self, ctx: &egui::Context) {
         let pressed: Vec<Shortcut> = ctx.input(|input| {
             input
@@ -549,28 +556,30 @@ impl App {
 
         for shortcut in pressed {
             if let Some(command) = self.bindings.command_for(&shortcut) {
-                tracing::debug!(prikaz = command.id, "zkratka");
+                tracing::debug!(command = command.id, "shortcut");
                 self.run(command.id, ctx);
             }
         }
     }
 }
 
-/// Strop cache textur.
+/// The texture cache ceiling.
 ///
-/// Nastavená hodnota je přání, ne zákon: pod to, co je právě na obrazovce, jít
-/// nesmí. Menší strop totiž neznamená "míň paměti", ale nekonečné kolo — každý
-/// snímek se něco vyhodí, hned se to zase objedná a znovu dekóduje. Přesně
-/// tohle spálilo tři čtvrtiny jádra při 80px dlaždicích a stropu 300.
+/// The configured value is a wish, not a law: it must not go below what is
+/// on screen right now. A smaller ceiling does not mean "less memory" but an
+/// endless round — every frame something is evicted, ordered again at once
+/// and decoded again. This is exactly what burned three quarters of a core
+/// with 80px tiles and a ceiling of 300.
 fn effective_budget(configured: i64, needed: usize) -> usize {
     let configured = configured.clamp(16, 65_536) as usize;
-    // Čtvrtina navrch, aby se cache nedotýkala stropu při každém posunu.
+    // A quarter on top, so the cache does not touch the ceiling on every
+    // scroll.
     let floor = needed + needed / 4 + 16;
     if configured < floor {
         tracing::debug!(
             configured,
             floor,
-            "strop cache zvednut na velikost obrazovky"
+            "cache ceiling raised to the size of the screen"
         );
     }
 
@@ -591,7 +600,7 @@ impl eframe::App for App {
         self.take_picked_folder();
         self.shortcuts(&ctx);
 
-        // Systém mohl mezitím přepnout na tmavý režim.
+        // The system may have switched to dark mode in the meantime.
         if self.settings.appearance.theme == palettes::AUTOMATIC {
             let system_dark = ctx.system_theme().map(|theme| theme == egui::Theme::Dark);
             if palettes::resolve(&self.settings.appearance, system_dark).id != self.theme.id {
@@ -614,8 +623,9 @@ impl eframe::App for App {
         self.diagnostics_window(&ctx);
         self.settings_window(&ctx);
 
-        // Seznam přání se přepíše až tady, když je jasné, co je vidět a co je
-        // vybrané. Všechno, co v něm není, se přestane dekódovat.
+        // The wishlist is overwritten only here, once it is clear what is
+        // visible and what is selected. Anything not on it stops being
+        // decoded.
         self.images.wish(vec![
             std::mem::take(&mut self.wanted_quick)
                 .into_iter()
@@ -632,11 +642,12 @@ impl eframe::App for App {
                 .collect(),
         ]);
 
-        // Hned další snímek jen tehdy, když se opravdu něco děje. Podmínka
-        // "ještě něco chybí" tu byla dřív a byla to past: když se chybějící
-        // dlaždice doplnit nemohla, točila se aplikace naprázdno na plné
-        // obrátky. O hotovou práci se hlásí vlákna sama, takže interval níž
-        // je jen pojistka pro případ, že by se to probuzení někde ztratilo.
+        // Another frame straight away only when something really is
+        // happening. The condition "something is still missing" was here
+        // before and it was a trap: when a missing tile could not be filled,
+        // the application span at full speed for nothing. The threads
+        // announce finished work themselves, so the interval below is only a
+        // safety net in case a wake-up were lost.
         if delivered > 0 {
             ctx.request_repaint();
         } else {
@@ -645,7 +656,7 @@ impl eframe::App for App {
             ));
         }
 
-        // Stav okna se sbírá každý snímek, ukládá se až při zavření.
+        // The window state is gathered every frame and saved only on close.
         ctx.input(|input| {
             if let Some(rect) = input.viewport().inner_rect {
                 self.settings.window.width = rect.width() as f64;
@@ -680,9 +691,10 @@ impl App {
                 self.run("view.recursive", ctx);
             }
 
-            // Tlačítka i jejich pořadí se berou z registru příkazů. Který
-            // příkaz na lištu patří, si říká sám — kreslicí vrstva se nesmí
-            // ptát po jménech, jinak se u každého dalšího přepisuje.
+            // The buttons and their order come from the command registry.
+            // Which command belongs on the toolbar it says itself — the
+            // drawing layer must not ask by name, or it gets rewritten with
+            // every command added after it.
             let mut previous: Option<Group> = None;
             for command in commands::COMMANDS.iter().filter(|command| command.toolbar) {
                 if previous != Some(command.group) {
@@ -755,8 +767,9 @@ impl App {
         self.show_diagnostics = open;
     }
 
-    /// Obrazovka nastavení se skládá z popisu polí, ne z ručně psaných
-    /// ovládacích prvků. Přidat volbu znamená přidat řádek do `TUNABLES`.
+    /// The settings screen is assembled from the field descriptions, not
+    /// from hand-written controls. Adding an option means adding a line to
+    /// `TUNABLES`.
     fn settings_window(&mut self, ctx: &egui::Context) {
         if !self.show_settings {
             return;
@@ -774,7 +787,8 @@ impl App {
                     .max_height(440.0)
                     .show(ui, |ui| {
                         for tunable in TUNABLES {
-                            // Stav okna není předvolba, do nastavení nepatří.
+                            // Window state is not a preference and does not
+                            // belong in the settings.
                             if tunable.kind == Kind::State {
                                 continue;
                             }
@@ -800,7 +814,7 @@ impl App {
         }
 
         if changed && let Err(error) = self.settings.save(&self.paths) {
-            tracing::error!(error = %format!("{error:#}"), "nastavení se nepodařilo uložit");
+            tracing::error!(error = %format!("{error:#}"), "the settings could not be saved");
         }
     }
 
@@ -864,13 +878,13 @@ impl App {
         match self.settings.set(path, value) {
             Ok(()) => true,
             Err(error) => {
-                tracing::warn!(path, error = %format!("{error:#}"), "hodnotu nelze nastavit");
+                tracing::warn!(path, error = %format!("{error:#}"), "the value cannot be set");
                 false
             }
         }
     }
 
-    /// Vyfotí okno, jakmile jsou dlaždice na místě, a skončí.
+    /// Photographs the window once the tiles are in place, then quits.
     fn grab(&mut self, ctx: &egui::Context) {
         let Some(path) = self.shot.clone() else {
             return;
@@ -893,9 +907,9 @@ impl App {
                 .flat_map(|color| color.to_array())
                 .collect();
             match write_png(&path, &rgba, image.size[0] as u32, image.size[1] as u32) {
-                Ok(()) => tracing::info!(path = %path.display(), "snímek uložen"),
+                Ok(()) => tracing::info!(path = %path.display(), "screenshot saved"),
                 Err(error) => {
-                    tracing::error!(error = %format!("{error:#}"), "snímek se nepodařilo uložit")
+                    tracing::error!(error = %format!("{error:#}"), "the screenshot could not be saved")
                 }
             }
 
@@ -903,10 +917,11 @@ impl App {
         }
     }
 
-    /// Samokontrola: otevři složku, chvíli běž a ověř, že žádná viditelná
-    /// dlaždice nezůstala prázdná. Přesně tuhle vadu měl WPF benchmark, kde
-    /// jedna spolknutá výjimka způsobila, že se nevyrobil jediný náhled a
-    /// aplikace se přitom tvářila, že běží.
+    /// The self-check: open a folder, run for a while and verify that no
+    /// visible tile was left blank. This is exactly the fault the WPF
+    /// benchmark had, where one swallowed exception meant not a single
+    /// thumbnail was produced while the application looked like it was
+    /// running.
     fn run_selftest(&mut self, ctx: &egui::Context) {
         let elapsed = self.started.elapsed().as_secs_f64();
         if self.frames < 10 {
@@ -948,13 +963,13 @@ impl App {
 impl Drop for App {
     fn drop(&mut self) {
         if let Err(error) = self.settings.save(&self.paths) {
-            tracing::error!(error = %format!("{error:#}"), "nastavení se nepodařilo uložit");
+            tracing::error!(error = %format!("{error:#}"), "the settings could not be saved");
         }
     }
 }
 
-/// Uloží RGBA jako PNG. Vlastní zápis, aby si UI kvůli jednomu ladicímu
-/// přepínači netáhlo celý kodekový balík.
+/// Saves RGBA as a PNG. Written by hand so the UI does not drag in a whole
+/// codec package for one debugging switch.
 fn write_png(path: &Path, rgba: &[u8], width: u32, height: u32) -> Result<()> {
     use std::io::Write as _;
 
@@ -982,7 +997,7 @@ fn write_png(path: &Path, rgba: &[u8], width: u32, height: u32) -> Result<()> {
     header.extend_from_slice(&height.to_be_bytes());
     header.extend_from_slice(&[8, 6, 0, 0, 0]);
 
-    // Nekomprimované deflate bloky: kodek tu nepotřebujeme.
+    // Uncompressed deflate blocks: no codec needed here.
     let mut raw = Vec::with_capacity(rgba.len() + height as usize);
     for row in 0..height as usize {
         raw.push(0);
@@ -1015,11 +1030,11 @@ fn write_png(path: &Path, rgba: &[u8], width: u32, height: u32) -> Result<()> {
     Ok(())
 }
 
-/// Rozbalí strom až k dané složce a nechá ho tak.
+/// Expands the tree down to the given folder and leaves it that way.
 ///
-/// Kořenů, které složku obsahují, může být víc — na Windows je domovská
-/// složka pod `C:\` a zároveň sama kořenem. Rozbalí se proto všechny, ne jen
-/// první nalezený.
+/// More than one root may contain the folder — on Windows the home folder
+/// sits under `C:\` and is a root in its own right. So every match is
+/// expanded, not only the first.
 fn reveal(nodes: &mut [Node], folder: &Path) {
     for node in nodes {
         if !folder.starts_with(&node.path) {
@@ -1036,7 +1051,7 @@ fn reveal(nodes: &mut [Node], folder: &Path) {
     }
 }
 
-/// Kořeny stromu. Jediné místo, kde na platformě záleží.
+/// The roots of the tree. The one place where the platform matters.
 fn roots() -> Vec<Node> {
     let mut found = Vec::new();
     if let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) {
@@ -1086,105 +1101,111 @@ mod tests {
     use super::*;
 
     #[test]
-    fn strop_cache_nikdy_neklesne_pod_obrazovku() {
-        // Nastavení 300 při 400 potřebných texturách znamenalo nekonečné
-        // vyhazování a znovunačítání, tedy tři čtvrtiny jádra na prázdno.
+    fn the_cache_ceiling_never_drops_below_the_screen() {
+        // A setting of 300 against 400 needed textures meant endless
+        // eviction and reloading, that is three quarters of a core for
+        // nothing.
         assert!(effective_budget(300, 400) > 400);
         assert!(effective_budget(16, 1000) > 1000);
     }
 
     #[test]
-    fn vetsi_nastaveni_se_respektuje() {
+    fn a_larger_setting_is_respected() {
         assert_eq!(effective_budget(5000, 100), 5000);
     }
 
     #[test]
-    fn nesmyslne_hodnoty_neprojdou() {
+    fn nonsense_values_do_not_get_through() {
         assert!(effective_budget(-1, 0) >= 16);
         assert!(effective_budget(i64::MAX, 0) <= 65_536);
     }
 
-    fn dite<'a>(node: &'a Node, name: &str) -> &'a Node {
+    fn child<'a>(node: &'a Node, name: &str) -> &'a Node {
         node.children
             .as_ref()
-            .expect("nenačtené děti")
+            .expect("children not loaded")
             .iter()
             .find(|child| child.name == name)
-            .unwrap_or_else(|| panic!("ve stromu chybí {name}"))
+            .unwrap_or_else(|| panic!("{name} is missing from the tree"))
     }
 
     #[test]
-    fn strom_se_rozbali_az_k_otevrene_slozce() {
+    fn the_tree_expands_all_the_way_to_the_open_folder() {
         let dir = tempfile::tempdir().unwrap();
-        let cesta = dir.path().join("2019").join("leto");
-        std::fs::create_dir_all(cesta.join("more")).unwrap();
-        std::fs::create_dir_all(dir.path().join("2019").join("zima")).unwrap();
+        let path = dir.path().join("2019").join("summer");
+        std::fs::create_dir_all(path.join("sea")).unwrap();
+        std::fs::create_dir_all(dir.path().join("2019").join("winter")).unwrap();
         std::fs::create_dir_all(dir.path().join("2020")).unwrap();
 
         let mut roots = vec![Node::new(dir.path().to_owned())];
-        reveal(&mut roots, &cesta);
+        reveal(&mut roots, &path);
 
         assert!(roots[0].expanded);
-        let rok = dite(&roots[0], "2019");
-        assert!(rok.expanded, "cesta k cíli musí být rozbalená celá");
-        assert!(dite(rok, "leto").expanded);
+        let year = child(&roots[0], "2019");
+        assert!(
+            year.expanded,
+            "the path to the target has to be expanded all the way"
+        );
+        assert!(child(year, "summer").expanded);
 
-        // Sourozenci se nerozbalují. Rozbalit všechno, co je po cestě, znamená
-        // přečíst půlku disku kvůli jedné složce.
-        assert!(!dite(rok, "zima").expanded);
-        assert!(!dite(&roots[0], "2020").expanded);
+        // Siblings are not expanded. Expanding everything along the way
+        // means reading half the disk for one folder.
+        assert!(!child(year, "winter").expanded);
+        assert!(!child(&roots[0], "2020").expanded);
 
-        // A pod cíl se nesestupuje: co je v něm, se dozvíme, až o to někdo
-        // požádá kliknutím.
-        assert!(!dite(dite(rok, "leto"), "more").expanded);
+        // And below the target we do not descend: what is inside it we learn
+        // when somebody asks by clicking.
+        assert!(!child(child(year, "summer"), "sea").expanded);
     }
 
     #[test]
-    fn koren_mimo_cestu_zustane_zavreny() {
+    fn a_root_off_the_path_stays_closed() {
         let dir = tempfile::tempdir().unwrap();
-        let jinde = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join("fotky")).unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("photos")).unwrap();
 
         let mut roots = vec![
-            Node::new(jinde.path().to_owned()),
+            Node::new(elsewhere.path().to_owned()),
             Node::new(dir.path().to_owned()),
         ];
-        reveal(&mut roots, &dir.path().join("fotky"));
+        reveal(&mut roots, &dir.path().join("photos"));
 
-        assert!(!roots[0].expanded, "cizí kořen se neotevírá");
-        assert!(roots[0].children.is_none(), "ani nečte z disku");
+        assert!(!roots[0].expanded, "a foreign root is not opened");
+        assert!(roots[0].children.is_none(), "nor read from the disk");
         assert!(roots[1].expanded);
     }
 
     #[test]
-    fn slozka_ktera_uz_neni_strom_nerozhodi() {
+    fn a_folder_that_is_gone_does_not_upset_the_tree() {
         let dir = tempfile::tempdir().unwrap();
         let mut roots = vec![Node::new(dir.path().to_owned())];
-        reveal(&mut roots, &dir.path().join("smazano").join("hloubeji"));
+        reveal(&mut roots, &dir.path().join("deleted").join("deeper"));
 
-        // Kořen se otevře, protože cesta pod něj opravdu míří; hlouběji už
-        // není co najít a tím to končí — ne pádem.
+        // The root opens, because the path really does point under it;
+        // deeper there is nothing to find and that is where it ends — not in
+        // a panic.
         assert!(roots[0].expanded);
-        assert!(dite_neni(&roots[0], "smazano"));
+        assert!(has_no_child(&roots[0], "deleted"));
     }
 
-    /// Filtr záznamu bere cíle podle jména crate, a to u binárky není jméno
-    /// balíčku (`photosite_ui`), ale jméno cíle (`photosite`). Než se to
-    /// spravilo, nešel do logu jediný řádek z aplikace samotné — a poznat to
-    /// nešlo, protože varování a chyby propadly obecnou úrovní na konci.
+    /// The log filter matches targets by crate name, and for a binary that
+    /// is not the package name (`photosite_ui`) but the target name
+    /// (`photosite`). Until that was fixed, not one line from the application
+    /// itself reached the log — and there was no way to tell, because
+    /// warnings and errors fell through the general level at the end.
     #[test]
-    fn zaznam_z_aplikace_projde_filtrem() {
-        let jmeno = module_path!().split("::").next().expect("prázdná cesta");
+    fn the_applications_own_log_gets_through_the_filter() {
+        let name = module_path!().split("::").next().expect("empty path");
         for verbose in [false, true] {
             let filter = diagnostics::default_filter(verbose);
             assert!(
-                filter.contains(&format!("{jmeno}=")),
-                "výchozí filtr nezná {jmeno}: {filter}"
+                filter.contains(&format!("{name}=")),
+                "the default filter does not know {name}: {filter}"
             );
         }
     }
 
-    fn dite_neni(node: &Node, name: &str) -> bool {
+    fn has_no_child(node: &Node, name: &str) -> bool {
         node.children
             .as_ref()
             .is_some_and(|children| !children.iter().any(|child| child.name == name))

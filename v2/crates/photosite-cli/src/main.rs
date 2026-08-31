@@ -1,9 +1,10 @@
 //! Headless PhotoSite.
 //!
-//! Existuje ze dvou důvodů. Zaprvé se hodí sám o sobě — naskenovat složku,
-//! podívat se, co je v souboru, zjistit, kde aplikace bydlí. Zadruhé, a to je
-//! důležitější, **pustí celou pipeline bez okna a bez GPU**, takže se dá
-//! testovat na všech třech platformách v CI, kde žádná obrazovka není.
+//! It exists for two reasons. First, it is useful in its own right — scan a
+//! folder, look at what is in a file, find out where the application lives.
+//! Second, and this matters more, it **runs the whole pipeline with no window
+//! and no GPU**, so it can be tested on all three platforms in CI, where
+//! there is no screen at all.
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -12,18 +13,18 @@ use photosite_core::{Catalog, Paths, diagnostics, domain, i18n, jobs, t};
 use std::path::{Path, PathBuf};
 
 #[derive(Parser, Debug)]
-#[command(name = "photosite-cli", version, about = "PhotoSite bez okna")]
+#[command(name = "photosite-cli", version, about = "PhotoSite with no window")]
 struct Cli {
-    /// Přesměruje data, nastavení i cache pod jeden kořen. Bez tohohle se
-    /// sáhne tam, kam patří podle zvyklostí systému.
-    #[arg(long, global = true, value_name = "SLOŽKA")]
+    /// Redirects data, settings and cache under a single root. Without it,
+    /// each goes where the system's conventions put it.
+    #[arg(long, global = true, value_name = "FOLDER")]
     data: Option<PathBuf>,
 
     #[arg(long, short, global = true)]
     verbose: bool,
 
-    /// Jazyk výpisů; bez něj `en-US`.
-    #[arg(long, global = true, value_name = "JAZYK")]
+    /// The language of the output; `en-US` without it.
+    #[arg(long, global = true, value_name = "LANGUAGE")]
     lang: Option<String>,
 
     #[command(subcommand)]
@@ -32,17 +33,18 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Naindexuje složku do katalogu.
+    /// Indexes a folder into the catalogue.
     Scan {
         folder: PathBuf,
         #[arg(long, short)]
         recursive: bool,
     },
-    /// Vypíše, co katalog o složce ví.
+    /// Prints what the catalogue knows about a folder.
     List { folder: PathBuf },
-    /// Přečte jeden soubor a vypíše, co z něj šlo dostat.
+    /// Reads one file and prints what could be got out of it.
     Info { file: PathBuf },
-    /// Kde co leží a na čem to běží. První otázka každé podpory.
+    /// Where everything lives and what it runs on. The first question any
+    /// support conversation opens with.
     Doctor,
 }
 
@@ -109,14 +111,15 @@ fn scan(paths: &Paths, folder: &Path, recursive: bool) -> Result<()> {
     let mut catalog = catalog;
     let (mut added, mut skipped, mut failed) = (0u64, 0u64, 0u64);
 
-    // Po dávkách: jeden zápis do katalogu na tisíc souborů, ne na každý.
+    // In batches: one write to the catalogue per thousand files, not per
+    // file.
     for chunk in files.chunks(1000) {
         let identities: Vec<domain::FileIdentity> = chunk
             .iter()
             .filter_map(|path| match domain::FileIdentity::read(path) {
                 Ok(identity) => Some(identity),
                 Err(error) => {
-                    tracing::warn!(path = %path.display(), %error, "soubor nelze přečíst");
+                    tracing::warn!(path = %path.display(), %error, "the file cannot be read");
                     None
                 }
             })
@@ -134,9 +137,9 @@ fn scan(paths: &Paths, folder: &Path, recursive: bool) -> Result<()> {
             match read_one(&identity) {
                 Ok(photo) => batch.push(photo),
                 Err(error) => {
-                    // Selhat na jednom souboru je normální. Zamlčet to není.
+                    // Failing on one file is normal. Saying nothing is not.
                     failed += 1;
-                    tracing::warn!(path = %identity.path.display(), error = %format!("{error:#}"), "soubor přeskočen");
+                    tracing::warn!(path = %identity.path.display(), error = %format!("{error:#}"), "file skipped");
                 }
             }
         }
@@ -161,8 +164,8 @@ fn scan(paths: &Paths, folder: &Path, recursive: bool) -> Result<()> {
     Ok(())
 }
 
-/// Přečte z jednoho souboru to, co patří do katalogu. Čte se jen hlavička,
-/// ne celá fotka — pixely tady nikoho nezajímají.
+/// Reads out of one file what belongs in the catalogue. Only the header is
+/// read, not the whole photograph — nobody here cares about pixels.
 fn read_one(identity: &domain::FileIdentity) -> Result<NewPhoto> {
     use std::io::Read as _;
     let mut head = vec![0u8; photosite_image::exif::HEADER_BYTES];
@@ -212,7 +215,7 @@ fn info(file: &Path) -> Result<()> {
         (t!("cli-info-modified"), identity.modified_at.to_string()),
     ];
 
-    let raw = std::fs::read(file).context("soubor nelze přečíst")?;
+    let raw = std::fs::read(file).context("the file cannot be read")?;
     let meta = photosite_image::exif::read(&raw);
     rows.push((t!("cli-info-orientation"), meta.orientation.to_string()));
     rows.push((
@@ -229,7 +232,7 @@ fn info(file: &Path) -> Result<()> {
     rows.push((
         t!("cli-info-quick"),
         match photosite_image::quick(file)? {
-            Some(image) => format!("{}×{}", image.width, image.height),
+            Some(image) => format!("{}x{}", image.width, image.height),
             None => t!("cli-info-quick-none"),
         },
     ));

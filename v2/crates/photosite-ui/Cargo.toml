@@ -1,6 +1,6 @@
 [package]
 name = "photosite-ui"
-description = "Aplikace. Jediná crate, která ví o egui a o GPU."
+description = "The application. The only crate that knows about egui and the GPU."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

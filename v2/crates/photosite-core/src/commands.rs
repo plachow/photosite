@@ -1,18 +1,19 @@
-//! Jedno místo, kde jsou vypsané všechny příkazy aplikace.
+//! The one place every command of the application is listed.
 //!
-//! Menu, klávesové zkratky, nabídka „co umíš" i případná paleta příkazů čtou
-//! odsud. Dodělat takový registr do hotového UI znamená projít každé tlačítko
-//! zvlášť, takže je tu od začátku, i když má zatím pár položek.
+//! Menus, keyboard shortcuts, a "what can you do" list and any future command
+//! palette all read from here. Retrofitting such a registry into a finished
+//! UI means going through every button one at a time, so it is here from the
+//! start even while it holds only a handful of entries.
 //!
-//! Zkratky se tu drží v neutrálním tvaru, ne v typech egui — jádro o žádné
-//! grafické knihovně neví a nesmí vědět.
+//! Shortcuts are kept in a neutral form, not in egui types — the core knows
+//! of no graphics library and must not.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 
-/// Do které skupiny příkaz patří. Určuje pořadí v menu.
+/// Which group a command belongs to. It decides the order in a menu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Group {
     File,
@@ -21,7 +22,7 @@ pub enum Group {
 }
 
 impl Group {
-    /// Klíč do překladu, ne text. Jádro nesmí obsahovat nic, co je vidět.
+    /// A translation key, not text. The core must hold nothing that is seen.
     pub fn title_key(self) -> &'static str {
         match self {
             Group::File => "group-file",
@@ -30,7 +31,7 @@ impl Group {
         }
     }
 
-    /// Přeložený název skupiny.
+    /// The group's translated name.
     pub fn title(self) -> String {
         crate::i18n::t(self.title_key())
     }
@@ -38,18 +39,20 @@ impl Group {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Command {
-    /// Stabilní klíč. Do konfigurace se ukládá tenhle, ne název — název se
-    /// smí kdykoliv přepsat nebo přeložit.
+    /// The stable key. This is what the configuration stores, not the name —
+    /// the name may be rewritten or translated at any time.
     pub id: &'static str,
-    /// Klíč do překladu. V registru nejsou texty, jen odkazy na ně —
-    /// jinak by se název nedal přeložit ani přepsat bez zásahu do kódu.
+    /// A translation key. The registry holds no text, only references to it
+    /// — otherwise a name could be neither translated nor rewritten without
+    /// touching code.
     pub title_key: &'static str,
     pub group: Group,
     pub default_shortcut: Option<&'static str>,
-    /// Patří na lištu? Ukončení aplikace ani zaškrtávátko „včetně podsložek"
-    /// tam nemají co dělat — a je to rozhodnutí registru, ne kreslicí vrstvy.
-    /// Ta se jinak ptá po jménech („všechno z View kromě `view.recursive`")
-    /// a při každém dalším příkazu se to musí přepsat.
+    /// Does it belong on the toolbar? Quitting the application and the
+    /// "include subfolders" checkbox have no business there — and that is the
+    /// registry's decision, not the drawing layer's. Otherwise the drawing
+    /// layer asks by name ("everything in View except `view.recursive`") and
+    /// that rule needs rewriting with every command added after it.
     pub toolbar: bool,
 }
 
@@ -148,7 +151,7 @@ pub const COMMANDS: &[Command] = &[
 ];
 
 impl Command {
-    /// Přeložený název příkazu.
+    /// The command's translated name.
     pub fn title(&self) -> String {
         crate::i18n::t(self.title_key)
     }
@@ -158,13 +161,13 @@ pub fn command(id: &str) -> Option<&'static Command> {
     COMMANDS.iter().find(|command| command.id == id)
 }
 
-/// Klávesová zkratka nezávislá na toolkitu.
+/// A keyboard shortcut, independent of any toolkit.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Shortcut {
     pub ctrl: bool,
     pub shift: bool,
     pub alt: bool,
-    /// Název klávesy tak, jak ho píšeme: `O`, `F5`, `Plus`, `Escape`.
+    /// The key's name as we write it: `O`, `F5`, `Plus`, `Escape`.
     pub key: String,
 }
 
@@ -188,7 +191,7 @@ impl FromStr for Shortcut {
         }
 
         if shortcut.key.is_empty() {
-            return Err(format!("zkratka {text:?} nemá klávesu"));
+            return Err(format!("the shortcut {text:?} has no key"));
         }
 
         Ok(shortcut)
@@ -213,7 +216,7 @@ impl fmt::Display for Shortcut {
     }
 }
 
-/// Co je na co namapované. Výchozí stav plus to, co si člověk přenastavil.
+/// What is bound to what: the defaults plus whatever has been rebound.
 #[derive(Debug, Clone, Default)]
 pub struct Bindings {
     by_command: HashMap<&'static str, Shortcut>,
@@ -228,10 +231,11 @@ impl Bindings {
                     Ok(shortcut) => {
                         by_command.insert(command.id, shortcut);
                     }
-                    // Výchozí zkratky jsou v kódu, takže tohle je chyba
-                    // programátora — ale ne důvod, aby aplikace nenaběhla.
+                    // The default shortcuts live in code, so this is a
+                    // programmer's mistake — but no reason for the
+                    // application not to start.
                     Err(error) => {
-                        tracing::error!(command = command.id, %error, "špatná výchozí zkratka")
+                        tracing::error!(command = command.id, %error, "bad default shortcut")
                     }
                 }
             }
@@ -244,7 +248,7 @@ impl Bindings {
         self.by_command.get(id)
     }
 
-    /// Který příkaz patří téhle zkratce.
+    /// Which command this shortcut belongs to.
     pub fn command_for(&self, shortcut: &Shortcut) -> Option<&'static Command> {
         self.by_command
             .iter()
@@ -256,8 +260,8 @@ impl Bindings {
         self.by_command.insert(id, shortcut);
     }
 
-    /// Zkratky namapované na víc než jeden příkaz. Ať se to pozná při testu,
-    /// a ne až tím, že jedna z nich tiše nefunguje.
+    /// Shortcuts bound to more than one command. Better found by a test than
+    /// by one of them quietly not working.
     pub fn conflicts(&self) -> Vec<Shortcut> {
         let mut seen: HashMap<&Shortcut, usize> = HashMap::new();
         for shortcut in self.by_command.values() {
@@ -276,7 +280,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn zkratka_tam_a_zpatky() {
+    fn a_shortcut_there_and_back() {
         for text in ["Ctrl+O", "F5", "Ctrl+Shift+D", "Alt+Enter"] {
             let shortcut: Shortcut = text.parse().unwrap();
             assert_eq!(shortcut.to_string(), text, "{text}");
@@ -284,22 +288,22 @@ mod tests {
     }
 
     #[test]
-    fn zkratka_bez_klavesy_je_chyba() {
+    fn a_shortcut_without_a_key_is_an_error() {
         assert!("Ctrl+".parse::<Shortcut>().is_err());
         assert!("".parse::<Shortcut>().is_err());
     }
 
     #[test]
-    fn identifikatory_prikazu_jsou_jedinecne() {
+    fn command_identifiers_are_unique() {
         let mut ids: Vec<_> = COMMANDS.iter().map(|c| c.id).collect();
         let count = ids.len();
         ids.sort();
         ids.dedup();
-        assert_eq!(ids.len(), count, "dva příkazy se stejným id");
+        assert_eq!(ids.len(), count, "two commands with the same id");
     }
 
     #[test]
-    fn vychozi_zkratky_se_nebijou() {
+    fn the_default_shortcuts_do_not_clash() {
         let bindings = Bindings::defaults();
         assert!(
             bindings.conflicts().is_empty(),
@@ -309,7 +313,7 @@ mod tests {
     }
 
     #[test]
-    fn vychozi_zkratky_jsou_vsechny_platne() {
+    fn every_default_shortcut_is_valid() {
         let bindings = Bindings::defaults();
         for command in COMMANDS.iter().filter(|c| c.default_shortcut.is_some()) {
             assert!(bindings.shortcut(command.id).is_some(), "{}", command.id);
@@ -317,11 +321,11 @@ mod tests {
     }
 
     #[test]
-    fn kazdy_prikaz_ma_preklad() {
+    fn every_command_has_a_translation() {
         for command in COMMANDS {
             assert!(
                 crate::i18n::has(command.title_key),
-                "příkaz {} odkazuje na chybějící klíč {}",
+                "command {} points at the missing key {}",
                 command.id,
                 command.title_key
             );
@@ -329,14 +333,14 @@ mod tests {
     }
 
     #[test]
-    fn kazda_skupina_ma_preklad() {
+    fn every_group_has_a_translation() {
         for group in [Group::File, Group::View, Group::Help] {
             assert!(crate::i18n::has(group.title_key()), "{:?}", group);
         }
     }
 
     #[test]
-    fn zkratku_lze_najit_zpatky_na_prikaz() {
+    fn a_shortcut_can_be_found_back_to_its_command() {
         let bindings = Bindings::defaults();
         let shortcut: Shortcut = "Ctrl+O".parse().unwrap();
         assert_eq!(

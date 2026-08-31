@@ -16,7 +16,7 @@ defaults:
     working-directory: v2
 
 jobs:
-  # Formát a lint stačí jednou; nezávisí na platformě.
+  # Formatting and lint are enough once; neither depends on the platform.
   kontrola:
     runs-on: ubuntu-latest
     steps:
@@ -27,7 +27,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: v2
-      - name: Systémové závislosti
+      - name: System dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev \
@@ -35,7 +35,7 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets
 
-  # Testy běží na všech třech, protože právě tam se rozdíly projeví.
+  # The tests run on all three, because that is where the differences show.
   testy:
     strategy:
       fail-fast: false
@@ -48,15 +48,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: v2
-      - name: Systémové závislosti
+      - name: System dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev \
             libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev
-      # Na runnerech není obrazovka ani GPU. Právě proto je jádro oddělené a
-      # existuje CLI: celá pipeline se dá projet bez okna.
+      # The runners have no screen and no GPU. That is exactly why the core
+      # is separate and the CLI exists: the whole pipeline runs without a
+      # window.
       - run: cargo test --workspace
       - run: cargo build --workspace --release
-      - name: CLI se rozjede
+      - name: The CLI starts up
         run: cargo run --release -p photosite-cli -- --data ci-data doctor

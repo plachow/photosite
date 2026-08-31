@@ -1,60 +1,64 @@
-//! Nativní dialog pro výběr složky.
+//! The native folder picker.
 //!
-//! Celý modul existuje kvůli dvěma věcem, které se nedají obejít.
+//! The whole module exists because of two things there is no way around.
 //!
-//! **Dialog se zakládá na hlavním vlákně, ale čeká se na něj jinde.** macOS
-//! umí ukázat panel přišpendlený k oknu jedině tehdy, když si o něj řekne
-//! hlavní vlákno; odjinud spadne na modální okno uprostřed obrazovky, nebo
-//! rovnou na paniku. Čekat na výsledek tam ale nesmíme: člověk prochází disk
-//! klidně minutu a po celou tu dobu by se nepřekreslila jediná dlaždice —
-//! Windows takové okno po pár sekundách označí za nereagující a zašedne mu
-//! záhlaví. Budoucnost tedy vzniká tady a dokončí se ve vlákně vedle.
+//! **The dialog is created on the main thread, but awaited elsewhere.** macOS
+//! will only show the panel pinned to the window when the main thread asks
+//! for it; from anywhere else it falls back to a modal window in the middle
+//! of the screen, or straight to a panic. But we must not wait for the answer
+//! there: somebody browses a disk for a minute at a time, and for all of it
+//! not one tile would be redrawn — Windows marks such a window unresponsive
+//! after a few seconds and greys out its title bar. So the future is born
+//! here and finished on a thread alongside.
 //!
-//! **Otevřený smí být nejvýš jeden.** Ctrl+O zmáčknuté podruhé jinak postaví
-//! druhý dialog nad první a jeden z nich zůstane viset i po výběru.
+//! **At most one may be open.** A second Ctrl+O would otherwise stack another
+//! dialog on top of the first, and one of them would be left hanging even
+//! after a folder was chosen.
 
 use eframe::egui;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, TryRecvError};
 
-/// Dialog, který je právě otevřený.
+/// A dialog that is currently open.
 #[derive(Debug)]
 pub struct Picker {
     from_dialog: Receiver<Option<PathBuf>>,
 }
 
-/// Co dialog zatím řekl.
+/// What the dialog has said so far.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Answer {
-    /// Pořád je otevřený.
+    /// Still open.
     Waiting,
-    /// Zavřel se bez výběru. Nic se nestalo a nic se nehlásí — zrušit dialog
-    /// je běžná odpověď, ne chyba.
+    /// Closed without a choice. Nothing happened and nothing is reported —
+    /// cancelling a dialog is an ordinary answer, not a failure.
     Cancelled,
     Picked(PathBuf),
 }
 
-/// Otevře dialog. Volat výhradně z hlavního vlákna, tedy zevnitř vykreslování.
+/// Opens the dialog. Call only from the main thread, that is from inside the
+/// render pass.
 pub fn ask(ctx: &egui::Context, title: String, start: Option<PathBuf>) -> Picker {
     let mut dialog = rfd::AsyncFileDialog::new().set_title(title);
     if let Some(start) = start {
         dialog = dialog.set_directory(start);
     }
 
-    // Tady, na hlavním vlákně. Přesunout tenhle řádek do vlákna níž vypadá
-    // jako zjednodušení a na macOS to rozbije.
+    // Here, on the main thread. Moving this line into the thread below looks
+    // like a simplification and breaks macOS.
     let opened = dialog.pick_folder();
     let (to_ui, from_dialog) = std::sync::mpsc::channel();
     let ctx = ctx.clone();
     std::thread::spawn(move || {
         let picked = pollster::block_on(opened);
         let path = picked.map(|handle| handle.path().to_path_buf());
-        tracing::info!(vybrano = ?path, "dialog zavřen");
-        // Chyba znamená jediné: okno se mezitím zavřelo a výsledek nemá kam jít.
+        tracing::info!(chosen = ?path, "dialog closed");
+        // A failure here means one thing only: the window has closed in the
+        // meantime and the answer has nowhere to go.
         let _ = to_ui.send(path);
-        // Bez tohohle by odpověď ležela v kanálu až do nejbližšího
-        // překreslení, tedy podle `loading.idle_repaint_ms` klidně čtvrt
-        // sekundy po tom, co člověk klikl na Vybrat.
+        // Without this the answer would sit in the channel until the next
+        // repaint, which by `loading.idle_repaint_ms` can be a quarter of a
+        // second after somebody clicked Select.
         ctx.request_repaint();
     });
 
@@ -67,23 +71,24 @@ impl Picker {
             Ok(Some(folder)) => Answer::Picked(folder),
             Ok(None) => Answer::Cancelled,
             Err(TryRecvError::Empty) => Answer::Waiting,
-            // Vlákno skončilo, aniž by odpovědělo. Brát to jako „pořád
-            // otevřený" by znamenalo, že Ctrl+O už do konce běhu nezabere.
+            // The thread ended without answering. Treating that as "still
+            // open" would mean Ctrl+O never works again for the rest of the
+            // run.
             Err(TryRecvError::Disconnected) => {
-                tracing::warn!("dialog skončil bez odpovědi");
+                tracing::warn!("the dialog ended without an answer");
                 Answer::Cancelled
             }
         }
     }
 }
 
-/// Kde dialog otevřít.
+/// Where to open the dialog.
 ///
-/// Nejlepší je složka, na kterou se člověk právě dívá; když ji mezitím někdo
-/// smazal nebo odpojil disk, tak nejbližší existující nadřazená. Začít o patro
-/// výš je pořád blíž než tam, kam dialog skočí sám. Když není otevřená žádná,
-/// vezme se ta poslední z nastavení — po restartu je to jediná stopa, kterou
-/// o člověku máme.
+/// Best is the folder being looked at; when it has been deleted in the
+/// meantime, or the drive unplugged, then the nearest ancestor that still
+/// exists. A floor above is still closer than wherever the dialog would land
+/// on its own. When no folder is open, the last one from the settings is
+/// used — after a restart it is the only trace of the person we have.
 pub fn start_dir(current: Option<&Path>, last: Option<&str>) -> Option<PathBuf> {
     let wanted = current
         .map(Path::to_path_buf)
@@ -100,7 +105,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn zacne_tam_kde_prave_jsme() {
+    fn it_starts_where_we_are() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(
             start_dir(Some(dir.path()), None).as_deref(),
@@ -109,24 +114,24 @@ mod tests {
     }
 
     #[test]
-    fn po_smazane_slozce_se_jde_o_patro_vys() {
+    fn a_deleted_folder_moves_up_one_floor() {
         let dir = tempfile::tempdir().unwrap();
-        let pryc = dir.path().join("2019").join("léto");
-        assert_eq!(start_dir(Some(&pryc), None).as_deref(), Some(dir.path()));
+        let gone = dir.path().join("2019").join("summer");
+        assert_eq!(start_dir(Some(&gone), None).as_deref(), Some(dir.path()));
     }
 
     #[test]
-    fn bez_otevrene_slozky_se_vezme_posledni() {
+    fn with_no_folder_open_the_last_one_is_used() {
         let dir = tempfile::tempdir().unwrap();
         let last = dir.path().to_string_lossy().into_owned();
         assert_eq!(start_dir(None, Some(&last)).as_deref(), Some(dir.path()));
     }
 
     #[test]
-    fn otevrena_slozka_ma_prednost_pred_posledni() {
+    fn an_open_folder_beats_the_last_one() {
         let dir = tempfile::tempdir().unwrap();
-        let jinam = tempfile::tempdir().unwrap();
-        let last = jinam.path().to_string_lossy().into_owned();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let last = elsewhere.path().to_string_lossy().into_owned();
         assert_eq!(
             start_dir(Some(dir.path()), Some(&last)).as_deref(),
             Some(dir.path())
@@ -134,10 +139,10 @@ mod tests {
     }
 
     #[test]
-    fn kdyz_neni_nic_rozhodne_se_dialog_sam() {
-        // `None` znamená „neříkej mu nic", ne „začni v kořeni disku".
+    fn with_nothing_at_all_the_dialog_decides_for_itself() {
+        // `None` means "tell it nothing", not "start at the root of the disk".
         assert_eq!(start_dir(None, None), None);
         assert_eq!(start_dir(None, Some("")), None);
-        assert_eq!(start_dir(None, Some("Q:/disk, který tu není/fotky")), None);
+        assert_eq!(start_dir(None, Some("Q:/no such drive/photos")), None);
     }
 }

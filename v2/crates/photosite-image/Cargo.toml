@@ -1,6 +1,6 @@
 [package]
 name = "photosite-image"
-description = "Dekódování, škálování a EXIF. Neví, že existuje UI."
+description = "Decoding, scaling and EXIF. Knows of no UI."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

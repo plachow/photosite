@@ -1,26 +1,28 @@
-//! Nastavení.
+//! Settings.
 //!
-//! Čtyři zásady, které stojí za to dodržet od začátku, protože každá z nich se
-//! zpětně zavádí draho:
+//! Four principles worth keeping from the start, because every one of them is
+//! expensive to introduce afterwards:
 //!
-//! 1. **Výchozí hodnoty jsou v kódu, jednou.** `Default` je jediný zdroj
-//!    pravdy. Kdo nic nenastavil, dostane to, co považujeme za správné — a
-//!    když se to rozmyslíme, dostane to i on, aniž by musel cokoliv mazat.
-//! 2. **Do souboru jde jen to, co se liší.** Uložit celý strom znamená
-//!    zmrazit dnešní výchozí hodnoty u každého, kdo aplikaci jednou spustil.
-//!    Řídký soubor je navíc čitelný a je z něj vidět, co si kdo přenastavil.
-//! 3. **Všechno má cestu.** `gallery.tile_size` se dá přečíst i zapsat jako
-//!    text, takže nad tím půjde jednou vygenerovat obrazovka nastavení, aniž
-//!    by se pro každou položku psal kód.
-//! 4. **Reset je první třída.** Jedna položka, celá skupina, nebo všechno.
-//!    Když se dá bezpečně vrátit, člověk si troufne zkoušet.
+//! 1. **Defaults live in code, once.** `Default` is the single source of
+//!    truth. Whoever set nothing gets what we consider right — and when we
+//!    change our minds, they get that too without having to delete anything.
+//! 2. **Only what differs goes into the file.** Saving the whole tree means
+//!    freezing today's defaults for everyone who ever started the
+//!    application. A sparse file is also readable, and shows at a glance what
+//!    somebody has changed.
+//! 3. **Everything has a path.** `gallery.tile_size` can be read and written
+//!    as text, so a settings screen can one day be generated over it without
+//!    code being written per entry.
+//! 4. **Reset is first class.** One entry, a whole group, or everything. When
+//!    something can be safely undone, people dare to experiment.
 //!
-//! Hotové sady nastavení tu schválně **nejsou**. Byly, a byly předčasné: jedna
-//! z nich doslova opisovala výchozí hodnoty, takže by při jejich zlepšení
-//! tiše zůstala na starých, a u ostatních se nedalo poznat, jestli je někdo
-//! bude chtít. Reset na výchozí stav pokrývá „vrať mi to rozumné" celý.
-//! Až bude nastavení tolik, že kombinace začnou dávat smysl, budou to data
-//! v souboru, ne konstanty v kódu.
+//! Ready-made sets of settings are deliberately **not** here. There were
+//! some, and they were premature: one of them literally copied the defaults,
+//! so improving those would have quietly left it on the old ones, and for the
+//! rest there was no telling whether anybody would want them. Resetting to
+//! the defaults covers "give me back something sensible" entirely. Once there
+//! are enough settings for combinations to make sense, they will be data in a
+//! file, not constants in code.
 
 use crate::paths::Paths;
 use anyhow::{Context, Result};
@@ -35,8 +37,8 @@ pub struct Settings {
     pub appearance: Appearance,
 }
 
-/// Stav okna. Že se aplikace otevře tam, kde ji člověk nechal, je jedna
-/// z prvních věcí, kterých si všimne — a to i když si toho nevšimne.
+/// The window state. That the application opens where somebody left it is
+/// one of the first things they notice — even when they do not notice it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Window {
@@ -45,13 +47,14 @@ pub struct Window {
     pub x: Option<f64>,
     pub y: Option<f64>,
     pub maximized: bool,
-    /// Rozložení doků. Viz [`crate::docks`] — jeden řádek, ne zanořené
-    /// tabulky, aby se dal přečíst i opravit ručně.
+    /// The dock layout. See [`crate::docks`] — one line, not nested tables,
+    /// so it can be read and corrected by hand.
     pub layout: String,
-    /// Plochy, které jsou schované, oddělené čárkou.
+    /// The hidden panes, comma separated.
     pub docks_hidden: String,
-    /// Tloušťka dělítka mezi doky. I tohle je nastavení, ne konstanta
-    /// v kreslicí vrstvě — na dotykovém displeji je šest bodů málo.
+    /// The thickness of the splitter between docks. This too is a setting,
+    /// not a constant in the drawing layer — on a touch screen six points is
+    /// not enough.
     pub splitter: f64,
 }
 
@@ -70,20 +73,20 @@ impl Default for Window {
     }
 }
 
-/// Jak vypadá mřížka. Nic z toho není v kódu jako konstanta.
+/// What the grid looks like. None of it is a constant in code.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Gallery {
     pub tile_size: f64,
-    /// Mezera mezi dlaždicemi.
+    /// The gap between tiles.
     pub gap: f64,
-    /// Poměr výšky obrázkové plochy k šířce dlaždice.
+    /// The height of the image area against the width of the tile.
     pub tile_aspect: f64,
-    /// Výška proužku s názvem pod fotkou.
+    /// The height of the caption strip under the photograph.
     pub caption_height: f64,
-    /// Kolik místa nechá rám kolem fotky.
+    /// How much room the frame leaves around the photograph.
     pub tile_padding: f64,
-    /// Kolik řádků nad a pod viewportem se načítá dopředu.
+    /// How many rows above and below the viewport are loaded ahead.
     pub prefetch_rows: i64,
     pub show_captions: bool,
     pub recursive: bool,
@@ -106,28 +109,30 @@ impl Default for Gallery {
     }
 }
 
-/// Načítání obrázků. Tyhle hodnoty rozhodují o plynulosti, takže musí jít
-/// osahat bez překladu.
+/// Image loading. These values decide how smooth it feels, so they have to
+/// be adjustable without a recompile.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Loading {
-    /// Delší hrana dlaždice v obrazových bodech.
+    /// The longer edge of a tile in pixels.
     pub thumb_size: i64,
-    /// Delší hrana plného náhledu.
+    /// The longer edge of the full preview.
     pub preview_size: i64,
-    /// Kolik hotových obrázků se za snímek nahraje do GPU. Bez stropu by
-    /// jedna dávka zasekla vlákno, které kreslí.
+    /// How many finished images are uploaded to the GPU per frame. Without a
+    /// ceiling, one batch would stall the thread that draws.
     pub uploads_per_frame: i64,
-    /// Kolik textur se drží, než začnou vypadávat nejdéle nepoužité.
+    /// How many textures are kept before the least recently used start to
+    /// go.
     pub texture_budget: i64,
-    /// Dekódovacích vláken; `0` znamená podle počtu jader.
+    /// Decoding threads; `0` means by the number of cores.
     pub worker_threads: i64,
-    /// Použít náhled vložený v EXIFu, než se dekóduje ostrý. Vypnout se to dá
-    /// hlavně proto, aby šlo změřit, o kolik pomáhá.
+    /// Use the thumbnail embedded in EXIF until the sharp one is decoded. It
+    /// can be switched off mainly so that its benefit can be measured.
     pub use_embedded_thumbnails: bool,
-    /// Pojistka: nejdelší pauza mezi snímky, když se nic neděje. O hotovou
-    /// práci se dekódovací vlákna hlásí sama, takže tohle jen kryje případ,
-    /// kdy by se probuzení ztratilo. Krátký interval znamená budit se pro nic.
+    /// A safety net: the longest pause between frames when nothing is
+    /// happening. The decoding threads announce finished work themselves, so
+    /// this only covers the case of a lost wake-up. A short interval means
+    /// waking for nothing.
     pub idle_repaint_ms: i64,
 }
 
@@ -148,15 +153,15 @@ impl Default for Loading {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Appearance {
-    /// Klíč motivu, nebo `automatic` podle systému.
+    /// The theme key, or `automatic` to follow the system.
     pub theme: String,
-    /// Který motiv použít, když systém hlásí tmavý režim.
+    /// Which theme to use when the system reports dark mode.
     pub theme_dark: String,
-    /// A který, když hlásí světlý.
+    /// And which when it reports light.
     pub theme_light: String,
-    /// Jazyk rozhraní. Neznámý spadne na `en-US`.
+    /// The interface language. An unknown one falls back to `en-US`.
     pub language: String,
-    /// Zvětšení celého rozhraní.
+    /// The scale of the whole interface.
     pub ui_scale: f64,
 }
 
@@ -172,33 +177,33 @@ impl Default for Appearance {
     }
 }
 
-// ------------------------------------------------------------------ soubor
+// -------------------------------------------------------------------- file
 
 impl Settings {
-    /// Načte nastavení. Nikdy neselže kvůli obsahu souboru — nanejvýš se
-    /// vrátí výchozí hodnoty a poškozený soubor se odloží stranou.
+    /// Loads the settings. Never fails because of the file's contents — at
+    /// worst the defaults come back and the damaged file is set aside.
     pub fn load(paths: &Paths) -> Self {
         let file = paths.config_file();
         let text = match std::fs::read_to_string(&file) {
             Ok(text) => text,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                tracing::debug!(path = %file.display(), "nastavení zatím není, jedeme na výchozím");
+                tracing::debug!(path = %file.display(), "no settings yet, carrying on with the defaults");
                 return Self::default();
             }
             Err(error) => {
-                tracing::warn!(path = %file.display(), %error, "nastavení nelze přečíst");
+                tracing::warn!(path = %file.display(), %error, "the settings cannot be read");
                 return Self::default();
             }
         };
 
         match toml::from_str(&text) {
             Ok(settings) => settings,
-            // Volba, kterou jsme zrušili, nesmí stát celý zbytek nastavení.
+            // A setting we removed must not cost the rest of the file.
             Err(error) => match rescue(&text) {
                 Some((settings, dropped)) => {
                     tracing::warn!(
-                        klice = dropped.join(", "),
-                        "nastavení má klíče, které už nepoužíváme; zbytek zůstává"
+                        keys = dropped.join(", "),
+                        "the settings hold keys we no longer use; the rest stays"
                     );
                     settings
                 }
@@ -208,7 +213,7 @@ impl Settings {
                         path = %file.display(),
                         odlozeno = %broken.display(),
                         %error,
-                        "nastavení je poškozené"
+                        "the settings are damaged"
                     );
                     let _ = std::fs::rename(&file, &broken);
                     Self::default()
@@ -217,10 +222,10 @@ impl Settings {
         }
     }
 
-    /// Uloží jen to, co se liší od výchozího stavu.
+    /// Saves only what differs from the defaults.
     ///
-    /// Píše se přes dočasný soubor, aby pád uprostřed zápisu nenechal na disku
-    /// půlku.
+    /// It writes through a temporary file, so a crash mid-write does not
+    /// leave half of one on disk.
     pub fn save(&self, paths: &Paths) -> Result<()> {
         let file = paths.config_file();
         if let Some(parent) = file.parent() {
@@ -229,27 +234,28 @@ impl Settings {
 
         let sparse = self.overrides()?;
         let text = if sparse.is_empty() {
-            String::from("# Prázdné: všechno je na výchozích hodnotách.\n")
+            String::from("# Empty: everything is at its default.\n")
         } else {
-            toml::to_string_pretty(&sparse).context("nastavení nelze serializovat")?
+            toml::to_string_pretty(&sparse).context("the settings cannot be serialised")?
         };
 
         let temporary = file.with_extension("toml.tmp");
         std::fs::write(&temporary, text)
-            .with_context(|| format!("nelze zapsat {}", temporary.display()))?;
+            .with_context(|| format!("cannot write {}", temporary.display()))?;
         std::fs::rename(&temporary, &file)
-            .with_context(|| format!("nelze přejmenovat na {}", file.display()))?;
+            .with_context(|| format!("cannot rename to {}", file.display()))?;
         Ok(())
     }
 
-    /// Co je jinak než ve výchozím stavu. To, co se ukládá.
+    /// What differs from the defaults. What gets saved.
     pub fn overrides(&self) -> Result<toml::Table> {
         let mine = toml::Table::try_from(self)?;
         let default = toml::Table::try_from(Settings::default())?;
         Ok(diff(&mine, &default))
     }
 
-    /// Hodnota na cestě `gallery.tile_size`. Pro obecnou obrazovku nastavení.
+    /// The value at a path such as `gallery.tile_size`. For a generic
+    /// settings screen.
     pub fn get(&self, path: &str) -> Option<toml::Value> {
         let mut value = toml::Value::try_from(self).ok()?;
         for part in path.split('.') {
@@ -259,40 +265,41 @@ impl Settings {
         Some(value)
     }
 
-    /// Zapíše hodnotu na cestu. Neznámá cesta nebo špatný typ je chyba, ne
-    /// tiché nic — jinak by obrazovka nastavení mlčky nefungovala.
+    /// Writes a value at a path. An unknown path or the wrong type is an
+    /// error, not a silent nothing — otherwise the settings screen would
+    /// quietly not work.
     pub fn set(&mut self, path: &str, value: toml::Value) -> Result<()> {
         let mut root = toml::Value::try_from(&*self)?;
         {
             let mut cursor = &mut root;
             let parts: Vec<&str> = path.split('.').collect();
-            let (last, prefix) = parts.split_last().context("prázdná cesta")?;
+            let (last, prefix) = parts.split_last().context("empty path")?;
             for part in prefix {
                 cursor = cursor
                     .as_table_mut()
                     .and_then(|table| table.get_mut(*part))
-                    .with_context(|| format!("cesta {path} nikam nevede"))?;
+                    .with_context(|| format!("the path {path} leads nowhere"))?;
             }
 
             let table = cursor
                 .as_table_mut()
-                .with_context(|| format!("cesta {path} nikam nevede"))?;
-            anyhow::ensure!(table.contains_key(*last), "cesta {path} neexistuje");
+                .with_context(|| format!("the path {path} leads nowhere"))?;
+            anyhow::ensure!(table.contains_key(*last), "the path {path} does not exist");
             table.insert((*last).to_owned(), value);
         }
 
         *self = root
             .try_into()
-            .with_context(|| format!("hodnota na {path} nesedí typem"))?;
+            .with_context(|| format!("the value at {path} is of the wrong type"))?;
         Ok(())
     }
 
-    /// Vrátí jednu položku nebo celou skupinu na výchozí hodnotu.
+    /// Returns one entry, or a whole group, to its default.
     pub fn reset(&mut self, path: &str) -> Result<()> {
         let default = Settings::default();
         let value = default
             .get(path)
-            .with_context(|| format!("cesta {path} neexistuje"))?;
+            .with_context(|| format!("the path {path} does not exist"))?;
         if self
             .get(path)
             .map(|current| current == value)
@@ -301,7 +308,7 @@ impl Settings {
             return Ok(());
         }
 
-        // Skupinu nelze nastavit jedním zápisem, protože `set` čeká list.
+        // A group cannot be set in one write, because `set` expects a leaf.
         match value.as_table() {
             Some(table) => {
                 for key in table.keys() {
@@ -314,8 +321,9 @@ impl Settings {
         Ok(())
     }
 
-    /// Všechno zpátky na výchozí, kromě věcí, které nejsou předvolbou —
-    /// naposledy otevřené složky a polohy okna se resetem nemyslí.
+    /// Everything back to the defaults, except what is not a preference —
+    /// the last opened folder and the window position are not what a reset
+    /// means.
     pub fn reset_all(&mut self) {
         let keep_folder = self.gallery.last_folder.clone();
         let window = self.window.clone();
@@ -325,20 +333,20 @@ impl Settings {
     }
 }
 
-/// Nastavení, ze kterého vadí jen klíč, který jsme přestali používat.
+/// Settings whose only fault is a key we stopped using.
 ///
-/// Volby přibývají a ubývají. Kdyby kvůli jedné zrušené šlo stranou celé
-/// nastavení, přišel by člověk i o všechno ostatní, co si kdy nastavil —
-/// a jediné, co udělal špatně, je že aplikaci používal dřív. Zahozené klíče
-/// jdou do logu; tiše se ztratit nesmí ani ony.
+/// Options come and go. If one removed key sent the whole settings file
+/// aside, somebody would lose everything else they ever set — and the only
+/// thing they did wrong was to use the application earlier. The dropped keys
+/// go to the log; not even they may be lost in silence.
 fn rescue(text: &str) -> Option<(Settings, Vec<String>)> {
     let mut table: toml::Table = toml::from_str(text).ok()?;
     let known = paths_in_settings();
     let mut dropped = Vec::new();
     prune("", &mut table, &known, &mut dropped);
     if dropped.is_empty() {
-        // Nevadily klíče, vadilo něco jiného — třeba text tam, kde má být
-        // číslo. To se zachraňovat nemá.
+        // The keys were not the problem, something else was — text where a
+        // number belongs, say. That is not for rescuing.
         return None;
     }
 
@@ -355,7 +363,7 @@ fn prune(prefix: &str, table: &mut toml::Table, known: &[String], dropped: &mut 
         };
 
         if let toml::Value::Table(nested) = value {
-            // Skupina zůstane, jen když pod ní ještě něco známého je.
+            // A group stays only while something known remains beneath it.
             if !known.iter().any(|it| it.starts_with(&format!("{path}."))) {
                 dropped.push(path);
                 return false;
@@ -374,7 +382,7 @@ fn prune(prefix: &str, table: &mut toml::Table, known: &[String], dropped: &mut 
     });
 }
 
-/// Rekurzivní rozdíl dvou tabulek; zůstane jen to, co se liší.
+/// A recursive difference of two tables; only what differs is left.
 fn diff(mine: &toml::Table, default: &toml::Table) -> toml::Table {
     let mut out = toml::Table::new();
     for (key, value) in mine {
@@ -395,9 +403,9 @@ fn diff(mine: &toml::Table, default: &toml::Table) -> toml::Table {
     out
 }
 
-// -------------------------------------------------------------- popis polí
+// --------------------------------------------------------- field descriptions
 
-/// Jakého druhu je hodnota. Podle tohohle se jednou vykreslí ovládací prvek.
+/// What kind of value this is. The control will one day be drawn from it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Kind {
     Bool,
@@ -410,17 +418,17 @@ pub enum Kind {
         max: i64,
     },
     Text,
-    /// Volba z několika možností; hodnoty jsou klíče, ne názvy.
+    /// A choice of several; the values are keys, not names.
     Choice(&'static [&'static str]),
-    /// Není předvolba — stav, který si aplikace pamatuje sama.
+    /// Not a preference — state the application remembers on its own.
     State,
 }
 
-/// Jedna položka nastavení tak, jak ji jednou uvidí uživatel.
+/// One settings entry as a person will one day see it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Tunable {
     pub path: &'static str,
-    /// Klíč do překladu. Ani tady nejsou texty.
+    /// A translation key. There is no text here either.
     pub label_key: &'static str,
     pub kind: Kind,
 }
@@ -594,7 +602,7 @@ pub const TUNABLES: &[Tunable] = &[
     },
 ];
 
-/// Všechny cesty, které v nastavení opravdu existují.
+/// Every path that really exists in the settings.
 pub fn paths_in_settings() -> Vec<String> {
     fn walk(prefix: &str, table: &toml::Table, into: &mut Vec<String>) {
         for (key, value) in table {
@@ -611,7 +619,7 @@ pub fn paths_in_settings() -> Vec<String> {
     }
 
     let mut found = Vec::new();
-    // `Option::None` se do TOML neserializuje, takže se přidá zvlášť.
+    // `Option::None` is not serialised into TOML, so it is added separately.
     let mut probe = Settings::default();
     probe.window.x = Some(0.0);
     probe.window.y = Some(0.0);
@@ -635,11 +643,11 @@ mod tests {
         (dir, paths)
     }
 
-    /// Volba, kterou jsme zrušili, nesmí sebrat všechno ostatní. Tohle
-    /// nastalo hned: `window.preview_width` zmizelo s doky a v souboru ho měl
-    /// každý, kdo aplikaci do té doby pustil.
+    /// A setting we removed must not take everything else with it. This
+    /// happened at once: `window.preview_width` went with the docks, and
+    /// everybody who had ever started the application had it in their file.
     #[test]
-    fn zruseny_klic_nestoji_zbytek_nastaveni() {
+    fn a_removed_key_does_not_cost_the_rest() {
         let (_dir, paths) = scratch();
         std::fs::write(
             paths.config_file(),
@@ -654,15 +662,18 @@ tree_width = 237.0
         .unwrap();
 
         let settings = Settings::load(&paths);
-        assert_eq!(settings.gallery.tile_size, 96.0, "zbytek se měl zachovat");
+        assert_eq!(
+            settings.gallery.tile_size, 96.0,
+            "the rest should have survived"
+        );
         assert!(
             paths.config_file().exists(),
-            "kvůli zrušenému klíči se soubor stranou neodkládá"
+            "a removed key does not send the file aside"
         );
     }
 
     #[test]
-    fn opravdu_poskozene_nastaveni_jde_stranou() {
+    fn genuinely_damaged_settings_go_aside() {
         let (_dir, paths) = scratch();
         std::fs::write(
             paths.config_file(),
@@ -675,12 +686,12 @@ tile_size = 'sto'
         assert_eq!(Settings::load(&paths), Settings::default());
         assert!(
             !paths.config_file().exists(),
-            "poškozený soubor se má odložit, ne přepsat"
+            "a damaged file is set aside, not overwritten"
         );
     }
 
     #[test]
-    fn chybejici_soubor_da_vychozi_hodnoty() {
+    fn a_missing_file_gives_the_defaults() {
         let (_dir, paths) = scratch();
         assert_eq!(Settings::load(&paths), Settings::default());
     }
@@ -693,7 +704,7 @@ tile_size = 'sto'
         let text = std::fs::read_to_string(paths.config_file()).unwrap();
         assert!(
             !text.contains("tile_size"),
-            "výchozí stav se nemá ukládat:\n{text}"
+            "the default state should not be saved:\n{text}"
         );
 
         settings.gallery.tile_size = 333.0;
@@ -702,14 +713,14 @@ tile_size = 'sto'
         assert!(text.contains("tile_size"), "{text}");
         assert!(
             !text.contains("preview_size"),
-            "netknuté se ukládat nemá:\n{text}"
+            "what was never touched should not be saved:\n{text}"
         );
     }
 
     #[test]
     fn zmena_vychozi_hodnoty_dorazi_i_ke_stavajicimu_uzivateli() {
-        // Když se do souboru ukládá jen rozdíl, nová výchozí hodnota se
-        // projeví i tomu, kdo aplikaci už spustil. To je celý smysl.
+        // When only the difference is saved, a new default reaches somebody
+        // who has already run the application. That is the whole point.
         let (_dir, paths) = scratch();
         let mut settings = Settings::default();
         settings.gallery.tile_size = 333.0;
@@ -738,7 +749,7 @@ tile_size = 'sto'
     #[test]
     fn poskozene_nastaveni_se_odlozi_a_neztrati() {
         let (_dir, paths) = scratch();
-        std::fs::write(paths.config_file(), "tohle = není { toml").unwrap();
+        std::fs::write(paths.config_file(), "this = is not { toml").unwrap();
         assert_eq!(Settings::load(&paths), Settings::default());
         assert!(paths.config_file().with_extension("toml.broken").exists());
     }
@@ -771,14 +782,14 @@ tile_size = 'sto'
         );
         assert!(
             settings
-                .set("nic.tam.neni", toml::Value::Integer(1))
+                .set("nothing.is.there", toml::Value::Integer(1))
                 .is_err()
         );
         assert!(
             settings
-                .set("gallery.tile_size", toml::Value::String("velké".into()))
+                .set("gallery.tile_size", toml::Value::String("large".into()))
                 .is_err(),
-            "špatný typ musí selhat, ne projít"
+            "the wrong type has to fail, not pass"
         );
     }
 
@@ -796,53 +807,56 @@ tile_size = 'sto'
     }
 
     #[test]
-    fn reset_vseho_nechá_stav_okna_a_slozku() {
+    fn resetting_everything_leaves_the_window_and_the_folder() {
         let mut settings = Settings::default();
         settings.gallery.tile_size = 999.0;
-        settings.gallery.last_folder = Some("E:/fotky".to_owned());
+        settings.gallery.last_folder = Some("E:/photos".to_owned());
         settings.window.width = 1234.0;
         settings.reset_all();
 
         assert_eq!(settings.gallery.tile_size, Gallery::default().tile_size);
-        assert_eq!(settings.gallery.last_folder.as_deref(), Some("E:/fotky"));
-        assert_eq!(settings.window.width, 1234.0, "polohu okna reset nemaže");
+        assert_eq!(settings.gallery.last_folder.as_deref(), Some("E:/photos"));
+        assert_eq!(
+            settings.window.width, 1234.0,
+            "a reset does not clear the window position"
+        );
     }
 
     #[test]
-    fn popis_poli_pokryva_presne_to_co_v_nastaveni_je() {
-        let skutecne = paths_in_settings();
-        let popsane: Vec<String> = TUNABLES
+    fn the_field_descriptions_cover_exactly_what_the_settings_hold() {
+        let actual = paths_in_settings();
+        let described: Vec<String> = TUNABLES
             .iter()
             .map(|t| t.path.to_owned())
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
             .collect();
 
-        let chybi: Vec<&String> = skutecne
+        let missing: Vec<&String> = actual
             .iter()
-            .filter(|path| !popsane.contains(path))
+            .filter(|path| !described.contains(path))
             .collect();
         assert!(
-            chybi.is_empty(),
-            "v nastavení jsou pole bez popisu: {chybi:?}"
+            missing.is_empty(),
+            "the settings hold fields with no description: {missing:?}"
         );
 
-        let navic: Vec<&String> = popsane
+        let extra: Vec<&String> = described
             .iter()
-            .filter(|path| !skutecne.contains(path))
+            .filter(|path| !actual.contains(path))
             .collect();
         assert!(
-            navic.is_empty(),
-            "popis odkazuje na neexistující pole: {navic:?}"
+            extra.is_empty(),
+            "a description points at a field that does not exist: {extra:?}"
         );
     }
 
     #[test]
-    fn kazde_pole_ma_preklad_popisku() {
+    fn every_field_has_a_translated_label() {
         for tunable in TUNABLES {
             assert!(
                 crate::i18n::has(tunable.label_key),
-                "{} odkazuje na chybějící klíč {}",
+                "{} points at the missing key {}",
                 tunable.path,
                 tunable.label_key
             );

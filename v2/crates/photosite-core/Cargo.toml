@@ -1,6 +1,6 @@
 [package]
 name = "photosite-core"
-description = "Doména, katalog a běhové zázemí. Neví, že existuje UI."
+description = "Domain, catalogue and runtime scaffolding. Knows of no UI."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

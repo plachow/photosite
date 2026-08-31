@@ -1,15 +1,16 @@
-//! Pixely: dekódování, zmenšování, EXIF.
+//! Pixels: decoding, downscaling, EXIF.
 //!
-//! Stejně jako jádro tahle crate **neví, že existuje UI.** Vrací holé RGB
-//! a je na volajícím, co s ním udělá — textura, soubor, nebo obojí.
+//! Like the core, this crate **does not know a UI exists.** It hands back
+//! plain RGB and leaves it to the caller what to make of it — a texture, a
+//! file, or both.
 
 pub mod decode;
 pub mod exif;
 
 pub use decode::{Rgb, fit, quick, rotate, sized};
 
-/// Delší hrana dlaždice v mřížce.
+/// Longer edge of a tile in the grid.
 pub const THUMB: u32 = 320;
-/// Delší hrana plného náhledu. Víc než tohle žádný panel nezobrazí a
-/// dekódovat kvůli tomu 45 Mpx by bylo plýtvání.
+/// Longer edge of the full preview. No pane shows more than this, and
+/// decoding 45 Mpx to get there would be waste.
 pub const PREVIEW: u32 = 2560;

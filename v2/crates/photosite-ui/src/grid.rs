@@ -1,10 +1,11 @@
-//! Tři plochy: strom složek, mřížka diapozitivů, plný náhled.
+//! Three panes: the folder tree, the grid of slides, the full preview.
 //!
-//! Mřížka je virtualizovaná ručně — kreslí se jen viditelné řádky, takže na
-//! počtu fotek nezáleží. Nic v téhle smyčce s velikostí knihovny neroste.
+//! The grid is virtualised by hand — only visible rows are drawn, so the
+//! number of photographs does not matter. Nothing in this loop grows with the
+//! size of the library.
 //!
-//! Rozměry si nic nevymýšlí: mezera, poměr stran, výška proužku i kolik řádků
-//! se načítá dopředu jsou v nastavení.
+//! It invents no dimensions: the gap, the aspect ratio, the caption height
+//! and how many rows are loaded ahead all live in the settings.
 
 use crate::{App, Node, Want, theme};
 use eframe::egui;
@@ -80,8 +81,9 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
                         response.hovered(),
                     );
 
-                    // Ostrá verze má přednost; dokud není, kreslí se ta
-                    // z EXIFu. Prázdná dlaždice je až třetí možnost.
+                    // The sharp version wins; until there is one, the EXIF
+                    // thumbnail is drawn. A blank tile is only the third
+                    // choice.
                     let sharp = app.has(&path, Want::Thumb);
                     if !sharp {
                         wanted_sharp.push((index, path.clone()));
@@ -106,7 +108,8 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
                 }
             }
 
-            // Od středu viewportu ven: doprostřed se člověk dívá.
+            // From the middle of the viewport outwards: the middle is where
+            // somebody is looking.
             let middle = (first + last) as f32 * 0.5 * cols as f32;
             let order = |mut list: Vec<(usize, PathBuf)>| {
                 list.sort_by_key(|(index, _)| (*index as f32 - middle).abs() as i64);
@@ -117,8 +120,8 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
             app.wanted_quick = order(wanted_quick);
             app.wanted_sharp = order(wanted_sharp);
 
-            // Řádky nad a pod viewportem: připravit dopředu, ale nepočítat je
-            // mezi prázdné — na ty se nikdo nedívá.
+            // Rows above and below the viewport: prepared ahead, but not
+            // counted as blank — nobody is looking at those.
             let ahead_from = first.saturating_sub(margin) * cols;
             let ahead_to = ((last + margin) * cols).min(count);
             for index in ahead_from..ahead_to {
@@ -128,13 +131,15 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
                 }
             }
 
-            // Kolik textur si mřížka přeje udržet. Podle tohohle se zvedne
-            // strop cache, aby se nevyhazovalo to, co se za chvíli zase chce.
+            // How many textures the grid wishes to keep. The cache ceiling
+            // is raised by this, so that what will be wanted again in a
+            // moment is not thrown away.
             app.needed = (ahead_to - ahead_from) * 2;
 
-            // Dotknout se použitých až po kreslení, aby LRU nevyhodila zrovna
-            // to, co je potřeba. Přednačtené řádky se počítají taky — jinak
-            // vypadnou jako první právě ony a hned se objednají znovu.
+            // Touch what was used only after drawing, so the LRU does not
+            // evict exactly what is needed. Prefetched rows count too —
+            // otherwise they are the first to go and are ordered again at
+            // once.
             for index in ahead_from..ahead_to {
                 let path = app.photos[index].clone();
                 app.touch(&(path.clone(), Want::Thumb));
@@ -161,8 +166,8 @@ pub fn preview(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
     ui.painter()
         .rect_filled(area, 0, theme::color(palette.well));
 
-    // Než se dekóduje plné rozlišení, ukáže se to, co už je — panel tak nikdy
-    // neproblikne prázdnotou.
+    // Until the full resolution is decoded, whatever is already there is
+    // shown — so the pane never flashes empty.
     let chosen = [Want::Preview, Want::Thumb, Want::Quick]
         .into_iter()
         .map(|want| (path.clone(), want))
@@ -204,9 +209,9 @@ pub fn tree(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
         .show(ui, |ui| {
             let mut pick = None;
             let current = app.folder.clone();
-            // Vybrat se musí dřív, než se kreslí: kdyby se přání odrolovat
-            // mazalo až potom, smazalo by se rovnou to, které vzniklo teď
-            // kliknutím v tomhle stromu.
+            // It has to be taken before drawing: if the scroll request were
+            // cleared afterwards, it would clear the very one this tree just
+            // created by being clicked.
             let scroll_to = app.scroll_tree_to.take();
             let mut roots = std::mem::take(&mut app.roots);
             for root in &mut roots {
@@ -239,8 +244,8 @@ fn node(
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
 
-        // Trojúhelník se kreslí, nepíše: ▸ a ▾ v základním fontu egui nejsou
-        // a vyšly by jako prázdné čtverečky.
+        // The triangle is drawn, not written: egui's default font has no
+        // ▸ or ▾ and they would come out as empty boxes.
         let (rect, response) = ui.allocate_exact_size(Vec2::new(14.0, 16.0), Sense::click());
         let center = rect.center();
         let tint = theme::color(if response.hovered() {
@@ -279,8 +284,8 @@ fn node(
             palette.text
         }));
         let response = ui.add(egui::Button::new(label).frame(false));
-        // Rozbalený strom sám o sobě nestačí: otevřená složka může být hluboko
-        // pod okrajem panelu a pak je to k ničemu.
+        // An expanded tree is not enough on its own: the open folder may sit
+        // far below the edge of the pane, and then it is no use.
         if scroll_to == Some(node.path.as_path()) {
             response.scroll_to_me(Some(egui::Align::Center));
         }

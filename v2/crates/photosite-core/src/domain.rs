@@ -1,37 +1,37 @@
-//! Pojmy, o kterých je celá aplikace.
+//! The words the whole application is about.
 //!
-//! Slovník se drží [CONTEXT.md](../../../CONTEXT.md) — je odladěný a nemá
-//! smysl si vymýšlet nová jména pro tytéž věci.
+//! The vocabulary follows [CONTEXT.md](../../../CONTEXT.md) — it is settled,
+//! and inventing new names for the same things buys nothing.
 
 use std::path::{Path, PathBuf};
 
-/// Číslo, pod kterým fotka žije v katalogu.
+/// The number a photograph lives under in the catalogue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PhotoId(pub i64);
 
-/// Jeden řádek katalogu: identita souboru a to, co se z něj přečetlo.
+/// One catalogue row: the file's identity and what was read out of it.
 ///
-/// Neobsahuje pixely a nikdy je obsahovat nebude.
+/// Holds no pixels and never will.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Photo {
     pub id: PhotoId,
     pub path: PathBuf,
-    /// Složka, ve které soubor leží. Vlastní sloupec, aby šlo listovat složku
-    /// bez procházení všech řádků.
+    /// The folder the file sits in. Its own column, so that listing a folder
+    /// does not mean walking every row.
     pub folder: PathBuf,
     pub file_size: u64,
-    /// Čas zápisu souboru v sekundách od epochy.
+    /// The file's write time, in seconds since the epoch.
     pub modified_at: i64,
-    /// Kdy fotka vznikla, pokud to šlo zjistit.
+    /// When the photograph was taken, where that could be established.
     pub taken_at: Option<i64>,
     pub width: Option<u32>,
     pub height: Option<u32>,
-    /// EXIF orientace 1..8.
+    /// EXIF orientation, 1..8.
     pub orientation: u8,
 }
 
-/// Co o souboru víme z disku, ještě než ho někdo přečte. Podle téhle trojice
-/// se pozná, že se soubor nezměnil a nemusí se číst znovu.
+/// What the disk tells us about a file before anyone reads it. These three
+/// values are how we know a file has not changed and need not be read again.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileIdentity {
     pub path: PathBuf,
@@ -54,13 +54,13 @@ impl FileIdentity {
         })
     }
 
-    /// Odpovídá tenhle soubor tomu, co je v katalogu?
+    /// Does this file still match what the catalogue holds?
     pub fn matches(&self, photo: &Photo) -> bool {
         photo.file_size == self.file_size && photo.modified_at == self.modified_at
     }
 }
 
-/// Přípony, které bereme jako fotku.
+/// Extensions we treat as a photograph.
 pub const PHOTO_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp", "bmp", "tif", "tiff", "gif"];
 
 pub fn is_photo(path: &Path) -> bool {
@@ -78,10 +78,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pripony_se_poznaji_bez_ohledu_na_velikost_pismen() {
+    fn extensions_are_recognised_whatever_the_case() {
         assert!(is_photo(Path::new("a/b/C.JPG")));
         assert!(is_photo(Path::new("x.jpeg")));
         assert!(!is_photo(Path::new("x.txt")));
-        assert!(!is_photo(Path::new("bez_pripony")));
+        assert!(!is_photo(Path::new("no_extension")));
     }
 }

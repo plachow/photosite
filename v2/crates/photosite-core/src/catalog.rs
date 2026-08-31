@@ -1,8 +1,9 @@
-//! Katalog: SQLite a číslované migrace.
+//! The catalogue: SQLite and numbered migrations.
 //!
-//! Migrace jsou tu od první tabulky, protože bez nich se nedá vydat druhá
-//! verze. Každá je jedno SQL a jeden krok `user_version`; běží v transakci,
-//! takže buď projde celá, nebo se nestane nic.
+//! Migrations are here from the very first table, because without them there
+//! is no second release. Each is one piece of SQL and one step of
+//! `user_version`; each runs in a transaction, so either all of it lands or
+//! nothing does.
 
 use crate::domain::{FileIdentity, Photo, PhotoId};
 use anyhow::{Context, Result};
@@ -14,10 +15,10 @@ struct Migration {
     sql: &'static str,
 }
 
-/// Přidávat **jen na konec**. Existující položku už nikdy neměnit — na
-/// cizích discích je podle ní postavená databáze.
+/// Append **only at the end**. Never change an existing entry — on somebody
+/// else's disk a database has already been built from it.
 const MIGRATIONS: &[Migration] = &[Migration {
-    name: "0001-fotky-a-nastaveni",
+    name: "0001-photos-and-settings",
     sql: "
         CREATE TABLE photos (
             id           INTEGER PRIMARY KEY,
@@ -40,7 +41,7 @@ const MIGRATIONS: &[Migration] = &[Migration {
     ",
 }];
 
-/// Na kolikátou verzi schématu je tenhle build stavěný.
+/// Which schema version this build is built for.
 pub fn latest_version() -> i64 {
     MIGRATIONS.len() as i64
 }
@@ -67,22 +68,23 @@ impl Catalog {
     pub fn open(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
-                .with_context(|| format!("nelze vytvořit {}", parent.display()))?;
+                .with_context(|| format!("cannot create {}", parent.display()))?;
         }
 
         let conn = Connection::open(path)
-            .with_context(|| format!("nelze otevřít katalog {}", path.display()))?;
+            .with_context(|| format!("cannot open the catalogue {}", path.display()))?;
         Self::prepare(conn)
     }
 
-    /// Katalog v paměti. Pro testy — a jen pro ně.
+    /// An in-memory catalogue. For tests, and for tests only.
     pub fn in_memory() -> Result<Self> {
         Self::prepare(Connection::open_in_memory()?)
     }
 
     fn prepare(conn: Connection) -> Result<Self> {
-        // WAL kvůli tomu, aby čtení neblokovalo zápis; NORMAL protože katalog
-        // se dá kdykoliv obnovit skenem a plné fsync za to nestojí.
+        // WAL so that reads do not block writes; NORMAL because the
+        // catalogue can be rebuilt by a scan at any time and full fsync is
+        // not worth it.
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "foreign_keys", true)?;
@@ -102,17 +104,17 @@ impl Catalog {
         let to = latest_version();
         anyhow::ensure!(
             from <= to,
-            "katalog je ze schématu {from}, tenhle build umí nejvýš {to} — \
-             novější PhotoSite už ho otevřel"
+            "the catalogue is at schema {from}, this build handles at most {to} — \
+             a newer PhotoSite has opened it"
         );
 
         for (at, migration) in MIGRATIONS.iter().enumerate().skip(from as usize) {
             let version = at as i64 + 1;
-            tracing::info!(migrace = migration.name, %version, "migruji katalog");
+            tracing::info!(migration = migration.name, %version, "migrating the catalogue");
             let transaction = self.conn.transaction()?;
             transaction
                 .execute_batch(migration.sql)
-                .with_context(|| format!("migrace {} selhala", migration.name))?;
+                .with_context(|| format!("migration {} failed", migration.name))?;
             transaction.pragma_update(None, "user_version", version)?;
             transaction.commit()?;
         }
@@ -140,7 +142,7 @@ impl Catalog {
         Ok(())
     }
 
-    /// Zapíše fotku, nebo aktualizuje tu, která už pod tou cestou je.
+    /// Writes a photograph, or updates the one already at that path.
     pub fn upsert(&self, photo: &NewPhoto) -> Result<PhotoId> {
         let folder = photo
             .path
@@ -167,11 +169,11 @@ impl Catalog {
         )?))
     }
 
-    /// Zapíše dávku v jedné transakci.
+    /// Writes a batch in a single transaction.
     ///
-    /// Jeden řádek na transakci vypadá nevinně, ale sken složky se tím
-    /// zpomalí zhruba dvacetkrát — SQLite musí po každém zápisu srovnat účty
-    /// s diskem. Dávka je tu proto od začátku, ne jako pozdější optimalizace.
+    /// One row per transaction looks innocent, but it slows a folder scan by
+    /// roughly twentyfold — SQLite has to settle up with the disk after every
+    /// write. Hence batching from the start, not as a later optimisation.
     pub fn upsert_many(&mut self, photos: &[NewPhoto]) -> Result<()> {
         let transaction = self.conn.transaction()?;
         {
@@ -199,8 +201,8 @@ impl Catalog {
         Ok(())
     }
 
-    /// Cesty, které katalog zná a jsou beze změny — hodí se pro inkrementální
-    /// sken, aby se nemusel ptát na každý soubor zvlášť.
+    /// Paths the catalogue knows and that are unchanged — useful for an
+    /// incremental scan, so it need not ask about every file one at a time.
     pub fn unchanged(
         &self,
         identities: &[FileIdentity],
@@ -238,7 +240,7 @@ impl Catalog {
             .optional()?)
     }
 
-    /// Fotky v jedné složce, seřazené podle cesty.
+    /// The photographs in one folder, ordered by path.
     pub fn in_folder(&self, folder: &Path) -> Result<Vec<Photo>> {
         let mut statement = self.conn.prepare(
             "SELECT id, path, folder, file_size, modified_at, taken_at, width, height, orientation
@@ -256,7 +258,7 @@ impl Catalog {
             .query_row("SELECT COUNT(*) FROM photos", [], |row| row.get(0))?)
     }
 
-    /// Je soubor v katalogu a nezměnil se od té doby?
+    /// Is the file in the catalogue and unchanged since?
     pub fn is_current(&self, identity: &FileIdentity) -> Result<bool> {
         Ok(self
             .by_path(&identity.path)?
@@ -265,7 +267,8 @@ impl Catalog {
     }
 }
 
-/// Co se zapisuje do katalogu. Bez `id`, protože to přiděluje databáze.
+/// What gets written into the catalogue. No `id`, because the database
+/// hands that out.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewPhoto {
     pub path: PathBuf,
@@ -310,13 +313,13 @@ mod tests {
     }
 
     #[test]
-    fn cerstvy_katalog_je_na_posledni_verzi() {
+    fn a_fresh_catalogue_is_at_the_latest_version() {
         let catalog = Catalog::in_memory().unwrap();
         assert_eq!(catalog.version().unwrap(), latest_version());
     }
 
     #[test]
-    fn migrace_pustena_dvakrat_nic_nezkazi() {
+    fn running_the_migrations_twice_spoils_nothing() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("c.db");
         {
@@ -330,7 +333,7 @@ mod tests {
     }
 
     #[test]
-    fn novejsi_schema_se_odmitne_misto_poskozeni() {
+    fn a_newer_schema_is_refused_rather_than_damaged() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("c.db");
         {
@@ -340,11 +343,11 @@ mod tests {
         }
 
         let error = Catalog::open(&path).unwrap_err().to_string();
-        assert!(error.contains("novější PhotoSite"), "{error}");
+        assert!(error.contains("a newer PhotoSite"), "{error}");
     }
 
     #[test]
-    fn upsert_prepise_a_nezaloz_druhy_radek() {
+    fn upsert_overwrites_and_does_not_add_a_second_row() {
         let catalog = Catalog::in_memory().unwrap();
         let first = catalog.upsert(&sample("/a/b.jpg")).unwrap();
         let mut changed = sample("/a/b.jpg");
@@ -363,7 +366,7 @@ mod tests {
     }
 
     #[test]
-    fn listovani_slozky_vraci_jen_ji() {
+    fn listing_a_folder_returns_only_that_folder() {
         let catalog = Catalog::in_memory().unwrap();
         catalog.upsert(&sample("/a/one.jpg")).unwrap();
         catalog.upsert(&sample("/a/two.jpg")).unwrap();
@@ -374,7 +377,7 @@ mod tests {
     }
 
     #[test]
-    fn nezmeneny_soubor_se_pozna_podle_delky_a_casu() {
+    fn an_unchanged_file_is_recognised_by_its_length_and_time() {
         let catalog = Catalog::in_memory().unwrap();
         catalog.upsert(&sample("/a/b.jpg")).unwrap();
         let same = FileIdentity {
@@ -392,7 +395,7 @@ mod tests {
     }
 
     #[test]
-    fn nastaveni_prezije_prepis() {
+    fn settings_survive_a_rewrite() {
         let catalog = Catalog::in_memory().unwrap();
         assert_eq!(catalog.setting("x").unwrap(), None);
         catalog.set_setting("x", "1").unwrap();

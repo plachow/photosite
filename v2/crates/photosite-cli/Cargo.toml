@@ -1,6 +1,6 @@
 [package]
 name = "photosite-cli"
-description = "Headless binárka: pustí celou pipeline bez okna a bez GPU."
+description = "The headless binary: runs the whole pipeline with no window and no GPU."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

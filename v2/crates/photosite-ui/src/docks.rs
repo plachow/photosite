@@ -1,13 +1,15 @@
-//! Kreslení doků podle stromu z [`photosite_core::docks`].
+//! Drawing the docks from the tree in [`photosite_core::docks`].
 //!
-//! Tenhle soubor o žádném konkrétním rozložení neví. Dostane strom, rozdělí
-//! podle něj obdélník okna a každou plochu předá jejímu kreslíři. Přidat
-//! informace pod náhled znamená změnit řetězec v nastavení, ne sáhnout sem.
+//! This file knows nothing about any particular layout. It is handed a tree,
+//! splits the window rectangle by it and passes each pane to its renderer.
+//! Putting the details below the preview means changing a string in the
+//! settings, not reaching in here.
 //!
-//! Dělítko je jediné místo, kde se rozložení mění, a drží tři pravidla:
-//! táhne se, dvojklik vrátí půl na půl, a **pod nejmenší velikost doku
-//! nepustí**. To poslední není kosmetika: náhled se dal přetáhnout na osm
-//! pixelů, uložilo se to a zpátky ho nedostalo nic.
+//! The splitter is the one place a layout changes, and it holds three rules:
+//! it drags, a double-click returns it to half and half, and it **will not go
+//! below a dock's minimum size**. The last of those is not cosmetic: the
+//! preview could be dragged down to eight pixels, that was saved, and nothing
+//! brought it back.
 
 use crate::{App, grid, info, theme};
 use eframe::egui;
@@ -17,33 +19,33 @@ use photosite_core::t;
 use photosite_core::theme::Palette;
 use std::collections::HashSet;
 
-/// Změna, kterou dělítko udělalo. Zapisuje se až po kreslení, aby se strom
-/// neměnil zprostřed průchodu.
+/// A change a splitter made. Written only after drawing, so the tree does not
+/// change in the middle of a walk.
 struct Moved {
     path: Vec<bool>,
     ratio: f64,
 }
 
-/// Co platí po celý průchod stromem. Pohromadě, ať se to netahá po jednom
-/// argumentu do každého patra.
+/// What holds for the whole walk of the tree. Kept together so it is not
+/// dragged down one argument at a time into every storey.
 struct Board<'a> {
     palette: &'a Palette,
     hidden: HashSet<&'a str>,
     splitter: f64,
 }
 
-/// Dělítko i s tím, co o něm potřebuje vědět tažení.
+/// A splitter along with what dragging needs to know about it.
 struct Bar {
     rect: egui::Rect,
     axis: Axis,
-    /// Kolik místa mají obě části dohromady, bez dělítka samotného.
+    /// How much room both parts have together, the splitter itself aside.
     usable: f64,
     ratio: f64,
 }
 
 pub fn show(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
-    // Strom i seznam schovaných se vytáhnou stranou; kreslení si `app` půjčí
-    // celý a půjčka na jeho pole by to zablokovala.
+    // The tree and the hidden list are pulled out first; drawing borrows all
+    // of `app`, and a borrow of its fields would block that.
     let layout = app.layout.clone();
     let closed = app.hidden.clone();
     let board = Board {
@@ -53,7 +55,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
     };
     let rect = ui.available_rect_before_wrap();
 
-    // Všechno schované by nechalo prázdné okno bez čehokoliv, čím ho vrátit.
+    // Everything hidden would leave an empty window with nothing to bring it
+    // back.
     if !layout.visible(&board.hidden) {
         ui.centered_and_justified(|ui| {
             ui.label(egui::RichText::new(t!("docks-all-hidden")).color(theme::color(palette.dim)));
@@ -91,7 +94,7 @@ fn draw(
         return pane(app, ui, board.palette, id, rect);
     };
 
-    // Schovaná polovina nebere místo ani si neúčtuje dělítko.
+    // A hidden half takes no room and charges for no splitter.
     if !first.visible(&board.hidden) {
         return draw(app, ui, board, second, rect, path, moved);
     }
@@ -155,9 +158,9 @@ fn draw(
     path.pop();
 }
 
-/// Dělítko: táhnout, nebo dvojklikem zpátky na půl.
+/// The splitter: drag it, or double-click back to half and half.
 fn handle(ui: &mut egui::Ui, board: &Board, bar: &Bar, path: &[bool], moved: &mut Option<Moved>) {
-    let id = ui.id().with(("delitko", path));
+    let id = ui.id().with(("splitter", path));
     let response = ui.interact(bar.rect, id, Sense::click_and_drag());
     let cursor = match bar.axis {
         Axis::Across => egui::CursorIcon::ResizeHorizontal,
@@ -167,8 +170,8 @@ fn handle(ui: &mut egui::Ui, board: &Board, bar: &Bar, path: &[bool], moved: &mu
         ui.ctx().set_cursor_icon(cursor);
     }
 
-    // Zvýrazní se, až když je na něm myš — jinak by okno rozřezaly svítící
-    // čáry, kterých si nikdo nechtěl všímat.
+    // It lights up only under the mouse — otherwise the window would be cut
+    // apart by glowing lines nobody asked to notice.
     let tint = if response.hovered() || response.dragged() {
         board.palette.accent
     } else {
@@ -198,7 +201,7 @@ fn handle(ui: &mut egui::Ui, board: &Board, bar: &Bar, path: &[bool], moved: &mu
     }
 }
 
-/// Jedna plocha. Tady je jediný seznam, který ví, co která znamená.
+/// One pane. This is the only list that knows what each of them means.
 fn pane(app: &mut App, ui: &mut egui::Ui, palette: &Palette, id: &str, rect: egui::Rect) {
     let fill = match id {
         "tree" => palette.panel,
@@ -213,19 +216,20 @@ fn pane(app: &mut App, ui: &mut egui::Ui, palette: &Palette, id: &str, rect: egu
         "gallery" => grid::gallery(app, &mut child, palette),
         "preview" => grid::preview(app, &mut child, palette),
         "info" => info::pane(app, &mut child, palette),
-        // Neznámou plochu sem rozložení nepustí; kdyby přece, ať je vidět
-        // prázdné místo a ne pád.
-        other => tracing::warn!(plocha = other, "plocha bez kreslíře"),
+        // The layout will not let an unknown pane through; if one ever got
+        // here, an empty space beats a panic.
+        other => tracing::warn!(pane = other, "pane with no renderer"),
     }
 }
 
-/// Prostor pro jednu plochu.
+/// The space for one pane.
 ///
-/// Klíč `id` tu není kosmetika. Bez něj dá egui všem dětem téhož rodiče
-/// stejnou sůl — doslova `"child"` — a rozliší je jen pořadím, ve kterém
-/// vznikly. Rolovací plochy uvnitř si pak sáhnou na společný stav a kolečko
-/// nad stromem složek posouvá dlaždice v mřížce. Navíc by stačilo jednu
-/// plochu schovat, aby se pořadí posunulo a stavy se prohodily.
+/// The `id` key here is not cosmetic. Without it egui gives every child of
+/// the same parent the same salt — literally `"child"` — and tells them apart
+/// only by the order they were created in. The scroll areas inside then reach
+/// for one shared state, and the wheel over the folder tree moves the tiles in
+/// the grid. Worse, hiding a single pane would shift the order and swap the
+/// states around.
 fn child_ui(ui: &mut egui::Ui, id: &str, rect: egui::Rect) -> egui::Ui {
     ui.new_child(
         egui::UiBuilder::new()
@@ -239,13 +243,14 @@ fn child_ui(ui: &mut egui::Ui, id: &str, rect: egui::Rect) -> egui::Ui {
 mod tests {
     use super::*;
 
-    /// Postaví dvě plochy vedle sebe, v každé rolovací seznam, pošle kolečko
-    /// nad tu levou a vrátí posun obou.
+    /// Builds two panes side by side, a scrolling list in each, sends the
+    /// wheel over the left one and returns how far both moved.
     fn wheel_over_left(salt: bool) -> (f32, f32) {
         let ctx = egui::Context::default();
         let mut offsets = (0.0, 0.0);
         for _ in 0..2 {
-            // Dvakrát: první průchod plochy teprve zakládá, měří se druhý.
+            // Twice: the first pass only creates the panes, the second is
+            // the one measured.
             let mut input = egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::pos2(0.0, 0.0),
@@ -268,7 +273,7 @@ mod tests {
                     egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 600.0));
                 let right =
                     egui::Rect::from_min_size(egui::pos2(400.0, 0.0), egui::vec2(400.0, 600.0));
-                for (name, rect, first) in [("vlevo", left, true), ("vpravo", right, false)] {
+                for (name, rect, first) in [("left", left, true), ("right", right, false)] {
                     let mut child = if salt {
                         child_ui(ui, name, rect)
                     } else {
@@ -289,34 +294,38 @@ mod tests {
                 }
             });
 
-            // Bez renderu se textury nikam nenahrají a epaint by na to při
-            // zahození upozornil pádem.
+            // With no renderer the textures are never uploaded, and epaint
+            // would point that out with a panic when the output is dropped.
             out.textures_delta.clear();
         }
 
         offsets
     }
 
-    /// Roluje se tam, kde je myš. Nic jiného se hnout nesmí.
+    /// Scrolling happens where the mouse is. Nothing else may move.
     ///
-    /// Tohle bylo rozbité hned první den, co doky nahradily pevné panely:
-    /// kolečko nad stromem složek posouvalo dlaždice.
+    /// This was broken the very day the docks replaced the fixed panels: the
+    /// wheel over the folder tree moved the tiles.
     #[test]
-    fn kolecko_hne_jen_plochou_pod_mysi() {
-        let (vlevo, vpravo) = wheel_over_left(true);
-        assert!(vlevo > 0.0, "plocha pod myší se neposunula ({vlevo})");
-        assert_eq!(vpravo, 0.0, "posunula se i plocha, nad kterou myš nebyla");
+    fn the_wheel_moves_only_the_pane_under_the_mouse() {
+        let (left, right) = wheel_over_left(true);
+        assert!(left > 0.0, "the pane under the mouse did not move ({left})");
+        assert_eq!(right, 0.0, "a pane the mouse was not over moved too");
     }
 
-    /// Měřidlo samo: bez vlastního klíče se rolování opravdu rozteče, jinak
-    /// by test výš hlídal něco, co nikdy nespadne.
+    /// The gauge itself: without its own key the scrolling really does run
+    /// together, otherwise the test above would guard something that can
+    /// never fail.
     #[test]
-    fn bez_vlastniho_klice_se_rolovani_rozteka() {
-        let (vlevo, vpravo) = wheel_over_left(false);
+    fn without_its_own_key_the_scrolling_runs_together() {
+        let (left, right) = wheel_over_left(false);
         assert_eq!(
-            vlevo, vpravo,
-            "bez klíče se plochy chovaly správně — test výš pak nehlídá nic"
+            left, right,
+            "without keys the panes behaved correctly — the test above then guards nothing"
         );
-        assert!(vpravo > 0.0, "nehnulo se vůbec nic, tak se nic neměří");
+        assert!(
+            right > 0.0,
+            "nothing moved at all, so nothing is being measured"
+        );
     }
 }

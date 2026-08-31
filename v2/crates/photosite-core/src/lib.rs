@@ -1,10 +1,10 @@
-//! Jádro PhotoSite: doména, katalog a běhové zázemí.
+//! The PhotoSite core: domain, catalogue and runtime scaffolding.
 //!
-//! Tahle crate **nesmí vědět, že existuje UI.** Žádné `egui`, žádné `eframe`,
-//! žádné `wgpu` — ani nepřímo. Hlídá to test v `tests/bez_ui.rs`, protože
-//! přesně tahle hranice se rozpadá sama od sebe a její ztráta je jediný důvod,
-//! proč byl port v1 drahý: devatenáct souborů mimo UI složky tam sahalo na
-//! `BitmapSource`.
+//! This crate **must not know that a UI exists.** No `egui`, no `eframe`, no
+//! `wgpu` — not even indirectly. The test in `tests/no_ui.rs` guards it,
+//! because this particular boundary erodes on its own, and losing it is the
+//! single reason the v1 port was expensive: nineteen files outside the UI
+//! folders reached for `BitmapSource`.
 
 pub mod catalog;
 pub mod commands;
@@ -26,5 +26,5 @@ pub use paths::Paths;
 pub use settings::Settings;
 pub use theme::{Palette, Theme};
 
-/// Verze, kterou hlásí `--version` i diagnostika.
+/// The version reported by `--version` and by the diagnostics window.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

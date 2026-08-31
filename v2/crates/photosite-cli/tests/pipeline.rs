@@ -1,30 +1,31 @@
-//! Integrační test celé cesty bez okna a bez GPU.
+//! An integration test of the whole path, with no window and no GPU.
 //!
-//! Tohle je ten důvod, proč CLI existuje: v CI na Linuxu ani na macOS není
-//! obrazovka, ale sken, katalog i migrace se otestovat musí.
+//! This is the reason the CLI exists: there is no screen in CI on Linux or on
+//! macOS, but the scan, the catalogue and the migrations still have to be
+//! tested.
 
 use photosite_core::catalog::NewPhoto;
 use photosite_core::{Catalog, Paths, domain};
 use std::path::Path;
 
-/// Nejmenší platný JPEG, na kterém jde zkoušet čtení hlavičky.
-const MALY_JPEG: &[u8] = &[
+/// The smallest valid JPEG that header reading can be tried on.
+const TINY_JPEG: &[u8] = &[
     0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, b'J', b'F', b'I', b'F', 0x00, 0x01, 0x01, 0x00, 0x00, 0x01,
     0x00, 0x01, 0x00, 0x00, 0xFF, 0xD9,
 ];
 
-fn strom(root: &Path) {
-    std::fs::create_dir_all(root.join("2024/leden")).unwrap();
-    std::fs::write(root.join("a.jpg"), MALY_JPEG).unwrap();
-    std::fs::write(root.join("2024/b.jpg"), MALY_JPEG).unwrap();
-    std::fs::write(root.join("2024/leden/c.JPG"), MALY_JPEG).unwrap();
-    std::fs::write(root.join("2024/poznamky.txt"), b"tohle neni fotka").unwrap();
-    // Soubor, který tvrdí, že je JPEG, a není. V reálné knihovně o 57 606
-    // fotkách byly takové tři.
-    std::fs::write(root.join("2024/lzivy.jpg"), b"rozhodne ne jpeg").unwrap();
+fn tree(root: &Path) {
+    std::fs::create_dir_all(root.join("2024/january")).unwrap();
+    std::fs::write(root.join("a.jpg"), TINY_JPEG).unwrap();
+    std::fs::write(root.join("2024/b.jpg"), TINY_JPEG).unwrap();
+    std::fs::write(root.join("2024/january/c.JPG"), TINY_JPEG).unwrap();
+    std::fs::write(root.join("2024/notes.txt"), b"this is not a photograph").unwrap();
+    // A file that claims to be a JPEG and is not. In a real library of
+    // 57,606 photographs there were three of them.
+    std::fs::write(root.join("2024/liar.jpg"), b"certainly not a jpeg").unwrap();
 }
 
-fn nasbirej(root: &Path, recursive: bool) -> Vec<std::path::PathBuf> {
+fn gather(root: &Path, recursive: bool) -> Vec<std::path::PathBuf> {
     let mut found: Vec<_> = walkdir::WalkDir::new(root)
         .max_depth(if recursive { usize::MAX } else { 1 })
         .into_iter()
@@ -37,7 +38,7 @@ fn nasbirej(root: &Path, recursive: bool) -> Vec<std::path::PathBuf> {
     found
 }
 
-fn zapis(catalog: &mut Catalog, files: &[std::path::PathBuf]) {
+fn write(catalog: &mut Catalog, files: &[std::path::PathBuf]) {
     let batch: Vec<NewPhoto> = files
         .iter()
         .filter_map(|path| domain::FileIdentity::read(path).ok())
@@ -55,88 +56,89 @@ fn zapis(catalog: &mut Catalog, files: &[std::path::PathBuf]) {
 }
 
 #[test]
-fn sken_najde_fotky_a_vynecha_ostatni() {
+fn a_scan_finds_photographs_and_leaves_the_rest() {
     let dir = tempfile::tempdir().unwrap();
-    strom(dir.path());
+    tree(dir.path());
 
     assert_eq!(
-        nasbirej(dir.path(), false).len(),
+        gather(dir.path(), false).len(),
         1,
-        "bez rekurze jen kořen"
+        "without recursion, the root only"
     );
-    let vsechny = nasbirej(dir.path(), true);
-    assert_eq!(vsechny.len(), 4, "tři pravé JPEGy a jeden lživý, .txt ne");
+    let all = gather(dir.path(), true);
+    assert_eq!(all.len(), 4, "three real JPEGs and one liar, no .txt");
 }
 
 #[test]
-fn sken_je_inkrementalni_a_idempotentni() {
+fn a_scan_is_incremental_and_idempotent() {
     let dir = tempfile::tempdir().unwrap();
-    strom(dir.path());
+    tree(dir.path());
     let data = tempfile::tempdir().unwrap();
     let paths = Paths::portable(data.path());
     paths.ensure().unwrap();
 
-    let files = nasbirej(dir.path(), true);
+    let files = gather(dir.path(), true);
     let mut catalog = Catalog::open(&paths.catalog()).unwrap();
-    zapis(&mut catalog, &files);
+    write(&mut catalog, &files);
     assert_eq!(catalog.count().unwrap(), 4);
 
-    // Druhý průchod nesmí přidat nic a všechno musí poznat jako beze změny.
+    // A second pass must add nothing and recognise everything as unchanged.
     let identities: Vec<_> = files
         .iter()
         .map(|path| domain::FileIdentity::read(path).unwrap())
         .collect();
     let known = catalog.unchanged(&identities).unwrap();
-    assert_eq!(known.len(), 4, "nic se nezměnilo, takže je všechno známé");
+    assert_eq!(known.len(), 4, "nothing changed, so everything is known");
 
-    zapis(&mut catalog, &files);
+    write(&mut catalog, &files);
     assert_eq!(
         catalog.count().unwrap(),
         4,
-        "opakovaný sken nezakládá duplicity"
+        "a repeated scan creates no duplicates"
     );
 }
 
 #[test]
-fn zmeneny_soubor_se_pozna() {
+fn a_changed_file_is_noticed() {
     let dir = tempfile::tempdir().unwrap();
-    strom(dir.path());
+    tree(dir.path());
     let data = tempfile::tempdir().unwrap();
     let paths = Paths::portable(data.path());
     paths.ensure().unwrap();
 
-    let files = nasbirej(dir.path(), true);
+    let files = gather(dir.path(), true);
     let mut catalog = Catalog::open(&paths.catalog()).unwrap();
-    zapis(&mut catalog, &files);
+    write(&mut catalog, &files);
 
     let zmeneny = dir.path().join("a.jpg");
-    std::fs::write(&zmeneny, [MALY_JPEG, MALY_JPEG].concat()).unwrap();
+    std::fs::write(&zmeneny, [TINY_JPEG, TINY_JPEG].concat()).unwrap();
     let identity = domain::FileIdentity::read(&zmeneny).unwrap();
     assert!(
         !catalog.is_current(&identity).unwrap(),
-        "delší soubor musí být poznat"
+        "a longer file has to be noticed"
     );
 }
 
 #[test]
-fn lzivy_jpeg_sken_nezastavi() {
+fn a_lying_jpeg_does_not_stop_the_scan() {
     let dir = tempfile::tempdir().unwrap();
-    strom(dir.path());
-    let lzivy = dir.path().join("2024/lzivy.jpg");
+    tree(dir.path());
+    let liar = dir.path().join("2024/liar.jpg");
 
-    // Do katalogu se dostane — je to soubor s příponou fotky. Jen z něj nic
-    // nepřečteme, a to nesmí nikoho položit.
-    let meta = photosite_image::exif::read(&std::fs::read(&lzivy).unwrap());
+    // It gets into the catalogue — it is a file with a photograph's
+    // extension. We simply read nothing out of it, and that must not floor
+    // anybody.
+    let meta = photosite_image::exif::read(&std::fs::read(&liar).unwrap());
     assert_eq!(meta.orientation, 1);
-    assert!(photosite_image::quick(&lzivy).unwrap().is_none());
+    assert!(photosite_image::quick(&liar).unwrap().is_none());
     assert!(
-        photosite_image::sized(&lzivy, 320).is_err(),
-        "chyba se má ohlásit, ne spolknout"
+        photosite_image::sized(&liar, 320).is_err(),
+        "an error is reported, not swallowed"
     );
 }
 
 #[test]
-fn prebiti_cest_nesahne_na_systemove_umisteni() {
+fn overriding_the_paths_leaves_the_system_locations_alone() {
     let data = tempfile::tempdir().unwrap();
     let paths = Paths::portable(data.path());
     paths.ensure().unwrap();
@@ -145,7 +147,7 @@ fn prebiti_cest_nesahne_na_systemove_umisteni() {
 
     assert!(
         paths.catalog().starts_with(data.path()),
-        "katalog musí být pod přebitým kořenem"
+        "the catalogue has to sit under the overridden root"
     );
     assert!(paths.catalog().exists());
 }

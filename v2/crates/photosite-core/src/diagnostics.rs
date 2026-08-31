@@ -1,32 +1,34 @@
-//! Záznam běhu a hlášení o pádech.
+//! The run log and crash reports.
 //!
-//! Grafická aplikace, která spadne, prostě zmizí — bez okna, bez hlášky, bez
-//! stopy. A chyba, kterou někdo spolkl, je ještě horší: aplikace běží dál a
-//! tváří se, že je všechno v pořádku, jen nic nedělá. Přesně tohle se stalo
-//! prototypu, kde jedna zahozená výjimka způsobila, že se nevykreslil jediný
-//! náhled a nikde o tom nebylo ani slovo.
+//! A graphical application that crashes simply vanishes — no window, no
+//! message, no trace. And an error somebody swallowed is worse still: the
+//! application keeps running, looks like all is well, and does nothing. That
+//! is exactly what happened to the prototype, where one discarded exception
+//! meant not a single thumbnail was drawn and nowhere was there a word about
+//! it.
 //!
-//! Proto: všechno jde do souboru, pád nechá po sobě hlášení, a nic se nikdy
-//! neztratí mlčky.
+//! Hence: everything goes to the file, a crash leaves a report behind, and
+//! nothing is ever lost in silence.
 
 use crate::paths::Paths;
 use std::io::Write;
 use std::path::PathBuf;
 
-/// Držák, který musí zůstat naživu po celou dobu běhu — jinak se zápis do
-/// souboru zavře a log skončí.
+/// A handle that has to stay alive for the whole run — otherwise the file
+/// writer closes and the log ends.
 #[derive(Debug)]
 pub struct Logging {
     _guard: tracing_appender::non_blocking::WorkerGuard,
     pub file: PathBuf,
 }
 
-/// Cíle, které patří nám. Filtr je bere podle jména *crate*, a to u binárky
-/// není jméno balíčku, ale jméno cíle: aplikace v `photosite-ui` hlásí pod
-/// `photosite`. Dokud tady nestálo, nešel do logu jediný řádek z aplikace
-/// samotné — jen z jádra — a nebylo to nijak poznat, protože varování
-/// a chyby propadly obecnou úrovní na konci.
-const NASE: &[&str] = &[
+/// The targets that belong to us. The filter matches them by *crate* name,
+/// and for a binary that is not the package name but the target name: the
+/// application in `photosite-ui` logs under `photosite`. Until that stood
+/// here, not one line from the application itself reached the log — only
+/// lines from the core — and there was no way to tell, because warnings and
+/// errors fell through the general level at the end.
+const OURS: &[&str] = &[
     "photosite",
     "photosite_ui",
     "photosite_cli",
@@ -34,21 +36,23 @@ const NASE: &[&str] = &[
     "photosite_image",
 ];
 
-/// Výchozí úrovně, když `RUST_LOG` mlčí: naše crate podrobně, cizí až od
-/// varování výš, aby log nezaplavila grafika.
+/// Default levels when `RUST_LOG` says nothing: our crates in detail,
+/// foreign ones from warnings up, so the graphics stack does not flood the
+/// log.
 pub fn default_filter(verbose: bool) -> String {
     let level = if verbose { "debug" } else { "info" };
-    NASE.iter()
-        .map(|krate| format!("{krate}={level}"))
+    OURS.iter()
+        .map(|name| format!("{name}={level}"))
         .chain(std::iter::once("warn".to_owned()))
         .collect::<Vec<_>>()
         .join(",")
 }
 
-/// Zapne záznam do souboru i na standardní chybový výstup.
+/// Starts logging, both to the file and to standard error.
 ///
-/// Úroveň se dá přebít proměnnou `RUST_LOG`; bez ní je to `info` pro nás a
-/// `warn` pro cizí crate, aby log nezaplavila grafika.
+/// The level can be overridden with `RUST_LOG`; without it, `info` for us
+/// and `warn` for foreign crates, so the graphics stack does not flood the
+/// log.
 pub fn start(paths: &Paths, verbose: bool) -> Logging {
     use tracing_subscriber::layer::SubscriberExt as _;
     use tracing_subscriber::util::SubscriberInitExt as _;
@@ -76,10 +80,10 @@ pub fn start(paths: &Paths, verbose: bool) -> Logging {
     }
 }
 
-/// Nainstaluje zachytávač pádů, který napíše hlášení vedle logu.
+/// Installs a panic hook that writes a report next to the log.
 ///
-/// Bez tohohle je pád v grafické aplikaci neviditelný: okno zmizí a nikdo se
-/// nikdy nedozví proč.
+/// Without this, a crash in a graphical application is invisible: the window
+/// disappears and nobody ever learns why.
 pub fn install_panic_hook(paths: &Paths) {
     let logs = paths.logs.clone();
     let previous = std::panic::take_hook();
@@ -93,16 +97,18 @@ pub fn install_panic_hook(paths: &Paths) {
             let _ = writeln!(file, "{}", std::backtrace::Backtrace::force_capture());
         }
 
-        tracing::error!(report = %report.display(), "pád");
-        eprintln!("PhotoSite spadl. Hlášení: {}", report.display());
+        tracing::error!(report = %report.display(), "crashed");
+        eprintln!("PhotoSite crashed. Report: {}", report.display());
         previous(info);
     }));
 }
 
-/// Co vypsat, když se někdo ptá „co se u tebe děje". První otázka každé
-/// podpory, tak ať je odpověď na jedno zavolání.
+/// What to print when somebody asks what is going on. It is the first
+/// question any support conversation opens with, so the answer should be one
+/// call away.
 ///
-/// Vrací dvojice popisek–hodnota, aby si je CLI mohlo vypsat a UI vysázet.
+/// Returns label-value pairs, so the CLI can print them and the UI can lay
+/// them out.
 pub fn about(paths: &Paths) -> Vec<(String, String)> {
     use crate::i18n::t;
     vec![

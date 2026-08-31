@@ -1,16 +1,17 @@
-//! Z cesty na disku udělá pixely v požadované velikosti.
+//! Turns a path on disk into pixels at the size asked for.
 //!
-//! Dvě věci, které jsou tu jinak, než by člověk čekal, a obě jsou naměřené:
+//! Two things here are not what one would expect, and both were measured:
 //!
-//! * **Škálování v DCT doméně skoro nic neušetří.** Na sadě šedesáti fotek
-//!   vyšlo 31,9 ms při požadavku na 640 px a 30,6 ms při požadavku na 320 px,
-//!   tedy čtyřikrát míň výstupních pixelů za o 4 % kratší čas. Entropické
-//!   dekódování všech koeficientů se udělá tak jako tak a to je celá cena.
-//!   Žádat víc, než je potřeba, proto nemá smysl — ušetří to jen práci
-//!   zvětšovači.
-//! * **Vložený náhled je o dva řády levnější.** Přečíst prvních 128 kB
-//!   souboru a dekódovat obrázek 160×120 stojí zlomek milisekundy. Proto
-//!   [`quick`] existuje a proto se dlaždice plní nejdřív jím.
+//! * **Scaling in the DCT domain saves almost nothing.** Over a set of sixty
+//!   photographs it came to 31.9 ms asking for 640 px against 30.6 ms asking
+//!   for 320 px — four times fewer output pixels for 4% less time. The
+//!   entropy decoding of every coefficient happens either way and that is the
+//!   whole cost. Asking for more than is needed is therefore pointless; it
+//!   only saves the resizer some work.
+//! * **The embedded thumbnail is two orders of magnitude cheaper.** Reading
+//!   the first 128 kB of the file and decoding a 160x120 image costs a
+//!   fraction of a millisecond. That is why [`quick`] exists and why tiles
+//!   are filled from it first.
 
 use crate::exif;
 use anyhow::{Context, Result};
@@ -19,7 +20,7 @@ use fast_image_resize::{PixelType, Resizer};
 use std::io::Read as _;
 use std::path::Path;
 
-/// Obrázek v paměti: RGB, tři bajty na pixel, bez výplně řádků.
+/// An image in memory: RGB, three bytes per pixel, no row padding.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Rgb {
     pub width: u32,
@@ -32,7 +33,7 @@ impl std::fmt::Debug for Rgb {
         f.debug_struct("Rgb")
             .field("width", &self.width)
             .field("height", &self.height)
-            .field("bajtů", &self.pixels.len())
+            .field("bytes", &self.pixels.len())
             .finish()
     }
 }
@@ -42,7 +43,7 @@ impl Rgb {
         let expected = width as usize * height as usize * 3;
         anyhow::ensure!(
             pixels.len() >= expected,
-            "obrázek {width}×{height} potřebuje {expected} bajtů, dostal {}",
+            "an image of {width}x{height} needs {expected} bytes, got {}",
             pixels.len()
         );
         Ok(Self {
@@ -53,14 +54,15 @@ impl Rgb {
     }
 }
 
-/// Náhled z EXIFu. Čte jen hlavičku souboru, ne celou fotku.
+/// The thumbnail out of EXIF. Reads only the file header, not the whole
+/// photograph.
 ///
-/// Vrátí `None`, když ho fotka nemá — což je v pořádku a časté u obrázků,
-/// které nevznikly ve fotoaparátu.
+/// Returns `None` when the photograph has none, which is fine and common for
+/// images that did not come out of a camera.
 pub fn quick(path: &Path) -> Result<Option<Rgb>> {
     let mut head = vec![0u8; exif::HEADER_BYTES];
     let mut file =
-        std::fs::File::open(path).with_context(|| format!("nelze otevřít {}", path.display()))?;
+        std::fs::File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
     let read = file.read(&mut head)?;
     head.truncate(read);
 
@@ -77,10 +79,11 @@ pub fn quick(path: &Path) -> Result<Option<Rgb>> {
         return Ok(None);
     };
 
-    // Náhled z EXIFu má poměr stran, jaký se fotoaparátu zlíbilo, ne poměr
-    // snímku. Nikon do souboru 6000×4000 uloží náhled 160×120 a celou scénu
-    // do něj natlačí — nic se neořízne, jen se to zúží. Dokud nedorazí ostrá
-    // verze, kreslí se právě tenhle, takže by knihovna vypadala rozplácle.
+    // The EXIF thumbnail carries whatever aspect ratio suited the camera,
+    // not the ratio of the frame. A Nikon stores a 160x120 thumbnail next to
+    // a 6000x4000 file and squeezes the whole scene into it — nothing is
+    // cropped, it is simply narrowed. Until the sharp version arrives this is
+    // what gets drawn, so the library would look squashed.
     let image = match dimensions(&head).and_then(|full| stretched_to(&image, full)) {
         Some((width, height)) => resize(&image, width, height)?,
         None => image,
@@ -89,9 +92,10 @@ pub fn quick(path: &Path) -> Result<Option<Rgb>> {
     Ok(Some(rotate(image, meta.orientation)))
 }
 
-/// Rozměry snímku ze značky SOF, bez dekódování pixelů.
+/// The dimensions of the frame from the SOF marker, without decoding pixels.
 ///
-/// Hlavička, kterou už máme přečtenou, stačí: SOF leží hned za blokem EXIF.
+/// The header we have already read is enough: SOF sits right behind the EXIF
+/// block.
 fn dimensions(raw: &[u8]) -> Option<(u32, u32)> {
     let mut decoder = jpeg_decoder::Decoder::new(std::io::Cursor::new(raw));
     decoder.read_info().ok()?;
@@ -99,11 +103,13 @@ fn dimensions(raw: &[u8]) -> Option<(u32, u32)> {
     Some((info.width as u32, info.height as u32))
 }
 
-/// Na jakou velikost náhled přepočítat, aby měl poměr snímku.
+/// What size to rescale the thumbnail to so that it carries the ratio of the
+/// frame.
 ///
-/// Zachová delší stranu — o rozlišení tu nejde, jen o tvar. Vrátí `None`,
-/// když poměr sedí; drtivá většina telefonů ukládá náhled správně a přepočítat
-/// ho by znamenalo rozmazat ho zadarmo.
+/// Keeps the longer edge — this is about shape, not resolution. Returns
+/// `None` when the ratio already matches; the overwhelming majority of phones
+/// store the thumbnail correctly and rescaling would only blur it for
+/// nothing.
 fn stretched_to(thumb: &Rgb, full: (u32, u32)) -> Option<(u32, u32)> {
     let (full_w, full_h) = full;
     if thumb.width == 0 || thumb.height == 0 || full_w == 0 || full_h == 0 {
@@ -112,7 +118,8 @@ fn stretched_to(thumb: &Rgb, full: (u32, u32)) -> Option<(u32, u32)> {
 
     let want = full_w as f64 / full_h as f64;
     let have = thumb.width as f64 / thumb.height as f64;
-    // Jeden pixel zaokrouhlení na sto sem netahat; pod procento je to shoda.
+    // One pixel of rounding in a hundred is not a stretch; under a percent
+    // counts as a match.
     if (want - have).abs() / want < 0.01 {
         return None;
     }
@@ -121,23 +128,24 @@ fn stretched_to(thumb: &Rgb, full: (u32, u32)) -> Option<(u32, u32)> {
     Some(fit(full_w, full_h, longer))
 }
 
-/// Plnohodnotné dekódování zmenšené tak, aby se vešlo do čtverce `max`.
+/// A full decode, scaled down to fit inside a `max` by `max` square.
 pub fn sized(path: &Path, max: u32) -> Result<Rgb> {
-    let raw = std::fs::read(path).with_context(|| format!("nelze přečíst {}", path.display()))?;
+    let raw = std::fs::read(path).with_context(|| format!("cannot read {}", path.display()))?;
     let meta = exif::read(&raw);
     let swapped = matches!(meta.orientation, 5..=8);
 
     let source = if raw.starts_with(&[0xFF, 0xD8, 0xFF]) {
-        jpeg_rgb(&raw, Some(max)).context("JPEG nelze dekódovat")?
+        jpeg_rgb(&raw, Some(max)).context("the JPEG cannot be decoded")?
     } else {
         let decoded = image::load_from_memory(&raw)
-            .context("obrázek nelze dekódovat")?
+            .context("the image cannot be decoded")?
             .to_rgb8();
         let (width, height) = decoded.dimensions();
         Rgb::new(width, height, decoded.into_raw())?
     };
 
-    // Poměr stran se počítá po otočení, zmenšuje se ale před ním.
+    // The aspect ratio is worked out after rotation, but the scaling happens
+    // before it.
     let (shown_w, shown_h) = if swapped {
         (source.height, source.width)
     } else {
@@ -187,7 +195,7 @@ fn to_rgb(
                 .flat_map(|c| [c[1], c[1], c[1]])
                 .collect(),
         ),
-        // CMYK z JPEGu bývá invertovaný; pro náhled tohle stačí.
+        // CMYK out of a JPEG is usually inverted; for a preview this will do.
         F::CMYK32 if pixels.len() >= count * 4 => Some(
             pixels
                 .as_chunks::<4>()
@@ -223,8 +231,8 @@ fn resize(source: &Rgb, width: u32, height: u32) -> Result<Rgb> {
     Rgb::new(width.max(1), height.max(1), into.into_vec())
 }
 
-/// Největší rozměr se zachovaným poměrem stran, který se vejde do čtverce.
-/// Nikdy nezvětšuje.
+/// The largest size, with the aspect ratio kept, that still fits the square.
+/// Never enlarges.
 pub fn fit(width: u32, height: u32, max: u32) -> (u32, u32) {
     if width == 0 || height == 0 || max == 0 {
         return (1, 1);
@@ -239,8 +247,8 @@ pub fn fit(width: u32, height: u32, max: u32) -> (u32, u32) {
     )
 }
 
-/// Otočí podle EXIF orientace. Zrcadlené varianty se v praxi skoro
-/// nevyskytují, bere se z nich jen rotační složka.
+/// Rotates according to the EXIF orientation. The mirrored variants barely
+/// occur in practice, so only their rotation component is honoured.
 pub fn rotate(source: Rgb, orientation: u8) -> Rgb {
     let turn = match orientation {
         3 | 4 => 2u32,
@@ -292,25 +300,30 @@ mod tests {
     }
 
     #[test]
-    fn fit_zachova_pomer_a_nezvetsuje() {
+    fn fit_keeps_the_ratio_and_never_enlarges() {
         assert_eq!(fit(4000, 3000, 320), (320, 240));
         assert_eq!(fit(3000, 4000, 320), (240, 320));
-        assert_eq!(fit(100, 50, 320), (100, 50), "menší obrázek se nenafukuje");
+        assert_eq!(
+            fit(100, 50, 320),
+            (100, 50),
+            "a smaller image is not blown up"
+        );
         assert_eq!(fit(0, 0, 320), (1, 1));
     }
 
-    /// Náhled z EXIFu, který má jiný tvar než snímek, se musí srovnat.
+    /// An EXIF thumbnail shaped unlike its frame has to be put right.
     ///
-    /// Nikon ukládá k souboru 6000×4000 náhled 160×120 a celou scénu do něj
-    /// natlačí. Do dlaždice se pak kreslil rozplácle až do chvíle, než
-    /// dodekódovala ostrá verze — což je při rolování většina času.
+    /// A Nikon stores a 160x120 thumbnail next to a 6000x4000 file and
+    /// squeezes the whole scene into it. It was then drawn squashed into the
+    /// tile until the sharp version finished decoding — which, while
+    /// scrolling, is most of the time.
     #[test]
-    fn roztazeny_nahled_dostane_tvar_snimku() {
+    fn a_stretched_thumbnail_takes_the_shape_of_the_frame() {
         let thumb = stripes(160, 120);
         assert_eq!(
             stretched_to(&thumb, (6000, 4000)),
             Some((160, 107)),
-            "3:2 snímek s náhledem 4:3"
+            "a 3:2 frame with a 4:3 thumbnail"
         );
 
         let thumb = stripes(120, 160);
@@ -318,53 +331,53 @@ mod tests {
     }
 
     #[test]
-    fn spravny_nahled_se_nesaha() {
-        // Telefony ukládají náhled ve správném poměru. Přepočítat ho by
-        // znamenalo rozmazat ho zadarmo.
+    fn a_correct_thumbnail_is_left_alone() {
+        // Phones store the thumbnail at the right ratio. Rescaling it would
+        // only blur it for nothing.
         assert_eq!(stretched_to(&stripes(160, 120), (4000, 3000)), None);
         assert_eq!(
             stretched_to(&stripes(159, 120), (4000, 3000)),
             None,
-            "zaokrouhlení není roztažení"
+            "rounding is not a stretch"
         );
         assert_eq!(stretched_to(&stripes(160, 160), (4000, 4000)), None);
     }
 
     #[test]
-    fn nesmyslne_rozmery_nic_neprepocitavaji() {
+    fn nonsense_dimensions_rescale_nothing() {
         assert_eq!(stretched_to(&stripes(1, 1), (0, 0)), None);
-        let prazdny = Rgb {
+        let empty = Rgb {
             width: 0,
             height: 0,
             pixels: Vec::new(),
         };
-        assert_eq!(stretched_to(&prazdny, (4000, 3000)), None);
+        assert_eq!(stretched_to(&empty, (4000, 3000)), None);
     }
 
     #[test]
-    fn otoceni_o_devadesat_prohodi_strany() {
+    fn a_quarter_turn_swaps_the_sides() {
         let source = stripes(4, 2);
         let turned = rotate(source.clone(), 6);
         assert_eq!((turned.width, turned.height), (2, 4));
-        // Čtyři otočení po devadesáti stupních vrátí původní obrázek.
+        // Four quarter turns give the original image back.
         let back = rotate(rotate(rotate(turned, 6), 6), 6);
         assert_eq!(back, source);
     }
 
     #[test]
-    fn otoceni_o_sto_osmdesat_dvakrat_je_puvodni() {
+    fn half_a_turn_twice_is_the_original() {
         let source = stripes(3, 5);
         assert_eq!(rotate(rotate(source.clone(), 3), 3), source);
     }
 
     #[test]
-    fn orientace_jedna_nic_nedela() {
+    fn orientation_one_does_nothing() {
         let source = stripes(3, 3);
         assert_eq!(rotate(source.clone(), 1), source);
     }
 
     #[test]
-    fn kratky_buffer_se_odmitne_misto_paniky() {
+    fn a_short_buffer_is_refused_rather_than_panicking() {
         assert!(Rgb::new(10, 10, vec![0; 10]).is_err());
     }
 }

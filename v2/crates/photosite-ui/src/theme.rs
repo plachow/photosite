@@ -1,8 +1,8 @@
-//! Převod motivu z jádra do egui a kreslení dlaždice.
+//! Carrying a theme from the core into egui, and drawing a tile.
 //!
-//! Barvy ani rozměry tu nejsou. Barvy přicházejí z [`photosite_core::theme`]
-//! jako data, rozměry z nastavení. Tenhle soubor umí jediné: vzít je a
-//! nakreslit podle nich.
+//! Neither colours nor dimensions live here. Colours arrive from
+//! [`photosite_core::theme`] as data, dimensions from the settings. This file
+//! does one thing: take them and draw by them.
 
 use egui::{Color32, CornerRadius, FontId, Rect, Stroke, StrokeKind, Vec2};
 use photosite_core::settings::Gallery;
@@ -12,14 +12,16 @@ pub fn color(value: Color) -> Color32 {
     Color32::from_rgb(value.r, value.g, value.b)
 }
 
-/// Prožene paletu skrz egui.
+/// Runs the palette through egui.
 ///
-/// Nastavuje se **každý** barevný slot, který egui má. Co se nechá být, to si
-/// toolkit dokreslí po svém, a jeho výchozí barvy se s cizí paletou pohádají —
-/// tak vzniká tmavě šedý text na šedém pozadí, který se pak hledá po jednom.
+/// **Every** colour slot egui has is set. Whatever is left alone the toolkit
+/// fills in its own way, and its defaults argue with a foreign palette — that
+/// is how dark grey text on a grey background appears, to be hunted down one
+/// instance at a time afterwards.
 ///
-/// `override_text_color` se schválně nepoužívá: přebilo by veškerý text jednou
-/// barvou a zrušilo rozdíl mezi běžným, druhotným a zakázaným.
+/// `override_text_color` is deliberately unused: it would force one colour on
+/// all text and erase the difference between ordinary, secondary and
+/// disabled.
 pub fn apply(ctx: &egui::Context, palette: &Palette, dark: bool, scale: f32) {
     let mut visuals = if dark {
         egui::Visuals::dark()
@@ -27,7 +29,7 @@ pub fn apply(ctx: &egui::Context, palette: &Palette, dark: bool, scale: f32) {
         egui::Visuals::light()
     };
 
-    // Plochy
+    // Surfaces
     visuals.panel_fill = color(palette.panel);
     visuals.window_fill = color(palette.window);
     visuals.extreme_bg_color = color(palette.well);
@@ -43,7 +45,7 @@ pub fn apply(ctx: &egui::Context, palette: &Palette, dark: bool, scale: f32) {
     visuals.error_fg_color = color(palette.error);
     visuals.hyperlink_color = color(palette.accent);
 
-    // Rámy a výběr
+    // Frames and selection
     visuals.window_stroke = egui::Stroke::new(1.0, color(palette.bevel_light));
     visuals.window_corner_radius = CornerRadius::same(4);
     visuals.menu_corner_radius = CornerRadius::same(4);
@@ -76,13 +78,14 @@ pub fn apply(ctx: &egui::Context, palette: &Palette, dark: bool, scale: f32) {
         widget.corner_radius = CornerRadius::same(3);
     }
 
-    // Do obou slotů, ne jen do aktivního.
+    // Into both slots, not only the active one.
     //
-    // `set_visuals` zapisuje pod motiv, který je zrovna zvolený. Při startu
-    // systém ještě nestihl ohlásit, jestli je v tmavém nebo světlém režimu,
-    // takže egui použije tmavý; jakmile odpověď dorazí a je „světlo", přepne
-    // na světlý slot — a v něm jsou pořád jeho vlastní barvy. Okno nastavení
-    // pak svítí bíle uprostřed tmavé aplikace.
+    // `set_visuals` writes under whichever theme is currently chosen. At
+    // startup the system has not yet said whether it is in dark or light
+    // mode, so egui uses dark; the moment the answer arrives and says
+    // "light", it switches to the light slot — which still holds its own
+    // colours. The settings window then glows white in the middle of a dark
+    // application.
     ctx.set_visuals_of(egui::Theme::Dark, visuals.clone());
     ctx.set_visuals_of(egui::Theme::Light, visuals);
     ctx.set_theme(if dark {
@@ -93,7 +96,7 @@ pub fn apply(ctx: &egui::Context, palette: &Palette, dark: bool, scale: f32) {
     ctx.set_pixels_per_point(scale.clamp(0.5, 3.0));
 }
 
-/// Výška proužku s názvem; nula, když se popisky nezobrazují.
+/// Height of the caption strip; zero when captions are not shown.
 pub fn caption_height(gallery: &Gallery) -> f32 {
     if gallery.show_captions {
         gallery.caption_height as f32
@@ -102,14 +105,14 @@ pub fn caption_height(gallery: &Gallery) -> f32 {
     }
 }
 
-/// Výška dlaždice podle nastavení: obrázek, proužek a rám.
+/// Tile height from the settings: image, caption strip and frame.
 pub fn tile_height(gallery: &Gallery) -> f32 {
     (gallery.tile_size * gallery.tile_aspect) as f32
         + caption_height(gallery)
         + gallery.tile_padding as f32
 }
 
-/// Nakreslí diapozitiv a vrátí obdélník, do kterého patří fotka.
+/// Draws the slide and returns the rectangle the photograph belongs in.
 pub fn slide(
     painter: &egui::Painter,
     rect: Rect,
@@ -130,8 +133,8 @@ pub fn slide(
     };
     painter.rect_filled(rect, radius, fill);
 
-    // Jeden pixel světla nahoře a vlevo, jeden pixel stínu dole a vpravo.
-    // Víc by z toho udělalo tlačítko.
+    // One pixel of light at the top and left, one pixel of shadow at the
+    // bottom and right. More would make a button of it.
     for (from, to, line) in [
         (
             rect.left_top() + Vec2::new(1.0, 0.5),
@@ -190,7 +193,8 @@ pub fn slide(
         },
     );
 
-    // Jeden řádek s výpustkou, ne zalomení: název musí zůstat na proužku.
+    // One line with an ellipsis, not a wrap: the name has to stay on the
+    // strip.
     let text = if selected { palette.text } else { palette.dim };
     let mut job = egui::text::LayoutJob::simple_singleline(
         name.to_owned(),
@@ -213,7 +217,8 @@ pub fn slide(
     well
 }
 
-/// Obdélník pro obrázek o daném poměru stran vepsaný doprostřed plochy.
+/// A rectangle for an image of the given aspect ratio, inscribed in the
+/// middle of the area.
 pub fn fit(area: Rect, size: [usize; 2]) -> Rect {
     let (w, h) = (size[0].max(1) as f32, size[1].max(1) as f32);
     let scale = (area.width() / w).min(area.height() / h);
@@ -226,7 +231,7 @@ mod tests {
     use photosite_core::theme::THEMES;
 
     #[test]
-    fn prevod_barvy_nic_neztrati() {
+    fn converting_a_colour_loses_nothing() {
         for theme in THEMES {
             let converted = color(theme.palette.accent);
             let original = theme.palette.accent;
@@ -237,14 +242,14 @@ mod tests {
         }
     }
 
-    /// Zakázaný text nekreslí naše paleta, ale egui: vezme barvu textu a
-    /// zamíchá ji směrem k `noninteractive.weak_bg_fill`. Tenhle test si tedy
-    /// spočítá, co se doopravdy objeví na obrazovce, a změří to.
+    /// Disabled text is not drawn by our palette but by egui: it takes the
+    /// text colour and blends it toward `noninteractive.weak_bg_fill`. So
+    /// this test works out what actually appears on screen and measures that.
     ///
-    /// Bez něj je „zakázané tlačítko je nečitelné" věc, na kterou se přijde
-    /// očima, a to je přesně to lovení, kterému se chceme vyhnout.
+    /// Without it, "the disabled button is unreadable" is something found by
+    /// eye, and that is exactly the hunting we are trying to avoid.
     #[test]
-    fn zakazany_text_zustane_citelny_i_po_egui() {
+    fn disabled_text_stays_legible_even_after_egui() {
         for theme in THEMES {
             let p = &theme.palette;
             let mut style = egui::Style {
@@ -257,36 +262,36 @@ mod tests {
             };
             style.visuals.widgets.noninteractive.weak_bg_fill = color(p.panel);
 
-            let vysledek = style.visuals.gray_out(color(p.text));
-            let jako_barva = photosite_core::theme::Color {
-                r: vysledek.r(),
-                g: vysledek.g(),
-                b: vysledek.b(),
+            let result = style.visuals.gray_out(color(p.text));
+            let as_colour = photosite_core::theme::Color {
+                r: result.r(),
+                g: result.g(),
+                b: result.b(),
             };
-            let pomer = photosite_core::theme::contrast(jako_barva, p.panel);
+            let ratio = photosite_core::theme::contrast(as_colour, p.panel);
             assert!(
-                pomer >= 2.0,
-                "{}: zakázaný text vyjde na kontrast {pomer:.2} ({} na {})",
+                ratio >= 2.0,
+                "{}: disabled text comes out at contrast {ratio:.2} ({} on {})",
                 theme.id,
-                jako_barva.to_hex(),
+                as_colour.to_hex(),
                 p.panel.to_hex()
             );
         }
     }
 
     #[test]
-    fn vyska_dlazdice_reaguje_na_nastaveni() {
+    fn tile_height_follows_the_settings() {
         let mut gallery = Gallery::default();
-        let s_popisky = tile_height(&gallery);
+        let with = tile_height(&gallery);
         gallery.show_captions = false;
-        let bez = tile_height(&gallery);
+        let without = tile_height(&gallery);
         assert!(
-            bez < s_popisky,
-            "bez popisků musí být dlaždice nižší: {bez} proti {s_popisky}"
+            without < with,
+            "without captions the tile has to be shorter: {without} against {with}"
         );
 
         gallery.show_captions = true;
         gallery.tile_size *= 2.0;
-        assert!(tile_height(&gallery) > s_popisky);
+        assert!(tile_height(&gallery) > with);
     }
 }

@@ -1,11 +1,12 @@
-//! Čtení toho mála z EXIFu, co je potřeba hned: orientace a vložený náhled.
+//! Reading the little of EXIF that is needed straight away: orientation and
+//! the embedded thumbnail.
 //!
-//! Tenhle kód dostane na vstup cokoliv, co má na disku příponu `.jpg`. Ve
-//! zkušební knihovně o 57 606 fotkách byly tři soubory, které JPEG nebyly,
-//! přestože to tvrdily. Proto platí jediná tvrdá podmínka, kterou hlídá
-//! property test: **nikdy nespadnout.** Vrátit `None` je v pořádku vždycky.
+//! This code is handed anything that carries a `.jpg` extension on disk. In a
+//! trial library of 57,606 photographs, three files were not JPEGs at all
+//! despite saying so. Hence the one hard rule, guarded by a property test:
+//! **never panic.** Returning `None` is always acceptable.
 
-/// Kde v souboru leží vložený náhled.
+/// Where the embedded thumbnail sits in the file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Thumbnail {
     pub offset: usize,
@@ -14,11 +15,11 @@ pub struct Thumbnail {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Exif {
-    /// EXIF orientace 1..8; 1, když se nenašla.
+    /// EXIF orientation, 1..8; 1 when none was found.
     pub orientation: u8,
-    /// Náhled, který si fotka nese s sebou. Bývá 160×120 a dekóduje se za
-    /// zlomek milisekundy, takže je to nejlevnější způsob, jak dostat na
-    /// obrazovku něco skutečného.
+    /// The thumbnail the photograph carries with it. Usually 160x120 and
+    /// decoded in a fraction of a millisecond, which makes it the cheapest
+    /// way to put something real on screen.
     pub thumbnail: Option<Thumbnail>,
 }
 
@@ -35,12 +36,14 @@ impl Default for Exif {
     }
 }
 
-/// Kolik bajtů od začátku souboru stačí přečíst. APP1 je hned za hlavičkou.
+/// How many bytes from the start of the file are enough. APP1 sits right
+/// behind the header.
 pub const HEADER_BYTES: usize = 128 << 10;
 
-/// Projde JPEG značky, najde APP1 a přečte z něj, co potřebujeme.
+/// Walks the JPEG markers, finds APP1 and reads what we need out of it.
 ///
-/// Offset náhledu je vztažený k `raw`, takže se dá rovnou použít na řez.
+/// The thumbnail offset is relative to `raw`, so it can be used to slice
+/// directly.
 pub fn read(raw: &[u8]) -> Exif {
     parse(raw).unwrap_or(Exif::NONE)
 }
@@ -59,7 +62,7 @@ fn parse(raw: &[u8]) -> Option<Exif> {
         }
 
         let marker = raw[at + 1];
-        // Výplňové bajty a značky bez těla nemají délku.
+        // Fill bytes and bodyless markers carry no length.
         if marker == 0xFF || matches!(marker, 0x01 | 0xD0..=0xD9) {
             at += 2;
             continue;
@@ -85,7 +88,7 @@ fn parse(raw: &[u8]) -> Option<Exif> {
             });
         }
 
-        // Za začátkem obrazových dat už žádné značky nejsou.
+        // Past the start of the image data there are no more markers.
         if marker == 0xDA {
             return None;
         }
@@ -96,8 +99,8 @@ fn parse(raw: &[u8]) -> Option<Exif> {
     None
 }
 
-/// Čte TIFF blok uvnitř APP1. Každý přístup je kontrolovaný, takže poškozený
-/// soubor skončí na `None` a ne na panice.
+/// Reads the TIFF block inside APP1. Every access is checked, so a corrupt
+/// file ends at `None` rather than at a panic.
 struct TiffReader<'a> {
     bytes: &'a [u8],
     little: bool,
@@ -155,8 +158,8 @@ impl<'a> TiffReader<'a> {
         None
     }
 
-    /// Náhled bydlí v IFD1, na které ukazuje čtveřice bajtů za poslední
-    /// položkou IFD0.
+    /// The thumbnail lives in IFD1, pointed at by the four bytes following
+    /// the last IFD0 entry.
     fn thumbnail(&self) -> Option<Thumbnail> {
         let ifd0 = self.ifd0()?;
         let count = self.u16(ifd0)? as usize;
@@ -189,7 +192,7 @@ impl<'a> TiffReader<'a> {
 mod tests {
     use super::*;
 
-    /// Poskládá minimální JPEG s APP1 a daným TIFF blokem.
+    /// Builds a minimal JPEG with an APP1 segment and the given TIFF block.
     fn with_tiff(tiff: &[u8]) -> Vec<u8> {
         let mut raw = vec![0xFF, 0xD8, 0xFF, 0xE1];
         let len = (tiff.len() + 6 + 2) as u16;
@@ -215,34 +218,34 @@ mod tests {
     }
 
     #[test]
-    fn co_neni_jpeg_vraci_vychozi_stav() {
+    fn anything_that_is_not_a_jpeg_gives_the_default() {
         assert_eq!(read(b""), Exif::NONE);
-        assert_eq!(read(b"tohle fakt neni jpeg"), Exif::NONE);
+        assert_eq!(read(b"this really is not a jpeg"), Exif::NONE);
         assert_eq!(read(&[0xFF, 0xD8]), Exif::NONE);
     }
 
     #[test]
-    fn useknuty_app1_nespadne() {
+    fn a_truncated_app1_does_not_panic() {
         let mut raw = vec![0xFF, 0xD8, 0xFF, 0xE1, 0xFF, 0xFF];
         raw.extend_from_slice(b"Exif\x00\x00II");
         assert_eq!(read(&raw).orientation, 1);
     }
 
     #[test]
-    fn orientace_se_precte_z_ifd0() {
+    fn orientation_is_read_from_ifd0() {
         let raw = with_tiff(&tiff_with_orientation(6, 0));
         assert_eq!(read(&raw).orientation, 6);
         assert_eq!(read(&raw).thumbnail, None);
     }
 
     #[test]
-    fn nesmyslna_orientace_se_ignoruje() {
+    fn a_nonsense_orientation_is_ignored() {
         let raw = with_tiff(&tiff_with_orientation(77, 0));
         assert_eq!(read(&raw).orientation, 1);
     }
 
     #[test]
-    fn ukazatel_na_ifd1_mimo_blok_nespadne() {
+    fn an_ifd1_pointer_outside_the_block_does_not_panic() {
         let raw = with_tiff(&tiff_with_orientation(3, 0xFFFF_FF00));
         assert_eq!(read(&raw).orientation, 3);
         assert_eq!(read(&raw).thumbnail, None);

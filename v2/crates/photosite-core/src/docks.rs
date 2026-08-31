@@ -1,38 +1,39 @@
-//! Rozložení doků.
+//! The dock layout.
 //!
-//! Plochy aplikace nejsou v kreslicí vrstvě zadrátované vedle sebe, ale
-//! popsané **stromem, který je daty**. Dnešní uspořádání je jen jeho výchozí
-//! hodnota; „informace o fotce pod náhledem" je změna jednoho řetězce, ne
-//! zásah do kreslení.
+//! The application's panes are not wired side by side in the drawing layer.
+//! They are described by a **tree that is data**. Today's arrangement is only
+//! that tree's default value; "photo details under the preview" is a change
+//! to one string, not a change to how anything is drawn.
 //!
 //! ```text
 //! h(0.16, tree, h(0.66, gallery, v(0.62, preview, info)))
-//!  │      │                       └ svisle: náhled nahoře, informace pod ním
-//!  │      └ vedle sebe: strom vlevo, zbytek vpravo
-//!  └ podíl první části; druhá dostane, co zbude
+//!  │      │                       └ stacked: preview on top, details below
+//!  │      └ side by side: tree on the left, the rest on the right
+//!  └ the first part's share; the second gets what is left
 //! ```
 //!
-//! Tvar je textový schválně. Do nastavení jde jedním řádkem, dá se přečíst
-//! i ručně opravit a diff je vidět na první pohled — zanořené tabulky v TOML
-//! by na třech úrovních zanoření byly nečitelné.
+//! The form is textual on purpose. It goes into the settings on one line, it
+//! can be read and corrected by hand, and a diff shows at a glance — nested
+//! TOML tables three levels deep would be unreadable.
 //!
-//! **Dok se nesmí dát zavřít omylem.** Každý má nejmenší velikost a dělítko
-//! pod ni nepustí. Než to platilo, šel náhledový panel přetáhnout na osm
-//! pixelů, uložilo se to do nastavení a zpátky ho nedostalo nic: klikání na
-//! dlaždice fungovalo dál, jen nebylo kam kreslit.
+//! **A dock must not be closable by accident.** Every one has a minimum size
+//! and the splitter will not go below it. Before that held, the preview pane
+//! could be dragged down to eight pixels, it was saved to the settings, and
+//! nothing brought it back: clicking tiles still worked, there was simply
+//! nowhere to draw.
 
 use std::collections::HashSet;
 use std::fmt;
 
-/// Jedna plocha, kterou lze do rozložení postavit.
+/// One pane that can be placed into the layout.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Dock {
-    /// Stabilní klíč. Do nastavení jde tenhle, ne název — název se smí
-    /// kdykoliv přeložit.
+    /// The stable key. This is what goes into the settings, not the name —
+    /// the name may be translated at any time.
     pub id: &'static str,
-    /// Klíč do překladu. Ani tady nejsou texty.
+    /// A translation key. There is no text here either.
     pub title_key: &'static str,
-    /// Nejmenší velikost v bodech. Dělítko pod ni nepustí.
+    /// Minimum size in points. The splitter will not go below it.
     pub min: f64,
 }
 
@@ -63,16 +64,16 @@ pub fn dock(id: &str) -> Option<&'static Dock> {
     DOCKS.iter().find(|dock| dock.id == id)
 }
 
-/// Výchozí rozložení: strom vlevo, mřížka uprostřed, náhled a informace
-/// ve sloupci vpravo.
+/// The default layout: tree on the left, grid in the middle, preview and
+/// details in a column on the right.
 pub const DEFAULT: &str = "h(0.16, tree, h(0.66, gallery, v(0.62, preview, info)))";
 
-/// Jak jsou obě části poskládané.
+/// How the two parts are arranged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Axis {
-    /// Vedle sebe, dělítko je svislé.
+    /// Side by side; the splitter is vertical.
     Across,
-    /// Pod sebou, dělítko je vodorovné.
+    /// Stacked; the splitter is horizontal.
     Down,
 }
 
@@ -90,7 +91,7 @@ pub enum Layout {
     Pane(String),
     Split {
         axis: Axis,
-        /// Podíl první části, 0 až 1.
+        /// The first part's share, 0 to 1.
         ratio: f64,
         first: Box<Layout>,
         second: Box<Layout>,
@@ -112,7 +113,7 @@ impl fmt::Display for Layout {
 }
 
 impl Layout {
-    /// Všechny plochy zleva doprava, shora dolů.
+    /// Every pane, left to right and top to bottom.
     pub fn panes(&self) -> Vec<&str> {
         let mut found = Vec::new();
         self.collect(&mut found);
@@ -129,8 +130,8 @@ impl Layout {
         }
     }
 
-    /// Je v téhle větvi vidět aspoň něco? Větev, ze které je všechno schované,
-    /// nedostane místo ani dělítko.
+    /// Is anything in this branch visible? A branch with everything hidden
+    /// gets neither space nor a splitter.
     pub fn visible(&self, hidden: &HashSet<&str>) -> bool {
         match self {
             Layout::Pane(id) => !hidden.contains(id.as_str()),
@@ -138,10 +139,10 @@ impl Layout {
         }
     }
 
-    /// Nejmenší rozumná velikost podél osy, i s dělítky uvnitř.
+    /// The smallest sensible size along an axis, splitters included.
     ///
-    /// Podél téže osy se sčítá, napříč se bere to větší — dva doky pod sebou
-    /// potřebují každý svou výšku, ale šířku sdílejí.
+    /// Along the same axis it adds up, across it takes the larger — two
+    /// docks stacked each need their own height but share the width.
     pub fn min_along(&self, axis: Axis, hidden: &HashSet<&str>, splitter: f64) -> f64 {
         match self {
             Layout::Pane(id) => {
@@ -176,10 +177,10 @@ impl Layout {
         }
     }
 
-    /// Podíl tak, aby se obě části vešly nad svoje minimum.
+    /// A share that keeps both parts above their minimum.
     ///
-    /// Když je místa málo na obojí, vyhraje uložený poměr — jinak by se dok
-    /// při zmenšování okna přilepil k okraji a už se nepustil.
+    /// When there is not room for both, the stored ratio wins — otherwise a
+    /// dock would stick to the edge as the window shrank and never let go.
     pub fn clamp_ratio(first_min: f64, second_min: f64, total: f64, ratio: f64) -> f64 {
         let ratio = ratio.clamp(0.0, 1.0);
         if total <= 0.0 {
@@ -195,8 +196,8 @@ impl Layout {
         ratio.clamp(low, high)
     }
 
-    /// Přepíše podíl na uzlu dané cesty. Cesta je posloupnost odboček:
-    /// `false` je první část, `true` druhá.
+    /// Overwrites the share at the node on the given path. The path is a
+    /// sequence of turns: `false` is the first part, `true` the second.
     pub fn set_ratio(&mut self, path: &[bool], value: f64) {
         let Layout::Split {
             ratio,
@@ -216,9 +217,10 @@ impl Layout {
     }
 }
 
-// --------------------------------------------------------------------- čtení
+// -------------------------------------------------------------------- reading
 
-/// Přečte rozložení. Chyba nese důvod, ať je v logu vidět, co je špatně.
+/// Reads a layout. An error carries its reason, so the log shows what is
+/// wrong.
 pub fn parse(text: &str) -> Result<Layout, String> {
     let mut reader = Reader {
         text: text.as_bytes(),
@@ -227,17 +229,18 @@ pub fn parse(text: &str) -> Result<Layout, String> {
     let layout = reader.layout()?;
     reader.space();
     if reader.at < reader.text.len() {
-        return Err(format!("přebývá text od znaku {}", reader.at));
+        return Err(format!("trailing text from character {}", reader.at));
     }
 
     check(&layout)?;
     Ok(layout)
 }
 
-/// Rozložení z nastavení, nebo výchozí, když je pokažené.
+/// The layout from the settings, or the default when it is broken.
 ///
-/// Nečitelné rozložení nesmí shodit aplikaci ani ji nechat bez mřížky. Že se
-/// spadlo na výchozí, jde do logu — tiše se to stát nesmí.
+/// An unreadable layout must neither bring the application down nor leave it
+/// without a grid. Falling back to the default goes to the log — it must not
+/// happen in silence.
 pub fn parse_or_default(text: &str) -> Layout {
     let text = if text.trim().is_empty() {
         DEFAULT
@@ -246,13 +249,13 @@ pub fn parse_or_default(text: &str) -> Layout {
     };
     match parse(text) {
         Ok(layout) => layout,
-        Err(duvod) => {
+        Err(reason) => {
             tracing::warn!(
-                rozlozeni = text,
-                duvod,
-                "rozložení nedává smysl, beru výchozí"
+                layout = text,
+                reason,
+                "the layout makes no sense, taking the default"
             );
-            parse(DEFAULT).expect("výchozí rozložení musí být platné")
+            parse(DEFAULT).expect("the default layout has to be valid")
         }
     }
 }
@@ -261,20 +264,21 @@ fn check(layout: &Layout) -> Result<(), String> {
     let panes = layout.panes();
     for id in &panes {
         if dock(id).is_none() {
-            return Err(format!("neznámá plocha {id}"));
+            return Err(format!("unknown pane {id}"));
         }
     }
 
     let mut seen = HashSet::new();
     for id in &panes {
         if !seen.insert(*id) {
-            return Err(format!("plocha {id} je v rozložení dvakrát"));
+            return Err(format!("pane {id} appears in the layout twice"));
         }
     }
 
-    // Mřížka je důvod, proč aplikace existuje. Rozložení bez ní je překlep.
+    // The grid is the reason the application exists. A layout without it is
+    // a typo.
     if !seen.contains("gallery") {
-        return Err("rozložení neobsahuje mřížku".to_owned());
+        return Err("the layout holds no grid".to_owned());
     }
 
     Ok(())
@@ -299,7 +303,10 @@ impl Reader<'_> {
 
     fn eat(&mut self, want: u8) -> Result<(), String> {
         if self.peek() != Some(want) {
-            return Err(format!("na znaku {} chybí {}", self.at, want as char));
+            return Err(format!(
+                "character {} is missing a {}",
+                self.at, want as char
+            ));
         }
 
         self.at += 1;
@@ -316,7 +323,7 @@ impl Reader<'_> {
         }
 
         if from == self.at {
-            return Err(format!("na znaku {} chybí název plochy", self.at));
+            return Err(format!("character {} is missing a pane name", self.at));
         }
 
         Ok(String::from_utf8_lossy(&self.text[from..self.at]).into_owned())
@@ -333,7 +340,7 @@ impl Reader<'_> {
 
         String::from_utf8_lossy(&self.text[from..self.at])
             .parse()
-            .map_err(|_| format!("na znaku {from} chybí podíl"))
+            .map_err(|_| format!("character {from} is missing a share"))
     }
 
     fn layout(&mut self) -> Result<Layout, String> {
@@ -344,7 +351,7 @@ impl Reader<'_> {
             _ => None,
         };
 
-        // `h` a `v` jsou dělení jen tehdy, když za nimi stojí závorka.
+        // `h` and `v` are splits only when a bracket follows them.
         match axis.filter(|_| self.peek() == Some(b'(')) {
             None => Ok(Layout::Pane(word)),
             Some(axis) => {
@@ -366,10 +373,10 @@ impl Reader<'_> {
     }
 }
 
-// ------------------------------------------------------------ co je schované
+// ------------------------------------------------------------- what is hidden
 
-/// Schované plochy z nastavení. Neznámé jméno se zahodí, ne aby kvůli němu
-/// zmizelo všechno ostatní.
+/// The hidden panes from the settings. An unknown name is dropped rather
+/// than taking everything else with it.
 pub fn hidden(text: &str) -> Vec<String> {
     text.split(',')
         .map(str::trim)
@@ -379,8 +386,8 @@ pub fn hidden(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// Zpátky do tvaru pro nastavení, v pořadí registru — ať se soubor nemění jen
-/// proto, že se něco zaplo a zase vyplo.
+/// Back into the form the settings use, in registry order — so the file does
+/// not change merely because something was switched on and off again.
 pub fn hidden_to_text(list: &[String]) -> String {
     DOCKS
         .iter()
@@ -394,22 +401,22 @@ pub fn hidden_to_text(list: &[String]) -> String {
 mod tests {
     use super::*;
 
-    fn nic() -> HashSet<&'static str> {
+    fn nothing() -> HashSet<&'static str> {
         HashSet::new()
     }
 
     #[test]
-    fn vychozi_rozlozeni_je_platne() {
-        let layout = parse(DEFAULT).expect("výchozí rozložení musí projít");
+    fn the_default_layout_is_valid() {
+        let layout = parse(DEFAULT).expect("the default layout has to parse");
         assert_eq!(layout.panes(), vec!["tree", "gallery", "preview", "info"]);
     }
 
     #[test]
-    fn kazda_plocha_v_registru_ma_preklad() {
+    fn every_pane_in_the_registry_has_a_translation() {
         for dock in DOCKS {
             assert!(
                 crate::i18n::has(dock.title_key),
-                "plocha {} odkazuje na chybějící klíč {}",
+                "pane {} points at the missing key {}",
                 dock.id,
                 dock.title_key
             );
@@ -417,16 +424,16 @@ mod tests {
     }
 
     #[test]
-    fn plochy_se_nejmenuji_jako_deleni() {
-        // `h` a `v` jsou v zápisu vyhrazené; plocha s takovým jménem by se
-        // nedala od dělení odlišit.
+    fn panes_are_not_named_like_splits() {
+        // `h` and `v` are reserved in the notation; a pane with such a name
+        // could not be told apart from a split.
         for dock in DOCKS {
             assert!(dock.id != "h" && dock.id != "v", "{}", dock.id);
         }
     }
 
     #[test]
-    fn zapis_a_cteni_se_potkaji() {
+    fn writing_and_reading_meet() {
         for text in [
             DEFAULT,
             "gallery",
@@ -434,13 +441,13 @@ mod tests {
             "h(0.30, v(0.50, tree, info), gallery)",
         ] {
             let layout = parse(text).unwrap();
-            let znovu = layout.to_string();
-            assert_eq!(parse(&znovu).unwrap(), layout, "{text} → {znovu}");
+            let again = layout.to_string();
+            assert_eq!(parse(&again).unwrap(), layout, "{text} -> {again}");
         }
     }
 
     #[test]
-    fn nesmysl_neshodi_aplikaci_a_necha_mrizku() {
+    fn nonsense_neither_crashes_nor_loses_the_grid() {
         for text in [
             "",
             "h(0.5, gallery",
@@ -453,48 +460,51 @@ mod tests {
             let layout = parse_or_default(text);
             assert!(
                 layout.panes().contains(&"gallery"),
-                "{text} nechalo rozložení bez mřížky"
+                "{text} left the layout without a grid"
             );
         }
     }
 
     #[test]
-    fn dvakrat_tataz_plocha_je_chyba() {
+    fn the_same_pane_twice_is_an_error() {
         assert!(parse("h(0.5, gallery, gallery)").is_err());
     }
 
     #[test]
-    fn rozlozeni_bez_mrizky_je_chyba() {
+    fn a_layout_without_a_grid_is_an_error() {
         assert!(parse("h(0.5, tree, preview)").is_err());
     }
 
     #[test]
-    fn minimum_se_podel_osy_scita_a_napric_bere_vetsi() {
+    fn the_minimum_adds_along_the_axis_and_takes_the_larger_across() {
         let layout = parse("h(0.5, tree, gallery)").unwrap();
         let tree = dock("tree").unwrap().min;
         let gallery = dock("gallery").unwrap().min;
         assert_eq!(
-            layout.min_along(Axis::Across, &nic(), 6.0),
+            layout.min_along(Axis::Across, &nothing(), 6.0),
             tree + gallery + 6.0
         );
-        assert_eq!(layout.min_along(Axis::Down, &nic(), 6.0), tree.max(gallery));
+        assert_eq!(
+            layout.min_along(Axis::Down, &nothing(), 6.0),
+            tree.max(gallery)
+        );
     }
 
     #[test]
-    fn schovana_plocha_si_misto_nedrzi() {
+    fn a_hidden_pane_holds_no_space() {
         let layout = parse("h(0.5, tree, gallery)").unwrap();
         let hidden = HashSet::from(["tree"]);
         assert_eq!(
             layout.min_along(Axis::Across, &hidden, 6.0),
             dock("gallery").unwrap().min,
-            "schovaný dok nesmí brát místo ani si účtovat dělítko"
+            "a hidden dock must take no space and charge for no splitter"
         );
     }
 
     #[test]
-    fn delitko_nepusti_dok_pod_jeho_minimum() {
-        // Přesně tohle šlo dřív: náhled přetažený na osm pixelů, uložený do
-        // nastavení, a zpátky ho nedostalo nic.
+    fn the_splitter_will_not_take_a_dock_below_its_minimum() {
+        // This is exactly what used to be possible: the preview dragged to
+        // eight pixels, saved to the settings, and nothing bringing it back.
         let ratio = Layout::clamp_ratio(240.0, 160.0, 1000.0, 0.99);
         assert!(ratio * 1000.0 <= 840.0 + 1e-9);
         assert!(1000.0 - ratio * 1000.0 >= 160.0 - 1e-9);
@@ -504,30 +514,30 @@ mod tests {
     }
 
     #[test]
-    fn v_tesnem_okne_rozhoduje_pomer_a_ne_minima() {
-        // Když se obojí nevejde, nesmí se podíl zaseknout na kraji.
+    fn in_a_tight_window_the_ratio_decides_not_the_minimums() {
+        // When both will not fit, the share must not jam at the edge.
         let ratio = Layout::clamp_ratio(600.0, 600.0, 500.0, 0.4);
         assert!((ratio - 0.4).abs() < 1e-9);
     }
 
     #[test]
-    fn podil_se_da_prepsat_podle_cesty() {
+    fn a_share_can_be_overwritten_by_path() {
         let mut layout = parse(DEFAULT).unwrap();
         layout.set_ratio(&[true, true], 0.25);
         let Layout::Split { second, .. } = &layout else {
-            panic!("výchozí rozložení má být dělení")
+            panic!("the default layout should be a split")
         };
         let Layout::Split { second, .. } = second.as_ref() else {
-            panic!("druhá část má být dělení")
+            panic!("the second part should be a split")
         };
         let Layout::Split { ratio, .. } = second.as_ref() else {
-            panic!("náhled a informace mají být dělení")
+            panic!("preview and details should be a split")
         };
         assert_eq!(*ratio, 0.25);
     }
 
     #[test]
-    fn schovane_plochy_tam_a_zpatky() {
+    fn hidden_panes_there_and_back() {
         assert_eq!(hidden("info,preview"), vec!["info", "preview"]);
         assert_eq!(hidden(" info , , neznamo "), vec!["info"]);
         assert_eq!(hidden_to_text(&hidden("info,preview")), "preview,info");
