@@ -17,9 +17,11 @@ cargo run --release -p photosite-ui              # the application
 cargo test --workspace                           # no window, no GPU
 ```
 
-The scaffolding is done — catalogue and migrations, settings, docks,
-localisation, themes, the thumbnail cache, a headless CLI. The photographic
-features are being ported across from v1, one block at a time.
+Everything v1 did **outside the editor** it does too: browsing, culling,
+organising, filtering, writing metadata into the files, comparing, file
+operations, RAW, faces and people, expressions, batch conversion, and
+descriptions from a vision model on the same machine. The editor is what is
+left.
 
 ## [v1/](v1/README.md) — frozen, kept for reference
 

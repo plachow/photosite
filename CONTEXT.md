@@ -82,27 +82,38 @@ synonyms: *bad GPS*, *GPS accuracy*.
 **Scan** — indexing a folder into the catalogue. Incremental: an unchanged file
 is recognised by length, write time and metadata reader version.
 
-**Plan** — the full list of destination paths a batch or import would write,
-computed before anything is written so a summary can be shown and the user can
-still change their mind. `BatchPlan`, `ImportPlan`.
+**Plan** — the full list of destination paths a batch would write, computed
+before anything is written so a summary can be shown and the user can still
+change their mind. Two collisions are decided in it and they are different:
+a name already on disk, and a name another photograph in the same plan is
+about to take. v2: `batch::Plan`, `batch::plan`. v1: `BatchPlan`,
+`ImportPlan`.
 
-**Preset** — a named, stored set of batch or export settings. Presets describe
-what to do, not where the user currently is; a preset with no output folder
-keeps whatever destination is already on screen.
+**Preset** — a named, stored set of batch or export settings, kept in the
+catalogue as text. Presets describe what to do, not where the user currently
+is. The starter set is handed out once ever: one deleted stays deleted. v2:
+`batch::Preset`, the `presets` table.
 
-**Outbox** — the transactional queue of metadata changes waiting to be written
-into files by exiftool. The catalogue is updated and the outbox row inserted in
-one transaction, so a crash cannot lose a rating.
+**Outbox** — the transactional queue of photographs waiting to be written
+into. The catalogue is updated and the outbox row inserted in one
+transaction, so a crash cannot lose a rating. v1 queued the *change* and had
+exiftool write it; v2 queues the *photograph* and writes what the catalogue
+says at the moment of writing, itself, so a retry cannot write something
+since undone and the queue cannot disagree with the catalogue.
 
-**Face scan** (`FaceEngine`, `PeopleDialog`) — finding the faces in a folder
-with the local YuNet detector and describing each with an SFace embedding
-(OpenCV Zoo models under `tools/models`; nothing leaves the machine). Faces
-live in the catalogue (`faces`, `people`, `face_scans`); unnamed ones are
-grouped by embedding similarity for bulk naming, and naming a group writes the
-person's name into each photograph's keywords through the outbox. During a
-scan, a face that clearly matches an already-named person (cosine ≥ 0.5) is
-assigned automatically; unchanged files are skipped, so the sweep is
-incremental. Rejected synonyms: *face tagging*, *people detection*.
+**Face scan** (v2: `photosite-faces`, `faces::sweep`, the People window; v1:
+`FaceEngine`, `PeopleDialog`) — finding the faces in a folder with the local
+YuNet detector and describing each with an SFace embedding (OpenCV Zoo
+models; v2 keeps them in `models` beside the catalogue, v1 under
+`tools/models`; nothing leaves the machine). Faces live in the catalogue
+(`faces`, `people`, `photo_people`, `face_scans`) keyed by the photograph's
+**number** rather than its path, so a rename carries them and a deleted
+photograph takes them with it; unnamed ones are grouped by embedding
+similarity for bulk naming, and naming a group writes the person's name into
+each photograph's keywords through the outbox. During a scan, a face that
+clearly matches an already-named person (cosine ≥ 0.5) is assigned
+automatically; unchanged files are skipped, so the sweep is incremental.
+Rejected synonyms: *face tagging*, *people detection*.
 
 **Suggestion** — a face whose best match falls between SFace's same-identity
 boundary (cosine 0.363) and the auto-assign threshold (0.5). It waits in
@@ -110,48 +121,56 @@ neither the person nor the unnamed pool until the user answers yes or no in
 the People window; only a yes writes the name anywhere. Deciding a face either
 way always clears its suggestion.
 
-**Expression** (`FaceExpression`, `ExpressionSummary`) — two 0..1 scores the
-face scan attaches to every face: *smile* (FER+ happiness on the aligned
-crop) and *eyes open* (open-closed-eye-0001 per eye, the face keeps the
-weaker eye). Both models are optional files under `tools/models`; a face
-scanned without them stays unscored (`NULL`) and is scored in place on a
-later scan by rectangle overlap, never losing its id or person. Scores stay
-in the catalogue only — nothing is written into files. Per photo they
-aggregate to an `ExpressionSummary` (thresholds at 0.5) behind the 😴 / 🙁
-thumbnail badge, the info panel's Expression row and the filter's Smile/Eyes
-facets, whose sides read "everyone passes" versus "someone fails" so a
-portrait cull can keep either pile. Rejected synonyms: *mood*, *emotion
-detection*.
+**Expression** (v2: `people::Expressions`, `people::SMILE_THRESHOLD`; v1:
+`FaceExpression`, `ExpressionSummary`) — two 0..1 scores the face scan
+attaches to every face: *smile* (FER+ happiness on the aligned crop) and
+*eyes open* (open-closed-eye-0001 per eye, the face keeps the weaker eye).
+Both models are optional files beside the other two; a face scanned without
+them stays unscored (`NULL`) and is scored in place on a later scan by
+rectangle overlap, never losing its id or person. Scores stay in the
+catalogue only — nothing is written into files. Per photo they aggregate to
+one summary (thresholds at 0.5) behind the thumbnail badge, the info panel's
+Expression row — which counts, `1/2 smiling · 2/2 eyes open`, rather than
+passing a verdict — and the filter's Smile and Eyes facets, whose sides read
+"everyone passes" versus "someone fails" so a portrait cull can keep either
+pile. Rejected synonyms: *mood*, *emotion detection*.
 
 **Region** — a named face rectangle written into the file as an MWG region
 (`XMP-mwg-rs`, centre-based normalized areas plus the pixel dimensions), the
-format Lightroom, digiKam and Windows read face frames from. Regions travel
-through the outbox as one whole payload per photograph and are rebuilt from
-the catalogue on every change, so a rename carries into the files while a
-removed person's frames follow the same leave-what-was-written policy as
-keywords only when nothing rewrites that photo again. The gallery can filter
-by person - the People chips compose by conjunction - and the viewer frames a
-photo's faces on demand (the Faces toggle): blue for named, amber for
-suggestions, grey for unnamed. Each person keeps one stable colour
-(`PersonBrushes`, keyed by id) across thumbnail badges, filter chips and
-tagging chips. Removing a face from a person is the mirror of naming: the
-face returns to the unnamed pool, the keyword comes back out of that photo
-when no other face of the person remains on it, and the regions are rebuilt.
+format Lightroom, digiKam and Windows read face frames from. v2 writes them
+itself through the ordinary XMP merge (`meta::xmp::Regions`), with no
+exiftool; they are rebuilt from the catalogue at the moment of writing, and
+*not knowing* is distinguished from *nobody is named* so that a photograph
+nobody has swept keeps whatever frames another program left in it. Being
+rebuilt is what carries a rename into the files, while a removed person's
+frames follow the same leave-what-was-written policy as keywords only when
+nothing rewrites that photo again. The gallery can filter by person — the
+People chips are the one facet that composes by conjunction, because a
+photograph has any number of people — and the preview frames the named
+faces, each in that person's own colour (v1 framed the unnamed and the
+suggested ones too, in grey and amber). Each person keeps one stable colour
+(v2: `theme::person_color`; v1: `PersonBrushes`) keyed by id, across
+thumbnail badges, filter chips and the frames over the preview. Removing a
+face from a person is the mirror of naming: the face returns to the unnamed
+pool, the keyword comes back out of that photo when no other face of the
+person remains on it, and the regions are rebuilt.
 
-**Describe** (`OllamaVisionService`, `AiTagDialog`) — asking a vision model on
-a local Ollama server to fill a photograph's title, description and keywords.
-The model receives a downscaled preview and must answer a fixed JSON schema.
+**Describe** (v2: `photosite-ai`, the Describe window; v1:
+`OllamaVisionService`, `AiTagDialog`) — asking a vision model on a local
+Ollama server to fill a photograph's title, description and keywords. The
+model receives a downscaled preview and must answer a fixed JSON schema.
 Results flow through the same catalogue-and-outbox path as a manual edit;
-keywords merge into the existing list, and in fill-empty mode a photo already
-carrying both a title and a description is skipped, which is what makes an
-interrupted bulk run restartable. When the run's language is not English, the
-same call also returns an **English description**, stored in the catalogue
-only (`description_en`) so search works in both languages — the file always
-carries just the primary-language description, and a re-scan never touches
-the English one. A photo with coordinates is first reverse-geocoded offline
-through the geolocation database bundled with exiftool
-(`ExifToolGeolocator`, one exiftool run per ~100 m grid cell, cached) and
-the model receives the **verified place** as text — "in or near X", or
+keywords merge into the existing list, and in fill-empty mode a photo
+already carrying both a title and a description is skipped, which is what
+makes an interrupted bulk run restartable. When the run's language is not
+English, the same call also returns an **English description**, stored in
+the catalogue only (`description_en`) so search works in both languages —
+the file always carries just the primary-language description, and a re-scan
+never touches the English one. A photo with coordinates is first
+reverse-geocoded offline — v2 through a GeoNames extract held in memory
+(`gazetteer::Gazetteer`, a one-degree grid), v1 through the database bundled
+with exiftool (`ExifToolGeolocator`, one run per ~100 m grid cell, cached) —
+and the model receives the **verified place** as text — "in or near X", or
 "about N km east of X" when the nearest catalogued place is far — never raw
 coordinates, which a local model would confidently mis-geocode. The resolved
 names also lead the keyword list deterministically (most specific first);

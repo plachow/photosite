@@ -459,20 +459,23 @@ fn read(photo: &Photo) -> Vec<(String, String)> {
 
     let expressions = photo.expressions;
     if expressions.scored > 0 {
-        // Said as what is wrong where anything is, and as what is right
-        // where nothing is: "someone blinking" is the useful half, and a row
-        // that only ever says "3 faces" is a row nobody reads twice.
-        let mut said = vec![t!("info-faces", count = expressions.faces as i64)];
-        said.push(t!(if expressions.anyone_not_smiling() {
-            "info-expression-not-smiling"
-        } else {
-            "info-expression-smiling"
-        }));
-        said.push(t!(if expressions.anyone_blinking() {
-            "info-expression-blinking"
-        } else {
-            "info-expression-eyes-open"
-        }));
+        // Counts and not a verdict: "1/2 smiling" says which frame of a
+        // burst to keep, where "somebody is not smiling" says only that
+        // there is something to look at. The denominator is what was
+        // actually looked at, so a face the models never saw is not counted
+        // as a frown.
+        let said = [
+            t!(
+                "info-expression-smiling",
+                count = expressions.smiling as i64,
+                of = expressions.scored as i64
+            ),
+            t!(
+                "info-expression-eyes",
+                count = expressions.eyes_open as i64,
+                of = expressions.scored as i64
+            ),
+        ];
         rows.push((t!("info-expression"), said.join("  \u{b7}  ")));
     }
 

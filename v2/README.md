@@ -6,21 +6,29 @@ A clean sheet. Rust, egui over wgpu, Windows / macOS / Linux from one source.
 cd v2
 cargo run --release -p photosite-ui              # the application
 cargo run --release -p photosite-cli -- doctor   # where everything lives
-cargo test --workspace                           # 353 tests, no window, no GPU
+cargo test --workspace                           # 553 tests, no window, no GPU
 ```
+
+The headless binary runs the whole of it — `scan`, `faces`, `name`,
+`describe`, `convert`, `write`, `people`, `list` and `info` — which is how
+the slow parts are measured on a real library, and how a runner with no
+screen tests them.
 
 ## Layout
 
 ```
 crates/
   photosite-core     domain, catalogue + migrations, paths, settings, log, tasks, commands
-  photosite-image    decoding, downscaling, EXIF
+  photosite-image    decoding, downscaling, encoding, EXIF
   photosite-meta     what a photograph says about itself: XMP and EXIF, read and written
+  photosite-faces    finding faces and telling them apart, on this machine
+  photosite-batch    running a planned conversion
+  photosite-ai       asking a model on this machine what is in a photograph
   photosite-ui       egui — the only crate that knows about the GPU
   photosite-cli      headless: runs the whole pipeline without a window
 ```
 
-**Neither the core nor the image crate may carry `egui`, `eframe`, `wgpu` or
+**None of the crates above the last two may carry `egui`, `eframe`, `wgpu` or
 `winit` anywhere in its dependency graph.** The test in
 `crates/photosite-core/tests/no_ui.rs` guards it by asking `cargo tree` rather
 than the sources — an indirect dependency would never show up in a `use` line.
@@ -712,48 +720,301 @@ photograph goes, which part of it is seen, how far in it will go and how the
 space is divided. What is left in the drawing layer is a wheel notch turning
 into a view, and a view turning into rectangles.
 
+## Who is in the photograph
+
+Four small networks, all of them files in a folder, none of them ours:
+YuNet finds the faces, SFace turns each one into a hundred and twenty-eight
+numbers, and two more read a smile and a blink. **Nothing leaves the
+machine, and nothing needs to** — which is the whole reason for choosing
+four models one can download over an API that would do all four jobs
+better. A photograph of somebody's children is not something to upload in
+exchange for a convenience.
+
+They run through [tract](https://github.com/sonos/tract) rather than ONNX
+Runtime, and that is the same trade this application makes about exiftool:
+`ort` is faster and is a native library to ship once per platform or fetch
+at run time, where tract is pure Rust and cross-compiles with everything
+else. The cost is real — 75 ms to sweep a thousand-pixel frame and about
+45 ms for every face found — and a sweep is a background pass over every
+core, so it lands on the right side.
+
+| a folder of holiday photographs | |
+|---|---|
+| 142 photographs, one pass | **2.8 s**, 113 faces, every one scored |
+| the same folder again | nothing to do; a file is skipped by length and write time |
+
+**A face hangs off the photograph's number, not off its path.** v1 keyed
+its face rows by path, so a rename orphaned every face on a photograph and
+the next sweep found them all again as strangers. Here the row travels with
+the file exactly as its stars do, and a deleted photograph takes its faces
+with it because the foreign key says so rather than because somebody
+remembered.
+
+### Three piles, in the order somebody works through them
+
+**Suggestions** first: a face that is probably somebody already named. One
+question, two answers, and nothing is written until the yes. **Groups**
+next: faces nobody has named, gathered by likeness, named a whole group at
+a time — which is the only thing that makes naming a library bearable.
+**People** last, with every face said to be them, so a wrong match can be
+taken back.
+
+The three thresholds are the whole of the difficulty, and they are three
+because three different things are being decided. Grouping strangers
+together costs nothing if it is wrong — somebody looks at the pile and sees
+a stranger in it — so it splits before it merges. Writing a name into a
+file with nobody watching demands more. And the band between the model's
+own boundary for "the same person" (0.363) and that certainty (0.5) is
+exactly what a suggestion is for.
+
+### What a name reaches
+
+Naming a group writes the person's name into each photograph's **keywords**
+and their face rectangle into the file as an **MWG region** — the format
+Lightroom, digiKam and Windows read a face frame from. Both go through the
+ordinary outbox, so a name arrives in a file exactly as a rating does, and
+**without exiftool**: two details in the XMP decide whether anybody else
+can read the result, and both are the kind that look right and are not. An
+area is measured from its *centre*, not its corner; and a region list
+without the frame's pixel dimensions is ignored outright.
+
+One rule has a test of its own. A photograph nobody has face-scanned here
+keeps whatever frames another program put in it: `None` is "we have not
+looked", an empty list is "we looked and nobody here is named". The second
+is what takes a name back out of a file. The first must never.
+
+The name in the keywords matters more than it looks: it is what makes a
+search for somebody find their photographs in every other program too, and
+it is the only part of this that survives being read by software that has
+never heard of face regions. It comes off a photograph only when the person
+really has gone from it — two faces of one person on a group shot is
+ordinary, and removing one wrong match must not take their name off a
+photograph they are plainly still in.
+
+### The smile and the blink
+
+The same sweep scores every face for two things, with two more optional
+models. **Both are optional on their own**: a face scanned before they were
+on disk keeps its identity and its name, and a later pass scores it in
+place by rectangle overlap — never losing its number or the person it
+belongs to, which is exactly why it is a pass of its own rather than a
+rescan.
+
+Two counts and never one ratio, because "nobody has been scored yet" and
+"everybody was scored and everybody is smiling" are different states and a
+ratio cannot tell them apart. A face nobody has looked at is not evidence
+of a frown. What comes of it: a quiet mark on a tile where something is
+worth a second look, `1/2 smiling · 2/2 eyes open` in the details, and two
+filter rows that cut a portrait series **both ways** — keep the frames
+where everybody smiled, or collect the ones where somebody blinked. A
+portrait cull is done from either end and both ends have to be one click
+away.
+
+The scores stay in the catalogue and are never written into a file. There
+is no standard property for them and inventing one would be a private
+dialect nothing else reads — the same reasoning as the pick and reject
+verdict.
+
+### Where it shows
+
+A row of coloured dots on the tile, one per person, in **that person's own
+colour** — kept out of the palette on purpose, so somebody wears the same
+colour whatever theme is on and two badges of one colour mean the same
+person without a name drawn three pixels high. The named faces framed over
+the preview in the same colours. A People row in the details. And chips in
+the filter, which are the one facet that composes by **conjunction**: every
+other facet widens as values are added because they are alternatives, but a
+photograph has any number of people and picking two means the shot they are
+both in.
+
+The models are not in git and not shipped — a hundred and fifty megabytes
+of somebody else's binaries — and go in `models` beside the catalogue,
+which `--data` moves like everything else. Without them the People window
+says which four are missing and where it looked, rather than that "the
+models are missing".
+
+## Converting a lot of them at once
+
+`Ctrl+B` over the selection — or over the whole folder when nothing is
+selected. Format, size, sharpening, naming, numbering, where it goes and
+what of the original travels with it, saved as named presets in the
+catalogue.
+
+**Every destination is worked out before a single byte is written**, and
+that is the design rather than an optimisation: a batch is the one thing
+here that can quietly destroy somebody's work, and a plan is what makes the
+destruction visible while there is still time to change one's mind. So the
+window says *forty to write · three left alone · one written over* and
+shows the real path the first one would take, recomputed whenever a setting
+changes. None of the deciding touches a disk, which is what lets a test
+watch all of it.
+
+Two collisions matter and they are different. A name already **on disk** is
+one; a name another photograph **in this same plan** is about to take is
+the other. v1 learned the second the hard way — two photographs called
+`DSC_0042` from different folders, converted into one place, and the second
+silently replaced the first — so the plan claims each name as it goes. And
+a batch never writes over the photograph it is reading, whatever the
+overwrite setting says: "write over it" means the files that were already
+there, not the one being read.
+
+### What travels, and what deliberately does not
+
+Three tags are **not** carried onto a conversion, and every one of them
+would be a bug that looks like a broken photograph:
+
+* **The orientation.** The output was rendered the right way up, because
+  the decode turned it — so an orientation tag from the source would turn
+  it again. A folder of exported photographs all lying on their side is
+  exactly what that looks like.
+* **The pixel dimensions.** The output may have been resized, and a tag
+  saying 6000x4000 over a 2048-pixel file is a lie that some readers
+  believe.
+* **The position**, when asked for. That is the whole reason somebody
+  exports at all before putting a photograph of their house on the
+  internet.
+
+Everything else does travel: when it was taken, with what, at what
+exposure, and the rating, the label, the words and the keywords. No
+sidecars are written beside a conversion — a folder of exported files with
+a `.xmp` next to each one is not what anybody meant by "export".
+
+| twenty-five photographs, "For sharing" | |
+|---|---|
+| longest side 2048, quality 85, sharpened | 4.0 MB → 0.9 MB apiece |
+| turned upright, position left behind, everything else carried | |
+
+**WebP is written lossless, and that is worth saying out loud.** The only
+pure-Rust WebP encoder there is encodes losslessly; a lossy one means
+shipping libwebp, a C library to build once per platform. A lossless WebP
+of a photograph is *larger* than the JPEG it would replace, so the dialog
+says so where the quality slider would have been, and the starter preset
+for the web is a JPEG. A control that does nothing is worse than no
+control.
+
+One photograph failing never ends a run. A file open in something else, a
+JPEG that turns out to be a text file — each costs its own output, is
+counted, and is **named** in the summary, because "three failed" is a
+sentence nobody can act on.
+
+## Asking what is in the photograph
+
+`Ctrl+Shift+A` sends each photograph to a vision model on a
+[local Ollama](https://ollama.com) server, which answers with a title, a
+description and keywords. They go into the catalogue and the outbox exactly
+as a typed title does, so they end up in the files too. Keywords are
+**added** and never replace what a person wrote; by default only empty
+titles and descriptions are filled, which is what makes an interrupted
+overnight run restartable — everything already described is skipped.
+
+The reply is held to a **JSON schema**, so the answer is always
+machine-readable rather than prose that has to be picked apart with a
+regular expression and an apology. Everything that can be decided without a
+server — the prompt, the schema, reading the two layers of JSON, tidying
+what comes back — is a module with tests of its own, because that is where
+the quality of the descriptions actually lives.
+
+The window shows the pace and a finishing time. That is not decoration: a
+model takes tens of seconds a photograph, so a folder is minutes to hours,
+and the only question anybody has while it runs is whether to wait.
+
+### The place is told to the model, never asked of it
+
+A local model shown a coastline will name a country with total confidence
+and be wrong. So a photograph with coordinates is reverse-geocoded first
+and the model is handed the answer as a fact — and where the position is
+itself doubtful, it is handed the doubt too, so the wording softens to
+"probably" instead of pretending to a precision the fix never had.
+
+A **nearby** place reads "in or near X"; a distant one is only a reference
+point — "about 39 km east of X" — because claiming a photograph was taken
+in a town two valleys away puts a wrong name in a caption and the model
+repeats it word for word. The resolved names also lead the keyword list,
+most specific first, so a photograph is findable by region and country
+however the model chose to phrase things; the place itself drops out beyond
+ten kilometres or on a doubtful fix.
+
+This is the last thing exiftool was still doing for this application. In
+its place is a [GeoNames](https://download.geonames.org/export/dump/)
+extract — a tab-separated file anybody can download and read — held in
+memory and searched in a one-degree grid, so a lookup reads nine buckets
+and a few hundred places rather than a hundred and fifty thousand. Put
+`cities5000.txt` (and, for the region and country names,
+`admin1CodesASCII.txt`, `admin2Codes.txt` and `countryInfo.txt`) in
+`places` beside the catalogue. Without them there is simply no place
+context, and the window says so plainly rather than leaving somebody to
+work it out from a hundred vague descriptions.
+
+**Nothing leaves the machine**, and the gazetteer is why that is still true
+of the place names: a coordinate sent to a geocoding service is a
+photograph's location handed to somebody. The HTTP client carries no TLS at
+all — the address is localhost, and shipping a TLS stack to reach a local
+socket is the trade this application does not make.
+
+Where the chosen language is not English, the same call also returns an
+**English description**, kept in the catalogue and never written into the
+file. The photograph carries one description, in the language somebody
+asked for; the second copy is what makes a library described in Czech
+findable by somebody typing English.
+
 ## Where this stands
 
-The scaffolding is done and the photographic features are being brought over
-on top of it. The **manager is complete**: browsing, culling, organising,
-filtering, searching, writing metadata back into the files, positions and the
-map, getting about, the file operations, showing RAW, comparing and the list
-view all work. The editor, batch conversion, faces and the AI describer are
-still v1's alone.
+**Everything v1 did outside the editor, v2 does.** Browsing, culling,
+organising, filtering, searching, writing metadata back into the files,
+positions and the map, getting about, the file operations, showing RAW,
+comparing, the list view — and now finding and naming faces, reading a
+smile and a blink, converting a folder at once, and asking a model on this
+machine what is in a photograph. The editor is what is left, and it is
+deliberately last.
 
 | | |
 |---|---|
-| tests | 353 (including 6,000 fuzz cases over EXIF and 70 checked colour pairs) |
+| tests | 553 (including 6,000 fuzz cases over EXIF and 70 checked colour pairs) |
 | scan of 7,558 photographs | 0.3 s; 0.1 s on a repeat |
 | opening 134,990 photographs recursively | 727 ms |
+| face sweep of 142 photographs | 2.8 s, 113 faces, every one scored |
+| converting 25 to 2048 px | 4.0 MB → 0.9 MB apiece |
+| describing with a 27B model | about 6 s a photograph |
 | `cargo clippy -D warnings` | clean |
 | themes | 5 plus following the system |
-| settings entries | 36, of which 27 are on the screen it generates |
-| catalogue schema | 5 migrations |
+| settings entries | 47, of which 38 are on the screen it generates |
+| catalogue schema | 8 migrations |
+| commands in the registry | 59 |
 
 A cross-check from Windows passes for `photosite-image` against both targets.
 The rest does not, because `libsqlite3-sys` with `bundled` compiles C and that
 needs a foreign toolchain — **the real verification for Linux and macOS is
 done by CI**, where the runners are native.
 
+### What has to be fetched
+
+Two things are downloaded rather than shipped, because both are large and
+neither is ours. Without either, the feature that needs it says so and
+everything else carries on.
+
+| | where | what for |
+|---|---|---|
+| four ONNX models | `models` beside the catalogue | finding faces, and reading a smile and a blink |
+| a GeoNames extract | `places` beside the catalogue | naming the place in a description |
+
+`--data` moves both, like everything else.
+
 ## What is missing, and known to be
 
-Of v1's features: the editor, batch conversion, faces and the AI describer.
-The editor is deliberately last and will be rebuilt rather than ported.
-Importing from a memory card is **not** being brought across at all — this is
-a manager for files that are already on a disk.
+**The editor**, which is the last of v1 and will be rebuilt rather than
+ported: crop and geometry, the adjustment sliders, the histogram, filters,
+annotation layers, before-and-after, and export with its own preset list.
+The preset store already has a second list waiting for it.
 
-The manager is done: everything v1's manager did, v2 does, with the one
-exception of importing from a memory card — which is deliberate.
+Importing from a memory card is **not** being brought across at all — this
+is a manager for files that are already on a disk. Nor is uploading to
+Imgur, which belonged to the editor and to a service.
 
-Three of the filter's facets are waiting on features that come later: people,
-the smiling and eyes-open scores, and the approximate-GPS verdict. All three
-need something to filter on first.
-
-One thing exiftool did quietly is still owed: the offline reverse geocoding
-the AI describer used came out of its database, and needs a GeoNames extract
-in its place.
+WebP is written **lossless**: the only pure-Rust encoder there is encodes
+losslessly, and a lossy one means shipping libwebp. The dialog says so
+rather than leaving somebody to find out from a folder of unexpectedly
+large files.
 
 Beyond the features: a single instance, accessibility, signing and
-notarisation for macOS, automatic updates. Of the languages, only English so far — cs-CZ is first in line.
-None of it requires rewriting what is done.
+notarisation for macOS, automatic updates. Of the languages, only English so
+far — cs-CZ is first in line. None of it requires rewriting what is done.

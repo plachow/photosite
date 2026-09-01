@@ -548,15 +548,8 @@ filter-someone-blinking = Someone blinking
 
 info-people = people
 info-expression = expression
-info-expression-smiling = everyone smiling
-info-expression-not-smiling = someone not smiling
-info-expression-eyes-open = everyone's eyes open
-info-expression-blinking = someone blinking
-info-faces =
-    { $count ->
-        [one] { $count } face
-       *[other] { $count } faces
-    }
+info-expression-smiling = { $count }/{ $of } smiling
+info-expression-eyes = { $count }/{ $of } eyes open
 
 cli-faces-done =
     { $photos ->
