@@ -2568,6 +2568,7 @@ dependencies = [
  "anyhow",
  "clap",
  "photosite-core",
+ "photosite-faces",
  "photosite-image",
  "photosite-meta",
  "tempfile",
@@ -2599,6 +2600,8 @@ name = "photosite-faces"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "crossbeam-channel",
+ "photosite-core",
  "photosite-image",
  "tempfile",
  "thiserror 2.0.20",
@@ -2640,10 +2643,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clipboard-win",
+ "crossbeam-channel",
  "eframe",
  "egui",
  "notify",
  "photosite-core",
+ "photosite-faces",
  "photosite-image",
  "photosite-meta",
  "pollster 1.0.1",

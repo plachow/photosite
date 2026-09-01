@@ -44,6 +44,12 @@ pub struct Photo {
     /// What somebody has said about it, as opposed to what was read out of
     /// it. A scan never touches this.
     pub organisation: Organisation,
+    /// Who is on it, named. Filled in for a whole folder at once, like the
+    /// keywords — one query and not one per tile.
+    pub people: Vec<crate::people::Tag>,
+    /// How its faces scored. All zeroes means nobody has looked, which is
+    /// not the same as nobody smiling and is treated differently everywhere.
+    pub expressions: crate::people::Expressions,
 }
 
 impl Photo {
@@ -488,6 +494,8 @@ mod tests {
             camera: None,
             lens: None,
             organisation: Organisation::default(),
+            people: Vec::new(),
+            expressions: Default::default(),
             place: None,
             verdict: crate::place::Verdict::Nowhere,
             reason: None,

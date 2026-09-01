@@ -17,6 +17,7 @@ workspace = true
 photosite-core.workspace = true
 photosite-image.workspace = true
 photosite-meta.workspace = true
+photosite-faces.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 serde.workspace = true
@@ -26,6 +27,7 @@ egui.workspace = true
 walkdir.workspace = true
 trash.workspace = true
 notify.workspace = true
+crossbeam-channel.workspace = true
 rfd.workspace = true
 pollster.workspace = true
 

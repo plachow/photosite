@@ -277,16 +277,13 @@ impl Tasks {
         Self::default()
     }
 
-    pub fn spawn<F>(&self, title: impl Into<String>, work: F) -> u64
-    where
-        F: FnOnce(&Cancel, &Progress) -> anyhow::Result<()> + Send + 'static,
-    {
+    /// Puts a task on the board and hands back what it needs to report.
+    fn enrol(&self, title: &str) -> (u64, Cancel, Progress) {
         let id = self.next.fetch_add(1, Ordering::Relaxed) + 1;
-        let title = title.into();
         let cancel = Cancel::default();
         self.board.lock().expect("poisoned lock").push(TaskStatus {
             id,
-            title: title.clone(),
+            title: title.to_owned(),
             done: 0,
             total: None,
             message: String::new(),
@@ -298,31 +295,78 @@ impl Tasks {
             .lock()
             .expect("poisoned lock")
             .push((id, cancel.clone()));
-
-        let board = self.board.clone();
         let progress = Progress {
             id,
-            board: board.clone(),
+            board: self.board.clone(),
         };
+        (id, cancel, progress)
+    }
+
+    /// Marks a task done, and says in the log how it went.
+    fn settle(&self, id: u64, title: &str, cancelled: bool, error: Option<String>) {
+        if let Ok(mut board) = self.board.lock()
+            && let Some(task) = board.iter_mut().find(|t| t.id == id)
+        {
+            task.finished = true;
+            task.cancelled = cancelled;
+            task.error = error.clone();
+        }
+
+        match error {
+            None => tracing::info!(%id, %title, "task finished"),
+            // A failed task has to surface; this is the spot where an
+            // application typically pretends all is well.
+            Some(error) => tracing::error!(%id, %title, %error, "task failed"),
+        }
+    }
+
+    /// Runs work on the calling thread, with the same progress and
+    /// cancellation a spawned one gets.
+    ///
+    /// What a command line uses: it has nothing else to do while it waits,
+    /// and a thread it would only turn round and join is a thread for
+    /// nothing. It reports the same way, so anything watching the board
+    /// sees a task either way.
+    pub fn here<T>(
+        &self,
+        title: impl Into<String>,
+        work: impl FnOnce(&Cancel, &Progress) -> anyhow::Result<T>,
+    ) -> anyhow::Result<T> {
+        let title = title.into();
+        let (id, cancel, progress) = self.enrol(&title);
+        let outcome = work(&cancel, &progress);
+        self.settle(
+            id,
+            &title,
+            cancel.cancelled(),
+            outcome.as_ref().err().map(|error| format!("{error:#}")),
+        );
+        outcome
+    }
+
+    pub fn spawn<F>(&self, title: impl Into<String>, work: F) -> u64
+    where
+        F: FnOnce(&Cancel, &Progress) -> anyhow::Result<()> + Send + 'static,
+    {
+        let title = title.into();
+        let (id, cancel, progress) = self.enrol(&title);
+        let board = self.board.clone();
         std::thread::spawn(move || {
             let outcome = work(&cancel, &progress);
+            let error = outcome.as_ref().err().map(|error| format!("{error:#}"));
             if let Ok(mut board) = board.lock()
                 && let Some(task) = board.iter_mut().find(|t| t.id == id)
             {
                 task.finished = true;
                 task.cancelled = cancel.cancelled();
-                if let Err(error) = &outcome {
-                    task.error = Some(format!("{error:#}"));
-                }
+                task.error = error.clone();
             }
 
-            match outcome {
-                Ok(()) => tracing::info!(%id, %title, "task finished"),
+            match error {
+                None => tracing::info!(%id, %title, "task finished"),
                 // A failed task has to surface; this is the spot where an
                 // application typically pretends all is well.
-                Err(error) => {
-                    tracing::error!(%id, %title, error = %format!("{error:#}"), "task failed")
-                }
+                Some(error) => tracing::error!(%id, %title, %error, "task failed"),
             }
         });
 

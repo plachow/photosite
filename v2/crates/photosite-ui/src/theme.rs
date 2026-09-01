@@ -214,6 +214,8 @@ pub fn badges(
     palette: &Palette,
     organisation: &Organisation,
     verdict: Verdict,
+    people: &[photosite_core::people::Tag],
+    expressions: photosite_core::people::Expressions,
 ) {
     // A rejected photograph is still there — it only fades. Deleting is a
     // separate, deliberate step, and dimming is what says so.
@@ -237,6 +239,57 @@ pub fn badges(
         );
         painter.rect_filled(spot, CornerRadius::same(2), Color32::from_black_alpha(120));
         pin(painter, spot.center(), size * 0.8, fill);
+    }
+
+    // Who is on it, as a row of dots in their own colours. No names: at
+    // three pixels high a name is a smudge, and the colour is what says
+    // "the same person as on that other tile".
+    if !people.is_empty() {
+        let dot = size * 1.4;
+        let plate = Rect::from_min_size(
+            egui::pos2(
+                well.min.x + pad,
+                well.max.y - pad - size * 2.2 - dot - pad * 0.5,
+            ),
+            Vec2::new(
+                (dot + pad * 0.4) * people.len().min(6) as f32 + pad * 0.6,
+                dot + pad * 0.6,
+            ),
+        );
+        painter.rect_filled(plate, CornerRadius::same(2), Color32::from_black_alpha(120));
+        for (index, tag) in people.iter().take(6).enumerate() {
+            let colour = photosite_core::theme::person_color(tag.id);
+            let centre = egui::pos2(
+                plate.min.x + pad * 0.3 + dot / 2.0 + index as f32 * (dot + pad * 0.4),
+                plate.center().y,
+            );
+            painter.circle_filled(
+                centre,
+                dot / 2.0,
+                Color32::from_rgb(colour.r, colour.g, colour.b),
+            );
+        }
+    }
+
+    // A quiet mark for a photograph worth a second look: somebody blinked,
+    // or somebody is not smiling. Nothing at all when everybody passes —
+    // a badge on every good photograph is a badge that says nothing.
+    if expressions.worth_showing() {
+        let side = size * 2.0;
+        let spot = Rect::from_min_size(
+            egui::pos2(
+                well.max.x - pad - side,
+                well.max.y - pad - side - side - pad * 0.5,
+            ),
+            Vec2::splat(side),
+        );
+        painter.rect_filled(spot, CornerRadius::same(2), Color32::from_black_alpha(120));
+        let amber = Color32::from_rgb(0xF2, 0xC5, 0x4E);
+        if expressions.anyone_blinking() {
+            closed_eye(painter, spot.center(), size * 0.75, amber);
+        } else {
+            frown(painter, spot.center(), size * 0.75, amber);
+        }
     }
 
     if organisation.is_empty() {
@@ -306,6 +359,49 @@ pub fn badges(
             Stroke::new((size * 0.28).max(1.5), color(palette.accent)),
         ));
     }
+}
+
+/// A shut eye: a shallow arc with two lashes under it.
+///
+/// Drawn rather than written, for the same reason the stars are — the
+/// default font has no such glyph, and a font that did would be a font to
+/// ship.
+fn closed_eye(painter: &egui::Painter, centre: egui::Pos2, size: f32, colour: Color32) {
+    let stroke = Stroke::new((size * 0.32).max(1.2), colour);
+    painter.add(egui::Shape::line(arc(centre, size, -0.35, false), stroke));
+    for side in [-1.0f32, 1.0] {
+        painter.line_segment(
+            [
+                egui::pos2(centre.x + side * size * 0.55, centre.y + size * 0.12),
+                egui::pos2(centre.x + side * size * 0.75, centre.y + size * 0.55),
+            ],
+            stroke,
+        );
+    }
+}
+
+/// A mouth turned down.
+fn frown(painter: &egui::Painter, centre: egui::Pos2, size: f32, colour: Color32) {
+    let stroke = Stroke::new((size * 0.32).max(1.2), colour);
+    painter.add(egui::Shape::line(
+        arc(centre + Vec2::new(0.0, size * 0.35), size, 0.5, true),
+        stroke,
+    ));
+}
+
+/// Points along a shallow parabola: `depth` says how far it bends and which
+/// way, `up` which side of the middle it sits.
+fn arc(centre: egui::Pos2, size: f32, depth: f32, up: bool) -> Vec<egui::Pos2> {
+    let sign = if up { -1.0 } else { 1.0 };
+    (0..=8)
+        .map(|step| {
+            let along = step as f32 / 8.0 * 2.0 - 1.0;
+            egui::pos2(
+                centre.x + along * size,
+                centre.y + sign * depth * size * (1.0 - along * along),
+            )
+        })
+        .collect()
 }
 
 /// Draws the slide and returns the rectangle the photograph belongs in.

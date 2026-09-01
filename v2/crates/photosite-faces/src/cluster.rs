@@ -34,13 +34,6 @@ pub struct Cluster<T> {
     pub centroid: Vec<f32>,
 }
 
-/// A face as the clusterer needs to see it: how sure the detector was, and
-/// the vector.
-pub trait Face {
-    fn confidence(&self) -> f64;
-    fn embedding(&self) -> &[f32];
-}
-
 /// Greedy clustering around running centroids.
 ///
 /// Every face joins the pile whose average it is most like, if that
@@ -52,19 +45,30 @@ pub trait Face {
 ///
 /// This is not the best clustering there is. It is the one whose mistakes
 /// are the cheap kind: it splits before it merges.
-pub fn cluster<T: Face + Clone>(faces: &[T], threshold: f64) -> Vec<Cluster<T>> {
+///
+/// `look` says how to see one item as a face — how sure the detector was,
+/// and the vector. A closure rather than a trait, so that whatever holds the
+/// faces need not know this crate exists: the catalogue's own face type is
+/// clustered without either crate depending on the other.
+pub fn cluster<T: Clone>(
+    faces: &[T],
+    threshold: f64,
+    look: impl Fn(&T) -> (f64, &[f32]),
+) -> Vec<Cluster<T>> {
     let mut order: Vec<&T> = faces.iter().collect();
     order.sort_by(|a, b| {
-        b.confidence()
-            .partial_cmp(&a.confidence())
+        look(b)
+            .0
+            .partial_cmp(&look(a).0)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
     let mut clusters: Vec<Cluster<T>> = Vec::new();
     for face in order {
+        let embedding = look(face).1;
         let mut best: Option<(usize, f64)> = None;
         for (index, cluster) in clusters.iter().enumerate() {
-            let similarity = math::cosine(face.embedding(), &cluster.centroid);
+            let similarity = math::cosine(embedding, &cluster.centroid);
             if similarity >= threshold && best.is_none_or(|(_, so_far)| similarity > so_far) {
                 best = Some((index, similarity));
             }
@@ -77,12 +81,12 @@ pub fn cluster<T: Face + Clone>(faces: &[T], threshold: f64) -> Vec<Cluster<T>> 
                     &clusters[index]
                         .members
                         .iter()
-                        .map(|member| member.embedding().to_vec())
+                        .map(|member| look(member).1.to_vec())
                         .collect::<Vec<_>>(),
                 );
             }
             None => clusters.push(Cluster {
-                centroid: math::normalize(face.embedding()),
+                centroid: math::normalize(embedding),
                 members: vec![face.clone()],
             }),
         }
@@ -148,14 +152,9 @@ mod tests {
         embedding: Vec<f32>,
     }
 
-    impl Face for Sample {
-        fn confidence(&self) -> f64 {
-            self.confidence
-        }
-
-        fn embedding(&self) -> &[f32] {
-            &self.embedding
-        }
+    /// How the clusterer is told to read a sample.
+    fn look(sample: &Sample) -> (f64, &[f32]) {
+        (sample.confidence, &sample.embedding)
     }
 
     /// A vector `spread` away from a direction, so two faces of one person
@@ -178,7 +177,7 @@ mod tests {
             near(0, 0.15, "b", 0.8),
             near(0, 0.05, "c", 0.7),
         ];
-        let clusters = cluster(&faces, GROUPING);
+        let clusters = cluster(&faces, GROUPING, look);
         assert_eq!(clusters.len(), 1);
         assert_eq!(clusters[0].members.len(), 3);
     }
@@ -186,7 +185,7 @@ mod tests {
     #[test]
     fn two_people_do_not_end_up_in_one_pile() {
         let faces = vec![near(0, 0.1, "a", 0.9), near(4, 0.1, "b", 0.9)];
-        let clusters = cluster(&faces, GROUPING);
+        let clusters = cluster(&faces, GROUPING, look);
         assert_eq!(clusters.len(), 2);
     }
 
@@ -199,7 +198,7 @@ mod tests {
             near(0, 0.0, "sharp", 0.99),
             near(0, 0.1, "another", 0.5),
         ];
-        let clusters = cluster(&faces, GROUPING);
+        let clusters = cluster(&faces, GROUPING, look);
         assert_eq!(clusters[0].members[0].name, "sharp");
     }
 
@@ -210,14 +209,14 @@ mod tests {
             faces.push(near(0, 0.05 * index as f32, "crowd", 0.5));
         }
 
-        let clusters = cluster(&faces, GROUPING);
+        let clusters = cluster(&faces, GROUPING, look);
         assert_eq!(clusters[0].members.len(), 3);
         assert_eq!(clusters[1].members[0].name, "alone");
     }
 
     #[test]
     fn nothing_at_all_makes_no_piles() {
-        let clusters = cluster::<Sample>(&[], GROUPING);
+        let clusters = cluster::<Sample>(&[], GROUPING, look);
         assert!(clusters.is_empty());
     }
 

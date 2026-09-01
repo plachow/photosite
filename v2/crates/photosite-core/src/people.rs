@@ -156,6 +156,32 @@ pub struct Region {
     pub height: f64,
 }
 
+/// The square of a photograph a face's thumbnail is cut out of.
+///
+/// Returned as fractions of the frame, like everything else about a face,
+/// and **square in pixels rather than in fractions** — the frame is not
+/// square, so the two are different, and a chip built from the wrong one
+/// shows every face stretched.
+///
+/// The margin is what keeps hair and a chin in the picture: the detector's
+/// box stops at the face itself, and a crop tight to it is a portrait of a
+/// nose.
+pub fn crop(face: (f64, f64, f64, f64), margin: f64, frame: (u32, u32)) -> (f64, f64, f64, f64) {
+    let (width, height) = (f64::from(frame.0.max(1)), f64::from(frame.1.max(1)));
+    let (x, y, w, h) = face;
+    let side = (w * width).max(h * height) * (1.0 + 2.0 * margin.max(0.0));
+    let (half_w, half_h) = (side / width / 2.0, side / height / 2.0);
+    let (centre_x, centre_y) = (x + w / 2.0, y + h / 2.0);
+
+    // Clamped into the frame rather than allowed to hang over the edge: a
+    // texture sampled outside itself shows whatever the edge pixel is,
+    // smeared, and a face at the border of a photograph is exactly where
+    // that happens.
+    let left = (centre_x - half_w).clamp(0.0, (1.0 - 2.0 * half_w).max(0.0));
+    let top = (centre_y - half_h).clamp(0.0, (1.0 - 2.0 * half_h).max(0.0));
+    (left, top, (2.0 * half_w).min(1.0), (2.0 * half_h).min(1.0))
+}
+
 /// A vector as the catalogue stores it.
 ///
 /// Little-endian on every platform, so a catalogue carried from one machine
@@ -497,6 +523,78 @@ impl Catalog {
         Ok(photos)
     }
 
+    /// Names faces, and makes the photographs they are on say so.
+    ///
+    /// This is the whole of "naming a group", in the core where a test can
+    /// watch it: the faces take the name, the name goes into each
+    /// photograph's keywords, and those photographs are queued to be
+    /// written. The face frames follow on their own — the outbox rebuilds
+    /// them from the catalogue at the moment of writing.
+    ///
+    /// The keyword matters more than it looks. It is what makes a search for
+    /// somebody's name find their photographs in every other program too,
+    /// and it is the only part of this that survives being read by software
+    /// that has never heard of face regions.
+    pub fn name_faces(&mut self, faces: &[i64], person: i64, now: i64) -> Result<Vec<PhotoId>> {
+        let name: String = self.connection().query_row(
+            "SELECT name FROM people WHERE id = ?1",
+            params![person],
+            |row| row.get(0),
+        )?;
+        let photos = self.assign_faces(faces, Some(person))?;
+        self.add_keywords(&photos, &[name])?;
+        self.enqueue(&photos, now)?;
+        Ok(photos)
+    }
+
+    /// Takes the name off faces, and off the photographs where none of that
+    /// person's faces are left.
+    ///
+    /// **The keyword only comes off a photograph when the person really has
+    /// gone from it.** Two faces of one person on a group shot is ordinary,
+    /// and removing one wrong match must not take their name off a
+    /// photograph they are plainly still in.
+    pub fn unname_faces(&mut self, faces: &[i64], now: i64) -> Result<Vec<PhotoId>> {
+        // Who was on them, before anything is changed.
+        let mut was: Vec<(PhotoId, i64, String)> = Vec::new();
+        {
+            let mut statement = self.connection().prepare(
+                "SELECT f.photo_id, people.id, people.name
+                 FROM faces f JOIN people ON people.id = f.person_id
+                 WHERE f.id = ?1",
+            )?;
+            for face in faces {
+                for row in statement.query_map(params![face], |row| {
+                    Ok((PhotoId(row.get(0)?), row.get(1)?, row.get(2)?))
+                })? {
+                    let entry = row?;
+                    if !was.contains(&entry) {
+                        was.push(entry);
+                    }
+                }
+            }
+        }
+
+        let photos = self.assign_faces(faces, None)?;
+        for (photo, person, name) in was {
+            let left: i64 = self.connection().query_row(
+                "SELECT COUNT(*) FROM (
+                     SELECT 1 FROM faces WHERE photo_id = ?1 AND person_id = ?2
+                     UNION ALL
+                     SELECT 1 FROM photo_people WHERE photo_id = ?1 AND person_id = ?2
+                 )",
+                params![photo.0, person],
+                |row| row.get(0),
+            )?;
+            if left == 0 {
+                self.remove_keywords(&[photo], &[name])?;
+            }
+        }
+
+        self.enqueue(&photos, now)?;
+        Ok(photos)
+    }
+
     /// Waves faces away as strangers.
     ///
     /// The rows stay, so the photographs still count as scanned and the
@@ -555,17 +653,33 @@ impl Catalog {
     /// Says by hand that somebody is on a photograph — they are in it, but
     /// turned away, or behind the camera's own strap, and there is no face
     /// for the detector to frame. Saying it twice says it once.
-    pub fn tag_person(&mut self, photo: PhotoId, person: i64) -> Result<()> {
+    ///
+    /// The keyword goes in exactly as it would for a face, because a person
+    /// on a photograph is a person on a photograph however we came to know
+    /// it — and a search for their name has no way to tell the two apart.
+    pub fn tag_person(&mut self, photo: PhotoId, person: i64, now: i64) -> Result<()> {
+        let name: String = self.connection().query_row(
+            "SELECT name FROM people WHERE id = ?1",
+            params![person],
+            |row| row.get(0),
+        )?;
         self.connection().execute(
             "INSERT OR IGNORE INTO photo_people(photo_id, person_id) VALUES(?1, ?2)",
             params![photo.0, person],
         )?;
+        self.add_keywords(&[photo], &[name])?;
+        self.enqueue(&[photo], now)?;
         Ok(())
     }
 
     /// Takes a person off one photograph entirely: the hand-written tag goes,
     /// and any of their faces on that photograph return to the unnamed pool.
-    pub fn untag_person(&mut self, photo: PhotoId, person: i64) -> Result<()> {
+    pub fn untag_person(&mut self, photo: PhotoId, person: i64, now: i64) -> Result<()> {
+        let name: String = self.connection().query_row(
+            "SELECT name FROM people WHERE id = ?1",
+            params![person],
+            |row| row.get(0),
+        )?;
         let transaction = self.connection_mut().transaction()?;
         transaction.execute(
             "DELETE FROM photo_people WHERE photo_id = ?1 AND person_id = ?2",
@@ -576,6 +690,8 @@ impl Catalog {
             params![photo.0, person],
         )?;
         transaction.commit()?;
+        self.remove_keywords(&[photo], &[name])?;
+        self.enqueue(&[photo], now)?;
         Ok(())
     }
 
@@ -619,6 +735,50 @@ impl Catalog {
         }
 
         Ok(found)
+    }
+
+    /// Who is on one photograph.
+    pub fn people_of(&self, photo: PhotoId) -> Result<Vec<Tag>> {
+        let mut statement = self.connection().prepare(
+            "SELECT DISTINCT people.id, people.name
+             FROM (
+                 SELECT photo_id, person_id FROM faces WHERE person_id IS NOT NULL
+                 UNION
+                 SELECT photo_id, person_id FROM photo_people
+             ) AS source
+             JOIN people ON people.id = source.person_id
+             WHERE source.photo_id = ?1
+             ORDER BY people.name COLLATE NOCASE",
+        )?;
+        Ok(statement
+            .query_map(params![photo.0], |row| {
+                Ok(Tag {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// How one photograph's faces scored.
+    pub fn expressions_of(&self, photo: PhotoId) -> Result<Expressions> {
+        Ok(self.connection().query_row(
+            "SELECT COUNT(*),
+                    SUM(CASE WHEN smile IS NOT NULL AND eyes_open IS NOT NULL
+                             THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN smile >= ?2 THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN eyes_open >= ?3 THEN 1 ELSE 0 END)
+             FROM faces WHERE photo_id = ?1",
+            params![photo.0, SMILE_THRESHOLD, EYES_OPEN_THRESHOLD],
+            |row| {
+                Ok(Expressions {
+                    faces: row.get::<_, i64>(0)? as usize,
+                    scored: row.get::<_, Option<i64>>(1)?.unwrap_or(0) as usize,
+                    smiling: row.get::<_, Option<i64>>(2)?.unwrap_or(0) as usize,
+                    eyes_open: row.get::<_, Option<i64>>(3)?.unwrap_or(0) as usize,
+                })
+            },
+        )?)
     }
 
     /// Every photograph's expression tally, for a whole folder in one query.
@@ -821,6 +981,52 @@ mod tests {
         }
     }
 
+    /// A chip of a stretched crop is a chip of a stretched face. The frame
+    /// is not square, so a square in fractions is not a square in pixels.
+    #[test]
+    fn a_face_thumbnail_is_square_in_pixels_and_not_in_fractions() {
+        let frame = (6000u32, 4000u32);
+        let (_, _, width, height) = crop((0.4, 0.4, 0.1, 0.1), 0.0, frame);
+        let pixels = (width * f64::from(frame.0), height * f64::from(frame.1));
+        assert!(
+            (pixels.0 - pixels.1).abs() < 1.0,
+            "{pixels:?} is not square"
+        );
+    }
+
+    #[test]
+    fn the_margin_keeps_the_hair_and_the_chin() {
+        let frame = (1000u32, 1000u32);
+        let tight = crop((0.4, 0.4, 0.1, 0.1), 0.0, frame);
+        let loose = crop((0.4, 0.4, 0.1, 0.1), 0.35, frame);
+        assert!(loose.2 > tight.2, "{loose:?} vs {tight:?}");
+        // And it stays centred on the same face.
+        assert!(((loose.0 + loose.2 / 2.0) - (tight.0 + tight.2 / 2.0)).abs() < 1e-9);
+    }
+
+    /// A face at the very edge of a photograph is where a crop that hangs
+    /// over the border shows a smeared edge pixel instead of a cheek.
+    #[test]
+    fn a_crop_never_leaves_the_photograph() {
+        let frame = (1000u32, 1000u32);
+        for face in [(0.0, 0.0, 0.1, 0.1), (0.9, 0.9, 0.1, 0.1)] {
+            let (x, y, width, height) = crop(face, 0.5, frame);
+            assert!(x >= 0.0 && y >= 0.0, "{x},{y}");
+            assert!(x + width <= 1.0 + 1e-9, "{x} + {width}");
+            assert!(y + height <= 1.0 + 1e-9, "{y} + {height}");
+        }
+    }
+
+    /// A face larger than the frame with its margin is the ordinary case of
+    /// a close portrait, and it must come back as the whole photograph
+    /// rather than as something inside out.
+    #[test]
+    fn a_face_that_fills_the_frame_gives_the_whole_frame() {
+        let (x, y, width, height) = crop((0.0, 0.0, 1.0, 1.0), 0.35, (1000, 1000));
+        assert_eq!((x, y), (0.0, 0.0));
+        assert!((width - 1.0).abs() < 1e-9 && (height - 1.0).abs() < 1e-9);
+    }
+
     #[test]
     fn an_embedding_survives_the_trip_through_the_catalogue() {
         let mut catalog = catalog_with(&["/a/one.jpg"]);
@@ -1014,6 +1220,108 @@ mod tests {
         assert_eq!(catalog.faces_of(photo).unwrap()[0].person, Some(person));
     }
 
+    /// The whole of "name this group", checked end to end: the faces take
+    /// the name, the photographs take the keyword, and the photographs are
+    /// queued to be written.
+    #[test]
+    fn naming_a_group_puts_the_name_into_the_photographs_too() {
+        let mut catalog = catalog_with(&["/a/one.jpg", "/a/two.jpg"]);
+        let mut faces = Vec::new();
+        for path in ["/a/one.jpg", "/a/two.jpg"] {
+            let photo = catalog.id_of(Path::new(path)).unwrap().unwrap();
+            catalog
+                .replace_faces(photo, &identity(path), &[observation(0.1, &[1.0])], 0)
+                .unwrap();
+            faces.push(catalog.faces_of(photo).unwrap()[0].id);
+        }
+
+        let person = catalog.person_named("Jana").unwrap();
+        let touched = catalog.name_faces(&faces, person, 100).unwrap();
+
+        assert_eq!(touched.len(), 2);
+        for photo in &touched {
+            assert_eq!(catalog.keywords_of(*photo).unwrap(), ["Jana"]);
+        }
+
+        assert_eq!(
+            catalog.outbox().unwrap().0,
+            2,
+            "nothing was queued to write"
+        );
+    }
+
+    /// Two faces of one person on a group shot is ordinary. Removing one
+    /// wrong match must not take their name off a photograph they are
+    /// plainly still in.
+    #[test]
+    fn a_name_only_leaves_a_photograph_when_the_person_really_has() {
+        let mut catalog = catalog_with(&["/a/group.jpg"]);
+        let photo = catalog.id_of(Path::new("/a/group.jpg")).unwrap().unwrap();
+        catalog
+            .replace_faces(
+                photo,
+                &identity("/a/group.jpg"),
+                &[observation(0.1, &[1.0]), observation(0.5, &[1.0])],
+                0,
+            )
+            .unwrap();
+        let person = catalog.person_named("Jana").unwrap();
+        let faces: Vec<i64> = catalog
+            .faces_of(photo)
+            .unwrap()
+            .iter()
+            .map(|face| face.id)
+            .collect();
+        catalog.name_faces(&faces, person, 0).unwrap();
+
+        catalog.unname_faces(&faces[..1], 0).unwrap();
+        assert_eq!(
+            catalog.keywords_of(photo).unwrap(),
+            ["Jana"],
+            "the name went with the first of two faces"
+        );
+
+        catalog.unname_faces(&faces[1..], 0).unwrap();
+        assert!(catalog.keywords_of(photo).unwrap().is_empty());
+    }
+
+    /// A hand-written tag holds the name on the photograph on its own, so
+    /// taking a face off must not undo it.
+    #[test]
+    fn a_hand_written_tag_keeps_the_name_when_the_face_goes() {
+        let mut catalog = catalog_with(&["/a/one.jpg"]);
+        let photo = catalog.id_of(Path::new("/a/one.jpg")).unwrap().unwrap();
+        catalog
+            .replace_faces(
+                photo,
+                &identity("/a/one.jpg"),
+                &[observation(0.1, &[1.0])],
+                0,
+            )
+            .unwrap();
+        let person = catalog.person_named("Jana").unwrap();
+        let face = catalog.faces_of(photo).unwrap()[0].id;
+        catalog.name_faces(&[face], person, 0).unwrap();
+        catalog.tag_person(photo, person, 0).unwrap();
+
+        catalog.unname_faces(&[face], 0).unwrap();
+        assert_eq!(catalog.keywords_of(photo).unwrap(), ["Jana"]);
+    }
+
+    /// Somebody said by hand to be on a photograph is on it as far as any
+    /// other program is concerned too.
+    #[test]
+    fn a_hand_written_tag_puts_the_name_into_the_photograph() {
+        let mut catalog = catalog_with(&["/a/one.jpg"]);
+        let photo = catalog.id_of(Path::new("/a/one.jpg")).unwrap().unwrap();
+        let person = catalog.person_named("Jana").unwrap();
+        catalog.tag_person(photo, person, 0).unwrap();
+        assert_eq!(catalog.keywords_of(photo).unwrap(), ["Jana"]);
+
+        catalog.untag_person(photo, person, 0).unwrap();
+        assert!(catalog.keywords_of(photo).unwrap().is_empty());
+    }
+
     #[test]
     fn a_stranger_waved_away_stops_being_offered() {
         let mut catalog = catalog_with(&["/a/one.jpg"]);
@@ -1072,14 +1380,14 @@ mod tests {
         let mut catalog = catalog_with(&["/a/one.jpg"]);
         let photo = catalog.id_of(Path::new("/a/one.jpg")).unwrap().unwrap();
         let person = catalog.person_named("Jana").unwrap();
-        catalog.tag_person(photo, person).unwrap();
-        catalog.tag_person(photo, person).unwrap();
+        catalog.tag_person(photo, person, 0).unwrap();
+        catalog.tag_person(photo, person, 0).unwrap();
 
         let people = catalog.people_by_photo(Path::new("/a"), false).unwrap();
         assert_eq!(people[&photo].len(), 1);
         assert_eq!(people[&photo][0].name, "Jana");
 
-        catalog.untag_person(photo, person).unwrap();
+        catalog.untag_person(photo, person, 0).unwrap();
         assert!(
             catalog
                 .people_by_photo(Path::new("/a"), false)
@@ -1114,7 +1422,7 @@ mod tests {
             catalog.assign_faces(&faces, Some(person)).unwrap();
         }
 
-        catalog.untag_person(one, person).unwrap();
+        catalog.untag_person(one, person, 0).unwrap();
         assert_eq!(catalog.faces_of(one).unwrap()[0].person, None);
         assert_eq!(catalog.faces_of(two).unwrap()[0].person, Some(person));
     }
@@ -1268,7 +1576,7 @@ mod tests {
         let mut catalog = catalog_with(&[&deep]);
         let photo = catalog.id_of(Path::new(&deep)).unwrap().unwrap();
         let person = catalog.person_named("Jana").unwrap();
-        catalog.tag_person(photo, person).unwrap();
+        catalog.tag_person(photo, person, 0).unwrap();
 
         assert!(
             catalog

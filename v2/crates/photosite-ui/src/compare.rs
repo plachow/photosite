@@ -235,7 +235,17 @@ fn caption(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, palette: &Palette
     if let Some(photo) = app.photo_named(path) {
         let organisation = photo.organisation.clone();
         let verdict = photo.verdict;
-        theme::badges(ui.painter(), rect, palette, &organisation, verdict);
+        let people = photo.people.clone();
+        let expressions = photo.expressions;
+        theme::badges(
+            ui.painter(),
+            rect,
+            palette,
+            &organisation,
+            verdict,
+            &people,
+            expressions,
+        );
     }
 
     let name = path

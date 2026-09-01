@@ -16,6 +16,7 @@ mod filter;
 mod grid;
 mod info;
 mod list;
+mod people;
 mod picker;
 mod theme;
 
@@ -49,6 +50,9 @@ pub enum Want {
     /// decide which frame is the sharp one. Only ever asked for the two to
     /// four photographs being compared, which is what makes it affordable.
     Close,
+    /// A photograph the People window is cutting face chips out of. One
+    /// decode serves every face on it, however many that is.
+    Face,
 }
 
 pub type Key = (PathBuf, Want);
@@ -75,6 +79,7 @@ fn main() -> Result<()> {
     let mut reset = false;
     let mut open_settings = false;
     let mut open_filter = false;
+    let mut open_people = false;
     let mut compare = 0usize;
     let mut search: Option<String> = None;
     let mut folder: Option<PathBuf> = None;
@@ -89,6 +94,11 @@ fn main() -> Result<()> {
             "--reset-settings" => reset = true,
             "--open-settings" => open_settings = true,
             "--open-filter" => open_filter = true,
+            // The same reason as `--open-filter`: a window that normally
+            // needs a key can be opened from a command line, which is what
+            // makes it possible to look at one without a hand on the
+            // keyboard.
+            "--open-people" => open_people = true,
             // Opens straight into a comparison of the first few. Like
             // `--open-filter`, it exists so that a view which normally needs
             // a selection and a key can be seen from a command line.
@@ -151,6 +161,8 @@ fn main() -> Result<()> {
             app.shot = shot;
             app.show_settings = open_settings;
             app.show_filter = open_filter;
+            app.people.open = open_people;
+            app.people.stale = open_people;
             // The filter first: narrowing the gallery rebuilds the
             // selection, so choosing tiles before it means choosing tiles
             // that are about to be let go of.
@@ -311,6 +323,8 @@ pub struct App {
     pub wanted_sharp: Vec<PathBuf>,
     pub wanted_preview: Vec<PathBuf>,
     pub wanted_close: Vec<PathBuf>,
+    /// The photographs the People window wants to cut face chips out of.
+    pub wanted_faces: Vec<PathBuf>,
     pub blank: usize,
     pub unsharp: usize,
     /// How many textures the grid currently wishes to keep. The cache
@@ -333,6 +347,13 @@ pub struct App {
     pub layout: layout::Layout,
     /// Which panes are hidden.
     pub hidden: Vec<String>,
+    /// The People window: who is known, who is waiting to be named, and the
+    /// sweep that finds them.
+    pub people: people::People,
+    /// The faces of the photograph in the preview, and whose they are.
+    /// Read when the preview changes rather than when it is drawn.
+    pub preview_faces_of: Option<PhotoId>,
+    pub preview_faces: Vec<photosite_core::people::Face>,
     /// Which photograph the prepared detail rows belong to.
     pub info_of: Option<PathBuf>,
     pub info_rows: Vec<(String, String)>,
@@ -391,6 +412,7 @@ impl App {
         let thumb = settings.loading.thumb_size.clamp(32, 4096) as u32;
         let preview = settings.loading.preview_size.clamp(64, 16384) as u32;
         let close = settings.loading.compare_size.clamp(64, 16384) as u32;
+        let faces = settings.faces.crop_size.clamp(160, 4096) as u32;
         let embedded = settings.loading.use_embedded_thumbnails;
         // Only the tiles are kept. A preview is a megabyte and is wanted for
         // one photograph at a time; keeping those would be a library's worth
@@ -414,6 +436,7 @@ impl App {
                 },
                 Want::Preview => img::sized(path, preview).map(|rgb| Some(into_pixels(rgb))),
                 Want::Close => img::sized(path, close).map(|rgb| Some(into_pixels(rgb))),
+                Want::Face => img::sized(path, faces).map(|rgb| Some(into_pixels(rgb))),
             };
 
             let outcome = match outcome {
@@ -482,6 +505,10 @@ impl App {
             wanted_sharp: Vec::new(),
             wanted_preview: Vec::new(),
             wanted_close: Vec::new(),
+            wanted_faces: Vec::new(),
+            people: people::People::default(),
+            preview_faces_of: None,
+            preview_faces: Vec::new(),
             compare: None,
             blank: 0,
             unsharp: 0,
@@ -715,7 +742,7 @@ impl App {
     /// and not the positions** — reordering a folder with something selected
     /// would otherwise leave the next rating landing on whatever slid into
     /// that slot, which is the kind of mistake nobody notices until later.
-    fn relist(&mut self) {
+    pub(crate) fn relist(&mut self) {
         let Some(folder) = self.folder.clone() else {
             self.all.clear();
             self.visible.clear();
@@ -942,6 +969,40 @@ impl App {
 
     /// Notices that the background pass has finished and takes the rows
     /// again. Polled every frame, which costs one lock and nothing else.
+    /// Notices that a face sweep has finished, and takes what it found.
+    ///
+    /// The summary is the task's own last message rather than something
+    /// passed back another way: a task already has somewhere to say how it
+    /// went, and a second channel for the same thing is a second thing to
+    /// keep in step.
+    fn collect_faces(&mut self) {
+        let Some(id) = self.people.scanning else {
+            return;
+        };
+
+        let Some(task) = self
+            .tasks
+            .snapshot()
+            .into_iter()
+            .find(|task| task.id == id && task.finished)
+        else {
+            return;
+        };
+
+        self.people.scanning = None;
+        self.people.summary = match &task.error {
+            Some(error) => error.clone(),
+            None => task.message.clone(),
+        };
+        self.people.stale = true;
+        // Who is on which photograph has changed, so the badges, the
+        // details and the filter all need reading again.
+        self.preview_faces_of = None;
+        self.relist();
+        self.start_writing();
+        self.tasks.forget_finished();
+    }
+
     fn collect_indexing(&mut self) {
         let Some(id) = self.indexing else {
             return;
@@ -1028,6 +1089,68 @@ impl App {
         // A move takes photographs out of this folder and a copy can land in
         // it, so either way what is on screen may no longer be the truth.
         self.reopen();
+    }
+
+    /// Where the face models are: what the settings say, or the ordinary
+    /// place beside the catalogue.
+    pub fn model_folder(&self) -> PathBuf {
+        let configured = self.settings.faces.models.trim();
+        if configured.is_empty() {
+            self.paths.models()
+        } else {
+            PathBuf::from(configured)
+        }
+    }
+
+    /// How many threads background work may use. The same answer the
+    /// decoding pool got, so a sweep and the grid are not each told a
+    /// different number.
+    pub fn worker_threads(&self) -> usize {
+        match self.settings.loading.worker_threads {
+            0 => jobs::worker_count(),
+            count => count.clamp(1, 128) as usize,
+        }
+    }
+
+    /// The texture a face chip is drawn from, and the part of it to draw.
+    ///
+    /// Nothing at all while the photograph is still being decoded — the
+    /// window draws a plain frame then, rather than jumping about as things
+    /// arrive.
+    pub fn face_texture(
+        &self,
+        face: &photosite_core::people::Face,
+    ) -> Option<(egui::TextureId, egui::Rect)> {
+        let key = (face.path.clone(), Want::Face);
+        let texture = self.textures.get(&key)?;
+        let size = texture.size();
+        let (x, y, width, height) = photosite_core::people::crop(
+            face.rectangle(),
+            self.settings.faces.crop_margin,
+            (size[0] as u32, size[1] as u32),
+        );
+        Some((
+            texture.id(),
+            egui::Rect::from_min_size(
+                egui::pos2(x as f32, y as f32),
+                egui::vec2(width as f32, height as f32),
+            ),
+        ))
+    }
+
+    /// The faces of one photograph, read once and kept until another is
+    /// looked at.
+    pub fn load_faces(&mut self, photo: PhotoId) {
+        if self.preview_faces_of == Some(photo) {
+            return;
+        }
+
+        self.preview_faces = self
+            .catalog
+            .as_ref()
+            .and_then(|catalog| catalog.faces_of(photo).ok())
+            .unwrap_or_default();
+        self.preview_faces_of = Some(photo);
     }
 
     pub fn texture(&self, key: &Key) -> Option<&egui::TextureHandle> {
@@ -1132,6 +1255,12 @@ impl App {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
             }
             "view.settings" => self.show_settings = !self.show_settings,
+            "photo.people" => {
+                self.people.open = !self.people.open;
+                if self.people.open {
+                    self.people.stale = true;
+                }
+            }
             "view.filter" => self.show_filter = !self.show_filter,
             "view.clear_filter" => {
                 self.filter_from.clear();
@@ -1970,7 +2099,7 @@ fn regions_for(entry: &photosite_core::catalog::Pending) -> Option<photosite_met
 ///
 /// The queue needs a clock for its backoff, and this is the only place the
 /// application asks for one.
-fn now() -> i64 {
+pub(crate) fn now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|since| since.as_secs() as i64)
@@ -2021,6 +2150,7 @@ impl eframe::App for App {
         let ctx = ui.ctx().clone();
         let delivered = self.collect(&ctx);
         self.collect_indexing();
+        self.collect_faces();
         self.collect_writing();
         self.collect_disturbance();
         self.take_picked_folder();
@@ -2058,6 +2188,7 @@ impl eframe::App for App {
 
         self.diagnostics_window(&ctx);
         self.settings_window(&ctx);
+        people::window(self, &ctx, &palette);
         filter::window(self, &ctx, &palette);
         self.ask_window(&ctx);
 
@@ -2065,6 +2196,14 @@ impl eframe::App for App {
         // visible and what is selected. Anything not on it stops being
         // decoded.
         self.images.wish(vec![
+            // The People window's photographs go before anything else: it
+            // is the window in front of somebody, and a face chip that
+            // arrives after the tiles behind it is a window that fills in
+            // backwards.
+            std::mem::take(&mut self.wanted_faces)
+                .into_iter()
+                .map(|path| (path, Want::Face))
+                .collect(),
             std::mem::take(&mut self.wanted_quick)
                 .into_iter()
                 .map(|path| (path, Want::Quick))

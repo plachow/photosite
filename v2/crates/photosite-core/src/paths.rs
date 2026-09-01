@@ -76,6 +76,21 @@ impl Paths {
         self.cache.join("thumbnails")
     }
 
+    /// Where the face models live.
+    ///
+    /// Under `data` and not under `cache`: a hundred megabytes somebody
+    /// downloaded once is not something to clear away as scratch, and the
+    /// cache is defined as deletable without consequence.
+    pub fn models(&self) -> PathBuf {
+        self.data.join("models")
+    }
+
+    /// Where the gazetteer lives — the offline list of places that turns a
+    /// coordinate into a name without asking anybody.
+    pub fn places(&self) -> PathBuf {
+        self.data.join("places")
+    }
+
     /// Creates whatever is missing. Called once at startup.
     pub fn ensure(&self) -> Result<()> {
         for dir in [&self.data, &self.config, &self.cache, &self.logs] {
@@ -97,6 +112,8 @@ mod tests {
         assert!(paths.portable);
         assert!(paths.catalog().starts_with("/tmp/x"));
         assert!(paths.thumbnails().starts_with("/tmp/x"));
+        assert!(paths.models().starts_with("/tmp/x"));
+        assert!(paths.places().starts_with("/tmp/x"));
         assert!(paths.config_file().starts_with("/tmp/x"));
     }
 

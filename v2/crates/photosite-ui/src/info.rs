@@ -443,6 +443,39 @@ fn read(photo: &Photo) -> Vec<(String, String)> {
         rows.push((t!("info-exposure"), parts.join("  \u{b7}  ")));
     }
 
+    // Who is on it, and how their faces scored. Both are catalogue rows
+    // rather than anything read out of the file, so they cost nothing here.
+    if !photo.people.is_empty() {
+        rows.push((
+            t!("info-people"),
+            photo
+                .people
+                .iter()
+                .map(|tag| tag.name.clone())
+                .collect::<Vec<_>>()
+                .join(", "),
+        ));
+    }
+
+    let expressions = photo.expressions;
+    if expressions.scored > 0 {
+        // Said as what is wrong where anything is, and as what is right
+        // where nothing is: "someone blinking" is the useful half, and a row
+        // that only ever says "3 faces" is a row nobody reads twice.
+        let mut said = vec![t!("info-faces", count = expressions.faces as i64)];
+        said.push(t!(if expressions.anyone_not_smiling() {
+            "info-expression-not-smiling"
+        } else {
+            "info-expression-smiling"
+        }));
+        said.push(t!(if expressions.anyone_blinking() {
+            "info-expression-blinking"
+        } else {
+            "info-expression-eyes-open"
+        }));
+        rows.push((t!("info-expression"), said.join("  \u{b7}  ")));
+    }
+
     rows.push((
         t!("info-embedded"),
         match meta.thumbnail {

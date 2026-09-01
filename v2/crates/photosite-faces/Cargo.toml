@@ -10,11 +10,13 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+photosite-core.workspace = true
 photosite-image.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tract-onnx.workspace = true
+crossbeam-channel.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

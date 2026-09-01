@@ -35,6 +35,8 @@ pub struct Settings {
     pub gallery: Gallery,
     pub loading: Loading,
     pub appearance: Appearance,
+    pub faces: Faces,
+    pub ai: Ai,
 }
 
 /// The window state. That the application opens where somebody left it is
@@ -213,6 +215,89 @@ impl Default for Appearance {
             theme_light: "light".to_owned(),
             language: crate::i18n::FALLBACK.to_string(),
             ui_scale: 1.0,
+        }
+    }
+}
+
+/// Finding faces. Everything here is local, and nothing in it reaches a
+/// network.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Faces {
+    /// Where the four ONNX models are. Empty means the ordinary place —
+    /// `models` beside the catalogue — which moves with `--data` like
+    /// everything else. A path here is for somebody who keeps a hundred
+    /// megabytes of models on another disk and does not want a second copy.
+    pub models: String,
+    /// The longer edge a photograph is decoded at for a scan.
+    ///
+    /// It is not the detector's own canvas, which is fixed by the model.
+    /// This is the frame the faces are cut out of and described from, so a
+    /// larger number means better recognition of small faces and a slower
+    /// sweep — it is the one number worth turning up on a library of group
+    /// photographs.
+    pub detect_size: i64,
+    /// The longer edge a photograph is decoded at to cut face thumbnails
+    /// out of. One decode serves every face on it.
+    pub crop_size: i64,
+    /// How much of the frame around a face a thumbnail keeps, so that hair
+    /// and chin survive the crop.
+    pub crop_margin: f64,
+    /// Draw the face frames over the preview.
+    pub show_frames: bool,
+}
+
+impl Default for Faces {
+    fn default() -> Self {
+        Self {
+            models: String::new(),
+            detect_size: 1024,
+            crop_size: 640,
+            crop_margin: 0.35,
+            show_frames: true,
+        }
+    }
+}
+
+/// Asking a vision model on this machine to describe a photograph.
+///
+/// The address defaults to localhost and the whole feature is built around
+/// that: a photograph goes to the model as pixels, and a model on somebody
+/// else's computer is a different promise entirely.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Ai {
+    pub endpoint: String,
+    pub model: String,
+    /// What language to write in, as the model is asked for it. A name and
+    /// not a code, because that is what a model understands.
+    pub language: String,
+    /// Overwrite a title and a description that are already there, rather
+    /// than only filling in what is empty.
+    ///
+    /// Filling in the empty ones is the default because it is what makes an
+    /// interrupted run over a thousand photographs restartable: everything
+    /// already described is skipped.
+    pub overwrite: bool,
+    /// The longer edge sent to the model. A vision model reads a photograph
+    /// comfortably at this size and it keeps the request far smaller than
+    /// the file.
+    pub request_size: i64,
+    /// How long to wait for one answer. A vision model on a modest machine
+    /// takes tens of seconds a photograph, so this is minutes rather than
+    /// the seconds an HTTP client would default to.
+    pub timeout_seconds: i64,
+}
+
+impl Default for Ai {
+    fn default() -> Self {
+        Self {
+            endpoint: "http://localhost:11434".to_owned(),
+            model: String::new(),
+            language: "English".to_owned(),
+            overwrite: false,
+            request_size: 1024,
+            timeout_seconds: 300,
         }
     }
 }
@@ -677,6 +762,70 @@ pub const TUNABLES: &[Tunable] = &[
         path: "appearance.ui_scale",
         label_key: "setting-ui-scale",
         kind: Kind::Float { min: 0.5, max: 3.0 },
+    },
+    Tunable {
+        path: "faces.models",
+        label_key: "setting-face-models",
+        kind: Kind::Text,
+    },
+    Tunable {
+        path: "faces.detect_size",
+        label_key: "setting-face-detect-size",
+        kind: Kind::Int {
+            min: 320,
+            max: 8192,
+        },
+    },
+    Tunable {
+        path: "faces.crop_size",
+        label_key: "setting-face-crop-size",
+        kind: Kind::Int {
+            min: 160,
+            max: 4096,
+        },
+    },
+    Tunable {
+        path: "faces.crop_margin",
+        label_key: "setting-face-crop-margin",
+        kind: Kind::Float { min: 0.0, max: 1.5 },
+    },
+    Tunable {
+        path: "faces.show_frames",
+        label_key: "setting-face-frames",
+        kind: Kind::Bool,
+    },
+    Tunable {
+        path: "ai.endpoint",
+        label_key: "setting-ai-endpoint",
+        kind: Kind::Text,
+    },
+    Tunable {
+        path: "ai.model",
+        label_key: "setting-ai-model",
+        kind: Kind::Text,
+    },
+    Tunable {
+        path: "ai.language",
+        label_key: "setting-ai-language",
+        kind: Kind::Text,
+    },
+    Tunable {
+        path: "ai.overwrite",
+        label_key: "setting-ai-overwrite",
+        kind: Kind::Bool,
+    },
+    Tunable {
+        path: "ai.request_size",
+        label_key: "setting-ai-request-size",
+        kind: Kind::Int {
+            min: 256,
+            max: 4096,
+        },
+    },
+    Tunable {
+        path: "ai.timeout_seconds",
+        label_key: "setting-ai-timeout",
+        kind: Kind::Int { min: 10, max: 3600 },
     },
 ];
 

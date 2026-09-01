@@ -12,7 +12,7 @@
 use crate::{App, theme};
 use eframe::egui;
 use photosite_core::domain::Organisation;
-use photosite_core::filter::{Filter, Shape};
+use photosite_core::filter::{Expression, Filter, Shape};
 use photosite_core::theme::Palette;
 use photosite_core::{i18n, t, time};
 use std::collections::BTreeSet;
@@ -104,6 +104,37 @@ pub fn window(app: &mut App, ctx: &egui::Context, palette: &Palette) {
                         section(ui, palette, &t!("filter-places"), |ui| {
                             chips(ui, &mut filter.places, &facets.places, |verdict| {
                                 i18n::t(verdict.title_key())
+                            });
+                        });
+                    }
+
+                    // Who is on the photographs. The chips narrow rather
+                    // than widen — two names means the shot they are both
+                    // in — so the section says so on its own.
+                    if !facets.people.is_empty() {
+                        section(ui, palette, &t!("filter-section-people"), |ui| {
+                            chips(ui, &mut filter.people, &facets.people, Clone::clone);
+                        });
+                    }
+
+                    // Only where something has actually been scored. Two
+                    // buttons that can only ever empty the gallery are worse
+                    // than no heading at all.
+                    if facets.expressions {
+                        section(ui, palette, &t!("filter-section-expression"), |ui| {
+                            ui.horizontal_wrapped(|ui| {
+                                sides(
+                                    ui,
+                                    &mut filter.smile,
+                                    "filter-all-smiling",
+                                    "filter-someone-not-smiling",
+                                );
+                                sides(
+                                    ui,
+                                    &mut filter.eyes,
+                                    "filter-all-eyes-open",
+                                    "filter-someone-blinking",
+                                );
                             });
                         });
                     }
@@ -206,6 +237,22 @@ fn rating(ui: &mut egui::Ui, filter: &mut Filter, highest: u8) {
             );
         }
     });
+}
+
+/// One expression facet, as two buttons that toggle.
+///
+/// Two and not a dropdown, because a portrait cull is done from either end
+/// and both ends have to be one click away: keep the ones where everybody
+/// smiled, or find the one where somebody blinked. Pressing a chosen side
+/// again clears it, so there is a way back to "any" without a third button
+/// that says nothing.
+fn sides(ui: &mut egui::Ui, facet: &mut Expression, all: &str, anyone: &str) {
+    for (value, key) in [(Expression::All, all), (Expression::Anyone, anyone)] {
+        let on = *facet == value;
+        if ui.selectable_label(on, i18n::t(key)).clicked() {
+            *facet = if on { Expression::Any } else { value };
+        }
+    }
 }
 
 /// A row of values, any number of which can be picked. None picked means

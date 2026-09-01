@@ -145,7 +145,17 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
                     if let Some(photo) = app.photo(index) {
                         let organisation = photo.organisation.clone();
                         let verdict = photo.verdict;
-                        theme::badges(ui.painter(), well, palette, &organisation, verdict);
+                        let people = photo.people.clone();
+                        let expressions = photo.expressions;
+                        theme::badges(
+                            ui.painter(),
+                            well,
+                            palette,
+                            &organisation,
+                            verdict,
+                            &people,
+                            expressions,
+                        );
                     }
                 }
             }
@@ -234,17 +244,30 @@ pub fn preview(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
     }
 
     if let Some(key) = chosen {
+        let mut drawn = None;
         if let Some(texture) = app.texture(&key) {
             let size = texture.size();
+            let into = theme::fit(area.shrink(12.0), size);
             ui.painter().image(
                 texture.id(),
-                theme::fit(area.shrink(12.0), size),
+                into,
                 egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                 egui::Color32::WHITE,
             );
+            drawn = Some(into);
         }
 
         app.touch(&key);
+
+        // The faces, over the photograph. Only where somebody is named:
+        // a frame round every face in a group shot is a photograph nobody
+        // can see any more, and the frames exist to say who, not to say
+        // that a detector ran.
+        if let Some(into) = drawn
+            && app.settings.faces.show_frames
+        {
+            frames(app, ui, index, into);
+        }
     }
 
     let name = path
@@ -258,6 +281,47 @@ pub fn preview(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
         egui::FontId::proportional(12.0),
         theme::color(palette.dim),
     );
+}
+
+/// Frames the named faces over the preview, each in that person's colour.
+///
+/// The rectangles are fractions of the frame, so they land in the right
+/// place whatever size the preview happens to be drawn at — which is the
+/// whole reason they are stored that way.
+fn frames(app: &mut App, ui: &mut egui::Ui, index: usize, into: egui::Rect) {
+    let Some(photo) = app.photo(index) else {
+        return;
+    };
+    if photo.people.is_empty() {
+        return;
+    }
+
+    // Read once per photograph, not once per frame. A query to draw a
+    // rectangle, sixty times a second, is the shape of mistake this
+    // application has a rule about.
+    app.load_faces(photo.id);
+    for face in app.preview_faces.clone() {
+        let Some(person) = face.person else {
+            continue;
+        };
+        let colour = photosite_core::theme::person_color(person);
+        let rect = egui::Rect::from_min_size(
+            egui::pos2(
+                into.min.x + (face.x as f32) * into.width(),
+                into.min.y + (face.y as f32) * into.height(),
+            ),
+            egui::vec2(
+                (face.width as f32) * into.width(),
+                (face.height as f32) * into.height(),
+            ),
+        );
+        ui.painter().rect_stroke(
+            rect,
+            2.0,
+            egui::Stroke::new(2.0, egui::Color32::from_rgb(colour.r, colour.g, colour.b)),
+            egui::StrokeKind::Middle,
+        );
+    }
 }
 
 pub fn tree(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {

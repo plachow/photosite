@@ -70,6 +70,27 @@ impl Shape {
     }
 }
 
+/// One side of an expression facet.
+///
+/// Two sides and not one, because a portrait session is culled both ways
+/// round: "keep the ones where everybody is smiling" and "show me the ones
+/// where somebody blinked" are the same folder looked at from either end,
+/// and an application that offers only the first makes the second a hunt.
+///
+/// [`Self::All`] means every face on the photograph, including the ones no
+/// expression model has ever seen; [`Self::Anyone`] counts only the faces
+/// that were actually looked at. A face nobody scored is not evidence of a
+/// frown, and it is not evidence of a smile either.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PartialOrd, Ord)]
+pub enum Expression {
+    #[default]
+    Any,
+    /// Everybody on the photograph passes.
+    All,
+    /// Somebody who was looked at does not.
+    Anyone,
+}
+
 /// Everything the gallery can be narrowed by.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Filter {
@@ -89,6 +110,17 @@ pub struct Filter {
     /// Seconds since the epoch, both ends inclusive.
     pub taken_from: Option<i64>,
     pub taken_to: Option<i64>,
+    /// Who has to be on the photograph.
+    ///
+    /// The one facet that composes by **conjunction**: two names means the
+    /// photographs with both of them on. Every other facet widens as values
+    /// are added because they are alternatives — a photograph has one label
+    /// — but a photograph has any number of people, and picking two people
+    /// means the shot they are both in. That is the only reason anybody
+    /// picks two.
+    pub people: BTreeSet<String>,
+    pub smile: Expression,
+    pub eyes: Expression,
     pub search: String,
     /// Drops the rejects whatever else is set, so a culling pass visibly
     /// shrinks the folder as it goes. It is its own switch and not a flag
@@ -107,6 +139,9 @@ impl Filter {
             || !self.lenses.is_empty()
             || self.shape != Shape::Any
             || !self.places.is_empty()
+            || !self.people.is_empty()
+            || self.smile != Expression::Any
+            || self.eyes != Expression::Any
             || self.taken_from.is_some()
             || self.taken_to.is_some()
             || self.hide_rejected
@@ -157,6 +192,31 @@ impl Filter {
 
         if !self.places.is_empty() && !self.places.contains(&photo.verdict) {
             return false;
+        }
+
+        for name in &self.people {
+            if !photo
+                .people
+                .iter()
+                .any(|tag| tag.name.eq_ignore_ascii_case(name))
+            {
+                return false;
+            }
+        }
+
+        let expressions = &photo.expressions;
+        match self.smile {
+            Expression::Any => {}
+            Expression::All if !expressions.all_smiling() => return false,
+            Expression::Anyone if !expressions.anyone_not_smiling() => return false,
+            _ => {}
+        }
+
+        match self.eyes {
+            Expression::Any => {}
+            Expression::All if !expressions.all_eyes_open() => return false,
+            Expression::Anyone if !expressions.anyone_blinking() => return false,
+            _ => {}
         }
 
         // Undated photographs fall outside every date range rather than
@@ -270,6 +330,30 @@ impl Filter {
             ));
         }
 
+        // People are joined with "+" and not "/", because they narrow each
+        // other rather than widening: the line has to read the way the
+        // filter behaves.
+        if !self.people.is_empty() {
+            parts.push(self.people.iter().cloned().collect::<Vec<_>>().join(" + "));
+        }
+
+        for (facet, keys) in [
+            (
+                self.smile,
+                ["filter-all-smiling", "filter-someone-not-smiling"],
+            ),
+            (
+                self.eyes,
+                ["filter-all-eyes-open", "filter-someone-blinking"],
+            ),
+        ] {
+            match facet {
+                Expression::Any => {}
+                Expression::All => parts.push(t(keys[0])),
+                Expression::Anyone => parts.push(t(keys[1])),
+            }
+        }
+
         if self.taken_from.is_some() || self.taken_to.is_some() {
             parts.push(t("filter-date"));
         }
@@ -317,6 +401,14 @@ pub struct Facets {
     /// position is precise has nothing to review, and says so by offering
     /// nothing.
     pub places: Vec<Verdict>,
+    /// Everybody who appears anywhere in this folder, each once. What the
+    /// panel offers: the people who are actually on these photographs, not
+    /// everybody ever named.
+    pub people: Vec<String>,
+    /// Whether anything here has been scored for expression at all. Without
+    /// it the smile and eyes rows would be a heading over two buttons that
+    /// can only ever empty the gallery.
+    pub expressions: bool,
     /// The highest rating anything here carries. Offering "four stars and up"
     /// in a folder where nothing has more than two is offering an empty
     /// gallery.
@@ -336,6 +428,8 @@ impl Facets {
         let mut flags = BTreeSet::new();
         let mut shapes = BTreeSet::new();
         let mut places = BTreeSet::new();
+        let mut people = BTreeSet::new();
+        let mut expressions = false;
         let mut highest_rating = 0u8;
         let mut taken: Option<(i64, i64)> = None;
 
@@ -362,6 +456,11 @@ impl Facets {
             labels.insert(photo.organisation.label);
             flags.insert(photo.organisation.flag);
             places.insert(photo.verdict);
+            for tag in &photo.people {
+                people.insert(tag.name.clone());
+            }
+
+            expressions = expressions || photo.expressions.scored > 0;
             highest_rating = highest_rating.max(photo.organisation.rating);
 
             if let Some(at) = photo.taken_at {
@@ -380,6 +479,8 @@ impl Facets {
             flags: flags.into_iter().collect(),
             shapes: shapes.into_iter().collect(),
             places: places.into_iter().collect(),
+            people: people.into_iter().collect(),
+            expressions,
             highest_rating,
             taken,
         }
@@ -391,6 +492,145 @@ mod tests {
     use super::*;
     use crate::domain::{Organisation, PhotoId};
     use std::path::PathBuf;
+
+    /// Two names means the photograph with both of them on it. Every other
+    /// facet widens as values are added; this one narrows, and that is
+    /// deliberate.
+    #[test]
+    fn asking_for_two_people_asks_for_the_shot_they_are_both_in() {
+        let tag = |id: i64, name: &str| crate::people::Tag {
+            id,
+            name: name.to_owned(),
+        };
+        let mut both = photo("both.jpg");
+        both.people = vec![tag(1, "Jana"), tag(2, "Petr")];
+        let mut alone = photo("alone.jpg");
+        alone.people = vec![tag(1, "Jana")];
+
+        let mut filter = Filter::default();
+        filter.people.insert("Jana".to_owned());
+        assert!(filter.keeps(&both) && filter.keeps(&alone));
+
+        filter.people.insert("Petr".to_owned());
+        assert!(filter.keeps(&both));
+        assert!(!filter.keeps(&alone), "one of the two was enough");
+    }
+
+    #[test]
+    fn a_name_matches_whatever_the_case() {
+        let mut photo = photo("a.jpg");
+        photo.people = vec![crate::people::Tag {
+            id: 1,
+            name: "Jana".to_owned(),
+        }];
+        let mut filter = Filter::default();
+        filter.people.insert("jana".to_owned());
+        assert!(filter.keeps(&photo));
+    }
+
+    /// A portrait session is culled both ways round, so both sides have to
+    /// work — and a face nobody has scored must not count as either.
+    #[test]
+    fn both_sides_of_the_smile_facet_answer_a_real_question() {
+        let expressions = |faces, scored, smiling, eyes_open| crate::people::Expressions {
+            faces,
+            scored,
+            smiling,
+            eyes_open,
+        };
+
+        let mut everyone = photo("everyone.jpg");
+        everyone.expressions = expressions(2, 2, 2, 2);
+        let mut somebody = photo("somebody.jpg");
+        somebody.expressions = expressions(2, 2, 1, 1);
+        let mut unlooked = photo("unlooked.jpg");
+        unlooked.expressions = expressions(2, 0, 0, 0);
+
+        let mut filter = Filter {
+            smile: Expression::All,
+            ..Default::default()
+        };
+        assert!(filter.keeps(&everyone));
+        assert!(!filter.keeps(&somebody));
+        assert!(!filter.keeps(&unlooked), "nobody has looked at these faces");
+
+        filter.smile = Expression::Anyone;
+        assert!(!filter.keeps(&everyone));
+        assert!(filter.keeps(&somebody));
+        assert!(
+            !filter.keeps(&unlooked),
+            "an unscored face is not evidence of a frown"
+        );
+    }
+
+    #[test]
+    fn the_eyes_facet_is_the_smile_facet_for_the_other_thing() {
+        let mut blinked = photo("blinked.jpg");
+        blinked.expressions = crate::people::Expressions {
+            faces: 3,
+            scored: 3,
+            smiling: 3,
+            eyes_open: 2,
+        };
+
+        let mut filter = Filter {
+            eyes: Expression::Anyone,
+            ..Default::default()
+        };
+        assert!(filter.keeps(&blinked));
+        filter.eyes = Expression::All;
+        assert!(!filter.keeps(&blinked));
+        // And it says nothing about smiles.
+        filter.eyes = Expression::Any;
+        filter.smile = Expression::All;
+        assert!(filter.keeps(&blinked));
+    }
+
+    /// An active filter is never invisible, and the line has to read the way
+    /// the filter behaves — people narrow, so they are joined with a plus.
+    #[test]
+    fn the_line_says_who_and_how_they_compose() {
+        let mut filter = Filter::default();
+        filter.people.insert("Jana".to_owned());
+        filter.people.insert("Petr".to_owned());
+        assert!(
+            filter.describe().contains("Jana + Petr"),
+            "{}",
+            filter.describe()
+        );
+        assert!(filter.is_active());
+    }
+
+    #[test]
+    fn a_folder_offers_the_people_that_are_in_it() {
+        let tag = |name: &str| crate::people::Tag {
+            id: 1,
+            name: name.to_owned(),
+        };
+        let mut one = photo("one.jpg");
+        one.people = vec![tag("Petr")];
+        let mut two = photo("two.jpg");
+        two.people = vec![tag("Jana"), tag("Petr")];
+        two.expressions = crate::people::Expressions {
+            faces: 2,
+            scored: 2,
+            smiling: 1,
+            eyes_open: 2,
+        };
+
+        let facets = Facets::of(&[one, two, photo("three.jpg")]);
+        assert_eq!(facets.people, ["Jana", "Petr"]);
+        assert!(facets.expressions);
+    }
+
+    /// A folder nobody has swept must not offer a smile row: two buttons
+    /// that can only ever empty the gallery.
+    #[test]
+    fn a_folder_nobody_has_swept_offers_no_expressions() {
+        let facets = Facets::of(&[photo("a.jpg"), photo("b.jpg")]);
+        assert!(facets.people.is_empty());
+        assert!(!facets.expressions);
+    }
 
     /// The point of marking a doubtful position is being able to collect
     /// them afterwards. A mark nobody can act on is decoration.
@@ -436,6 +676,8 @@ mod tests {
             camera: None,
             lens: None,
             organisation: Organisation::default(),
+            people: Vec::new(),
+            expressions: Default::default(),
             place: None,
             verdict: crate::place::Verdict::Nowhere,
             reason: None,

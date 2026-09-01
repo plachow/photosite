@@ -128,6 +128,26 @@ pub struct Palette {
     pub bevel_dark: Color,
 }
 
+/// A stable colour per person.
+///
+/// The number picks the hue, so somebody wears the same colour on a
+/// thumbnail badge, a filter chip and a face frame — which is the whole
+/// point: two badges of the same colour on two tiles say "the same person"
+/// without a name being drawn at three pixels high.
+///
+/// Not part of the palette, and deliberately: a person's colour has to stay
+/// the same when the theme changes, or the one thing the badge says stops
+/// being true. The colours are drawn over a dark plate, as the label swatch
+/// is, so they read against a light theme too.
+pub fn person_color(person: i64) -> Color {
+    const PEOPLE: [u32; 12] = [
+        0xE8B84A, 0x8BC8FF, 0xA8D88F, 0xFF9A9A, //
+        0xC9A9FF, 0x6FD8C8, 0xFFB077, 0xF0A6C8, //
+        0xB8D86F, 0x9FB6FF, 0xD8B48F, 0x8FD8F0,
+    ];
+    Color::hex(PEOPLE[(person.unsigned_abs() as usize) % PEOPLE.len()])
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Theme {
     /// The settings key. Never changes.
@@ -270,6 +290,24 @@ pub fn resolve(appearance: &Appearance, system_dark: Option<bool>) -> &'static T
 
 #[cfg(test)]
 mod tests {
+    use super::person_color;
+
+    /// Two badges of one colour say "the same person". If the colour moved
+    /// with anything else, they would say nothing.
+    #[test]
+    fn a_person_keeps_one_colour() {
+        assert_eq!(person_color(7), person_color(7));
+        assert_ne!(person_color(7), person_color(8));
+    }
+
+    /// Ids come out of SQLite and are signed. A negative one must pick a
+    /// colour rather than panic on the remainder.
+    #[test]
+    fn a_negative_number_still_picks_a_colour() {
+        let _ = person_color(-1);
+        let _ = person_color(i64::MIN);
+    }
+
     use super::*;
 
     /// The smallest acceptable contrast for a given role of text.

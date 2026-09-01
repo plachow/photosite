@@ -52,6 +52,7 @@ pub mod cluster;
 pub mod detect;
 pub mod expression;
 pub mod math;
+pub mod sweep;
 
 use anyhow::{Context, Result};
 use photosite_image::Rgb;

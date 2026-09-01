@@ -514,6 +514,8 @@ impl Catalog {
         match found {
             Some(mut photo) => {
                 photo.organisation.keywords = self.keywords_of(photo.id)?;
+                photo.people = self.people_of(photo.id)?;
+                photo.expressions = self.expressions_of(photo.id)?;
                 Ok(Some(photo))
             }
             None => Ok(None),
@@ -531,6 +533,7 @@ impl Catalog {
     /// photograph. Seven thousand round trips to fill in a word or two each
     /// is the difference between opening a folder and waiting for it.
     pub fn in_folder(&self, folder: &Path, recursive: bool) -> Result<Vec<Photo>> {
+        let folder_path = folder;
         let folder = folder.to_string_lossy().into_owned();
         let under = format!("{}{}", folder.trim_end_matches(SEPARATOR), SEPARATOR);
         let predicate = if recursive {
@@ -574,6 +577,21 @@ impl Catalog {
             if let Some(mut keywords) = by_photo.remove(&photo.id.0) {
                 keywords.sort_by_key(|keyword| keyword.to_lowercase());
                 photo.organisation.keywords = keywords;
+            }
+        }
+
+        // Who is on each of them, and how their faces scored: one query for
+        // the folder apiece, the same rule the keywords follow. One query a
+        // tile would be seven thousand round trips to draw a badge.
+        let mut tagged = self.people_by_photo(folder_path, recursive)?;
+        let mut expressions = self.expressions_by_photo(folder_path, recursive)?;
+        for photo in &mut photos {
+            if let Some(people) = tagged.remove(&photo.id) {
+                photo.people = people;
+            }
+
+            if let Some(summary) = expressions.remove(&photo.id) {
+                photo.expressions = summary;
             }
         }
 
@@ -1209,6 +1227,9 @@ pub(crate) fn read_photo(row: &rusqlite::Row<'_>) -> rusqlite::Result<Photo> {
             description: row.get(15)?,
             keywords: Vec::new(),
         },
+        // Filled in for a whole folder at once, by whoever wants them.
+        people: Vec::new(),
+        expressions: Default::default(),
     })
 }
 

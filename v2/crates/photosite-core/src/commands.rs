@@ -345,6 +345,16 @@ pub const COMMANDS: &[Command] = &[
     // the choice can be bound to a key and named in one place; the toolbar
     // draws it as one control, the way it already does the recursive
     // checkbox.
+    // Who is in the photographs. It is a window rather than a dock: naming a
+    // library is a sitting somebody does once and then rarely, and a pane
+    // that is empty nine days in ten is a pane in the way.
+    Command {
+        id: "photo.people",
+        title_key: "command-photo-people",
+        group: Group::Photo,
+        default_shortcut: Some("Ctrl+Shift+P"),
+        toolbar: true,
+    },
     Command {
         id: "sort.taken",
         title_key: "sort-taken",

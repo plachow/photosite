@@ -46,6 +46,45 @@ enum Command {
     },
     /// Reads one file and prints what could be got out of it.
     Info { file: PathBuf },
+    /// Sweeps a folder for faces, with no window and no GPU.
+    ///
+    /// The same code the People window runs. It is here because a sweep is
+    /// the slowest thing this application does and the only honest way to
+    /// measure it is on a real library — which a CI runner has, and a
+    /// screen it has not.
+    Faces {
+        folder: PathBuf,
+        #[arg(long, short)]
+        recursive: bool,
+        /// The longer edge the photographs are decoded at.
+        #[arg(long, default_value_t = 1024)]
+        detect: u32,
+        /// Threads; 0 means by the number of cores.
+        #[arg(long, default_value_t = 0)]
+        threads: usize,
+        /// Where the models are. Without it, beside the catalogue.
+        #[arg(long, value_name = "FOLDER")]
+        models: Option<PathBuf>,
+    },
+    /// Who the catalogue knows, and how many faces each of them has.
+    People,
+    /// Names the largest group of unnamed faces in a folder.
+    ///
+    /// What the People window does with one click, for whoever has no
+    /// window. The largest group and no other: naming is a judgement, and a
+    /// command line is a poor place to make one over and over.
+    Name {
+        folder: PathBuf,
+        person: String,
+        #[arg(long, short)]
+        recursive: bool,
+    },
+    /// Writes everything the catalogue is holding back into the files.
+    ///
+    /// The window drains this queue on its own. Here it is a command, so a
+    /// run that ends before the queue does can be finished without opening
+    /// one.
+    Write,
     /// Where everything lives and what it runs on. The first question any
     /// support conversation opens with.
     Doctor,
@@ -63,6 +102,27 @@ fn main() -> Result<()> {
         Command::Scan { folder, recursive } => scan(&paths, &folder, recursive),
         Command::List { folder, recursive } => list(&paths, &folder, recursive),
         Command::Info { file } => info(&file),
+        Command::Faces {
+            folder,
+            recursive,
+            detect,
+            threads,
+            models,
+        } => faces(
+            &paths,
+            &folder,
+            recursive,
+            detect,
+            threads,
+            models.as_deref(),
+        ),
+        Command::People => people(&paths),
+        Command::Name {
+            folder,
+            person,
+            recursive,
+        } => name(&paths, &folder, &person, recursive),
+        Command::Write => write_out(&paths),
         Command::Doctor => {
             let mut rows = diagnostics::about(&paths);
             rows.push((
@@ -82,6 +142,225 @@ fn main() -> Result<()> {
             Ok(())
         }
     }
+}
+
+/// Sweeps a folder for faces.
+///
+/// It reports as it goes rather than only at the end: a sweep of a real
+/// library is minutes, and a command that prints nothing for four of them
+/// is one nobody trusts is still running.
+fn faces(
+    paths: &Paths,
+    folder: &Path,
+    recursive: bool,
+    detect: u32,
+    threads: usize,
+    models: Option<&Path>,
+) -> Result<()> {
+    anyhow::ensure!(
+        folder.is_dir(),
+        "{}",
+        t!("error-not-a-folder", path = folder.display().to_string())
+    );
+
+    let models = models
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| paths.models());
+    let availability = photosite_faces::Availability::of(&models);
+    anyhow::ensure!(
+        availability.recognition,
+        "{}",
+        t!(
+            "people-no-models",
+            folder = models.display().to_string(),
+            missing = availability.missing.join(", ")
+        )
+    );
+
+    let mut catalog = Catalog::open(&paths.catalog())?;
+    let engine = std::sync::Arc::new(photosite_faces::Engine::load(&models)?);
+    let threads = if threads == 0 {
+        jobs::worker_count()
+    } else {
+        threads
+    };
+
+    // The task board is what the sweep reports through, so the CLI stands up
+    // one of its own and reads it. The alternative is a second reporting
+    // path used by nothing else, which is a second thing to keep in step.
+    let tasks = jobs::Tasks::new();
+    let started = std::time::Instant::now();
+    let report = tasks.here(t!("task-faces"), |cancel, progress| {
+        let mut report = photosite_faces::sweep::sweep(
+            &mut catalog,
+            &engine,
+            folder,
+            recursive,
+            detect,
+            threads,
+            now(),
+            cancel,
+            progress,
+        )?;
+        if engine.scores_expressions() {
+            report.scored = photosite_faces::sweep::score(
+                &mut catalog,
+                &engine,
+                folder,
+                recursive,
+                detect,
+                threads,
+                &t!("people-scoring"),
+                cancel,
+                progress,
+            )?;
+        }
+
+        Ok(report)
+    })?;
+
+    println!(
+        "{}",
+        t!(
+            "cli-faces-done",
+            photos = report.photographs as i64,
+            faces = report.faces as i64,
+            seconds = started.elapsed().as_secs_f64()
+        )
+    );
+    for (count, key) in [
+        (report.assigned, "people-recognised"),
+        (report.suggested, "people-to-confirm"),
+        (report.scored, "people-scored"),
+        (report.failed, "people-unreadable"),
+    ] {
+        if count > 0 {
+            println!("{}", i18n::t_args(key, &[("count", (count as i64).into())]));
+        }
+    }
+
+    Ok(())
+}
+
+/// Who the catalogue knows.
+fn people(paths: &Paths) -> Result<()> {
+    let catalog = Catalog::open(&paths.catalog())?;
+    let people = catalog.people()?;
+    let (faces, named, _) = catalog.face_counts()?;
+    for person in &people {
+        println!("{:>6}  {}", person.faces, person.name);
+    }
+
+    println!(
+        "{}",
+        t!(
+            "cli-people-total",
+            people = people.len() as i64,
+            named = named,
+            faces = faces
+        )
+    );
+    Ok(())
+}
+
+/// Names the largest group of unnamed faces in a folder.
+fn name(paths: &Paths, folder: &Path, person: &str, recursive: bool) -> Result<()> {
+    let mut catalog = Catalog::open(&paths.catalog())?;
+    // Only the faces on photographs in this folder: naming a group is a
+    // judgement about people somebody is looking at, and a group gathered
+    // from the whole library is one nobody can check.
+    let here: std::collections::HashSet<_> = catalog
+        .in_folder(folder, recursive)?
+        .into_iter()
+        .map(|photo| photo.id)
+        .collect();
+    let faces: Vec<_> = catalog
+        .unnamed_faces(usize::MAX)?
+        .into_iter()
+        .filter(|face| here.contains(&face.photo))
+        .collect();
+
+    let groups =
+        photosite_faces::cluster::cluster(&faces, photosite_faces::cluster::GROUPING, |face| {
+            (face.confidence, face.embedding.as_slice())
+        });
+    let Some(largest) = groups.first() else {
+        println!("{}", t!("people-nothing-to-name"));
+        return Ok(());
+    };
+
+    let ids: Vec<i64> = largest.members.iter().map(|face| face.id).collect();
+    let id = catalog.person_named(person)?;
+    let touched = catalog.name_faces(&ids, id, now())?;
+    println!(
+        "{}",
+        t!(
+            "cli-named",
+            name = person.to_owned(),
+            faces = ids.len() as i64,
+            photos = touched.len() as i64
+        )
+    );
+    Ok(())
+}
+
+/// Drains the metadata outbox.
+fn write_out(paths: &Paths) -> Result<()> {
+    let mut catalog = Catalog::open(&paths.catalog())?;
+    let mut written = 0i64;
+    let mut failed = 0i64;
+    loop {
+        let due = catalog.due(now(), 64)?;
+        if due.is_empty() {
+            break;
+        }
+
+        for entry in due {
+            let regions =
+                entry
+                    .regions
+                    .clone()
+                    .zip(entry.photo.shown())
+                    .map(|(faces, (width, height))| photosite_meta::xmp::Regions {
+                        width,
+                        height,
+                        faces,
+                    });
+            match photosite_meta::write(
+                &entry.photo.path,
+                &entry.photo.organisation,
+                entry.photo.place,
+                regions,
+            ) {
+                Ok(_) => match domain::FileIdentity::read(&entry.photo.path) {
+                    Ok(identity) => {
+                        catalog.written(entry.photo.id, &identity)?;
+                        written += 1;
+                    }
+                    Err(error) => {
+                        catalog.write_failed(entry.photo.id, now(), &error.to_string())?;
+                        failed += 1;
+                    }
+                },
+                Err(error) => {
+                    catalog.write_failed(entry.photo.id, now(), &format!("{error:#}"))?;
+                    failed += 1;
+                }
+            }
+        }
+    }
+
+    println!("{}", t!("cli-written", written = written, failed = failed));
+    Ok(())
+}
+
+/// Seconds since the epoch. The outbox needs a clock for its backoff, and
+/// this is the only place this binary asks for one.
+fn now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 fn scan(paths: &Paths, folder: &Path, recursive: bool) -> Result<()> {

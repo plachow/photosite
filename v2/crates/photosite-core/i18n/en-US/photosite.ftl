@@ -459,3 +459,126 @@ command-view-fullscreen = Fullscreen
 command-view-as-list = List
 setting-as-list = Show the folder as a list
 setting-cache-thumbnails = Keep tiles on disk
+
+## Faces and people
+
+setting-face-models = Face models folder
+setting-face-detect-size = Scan decode size (px)
+setting-face-crop-size = Face thumbnail decode size (px)
+setting-face-crop-margin = Face thumbnail margin
+setting-face-frames = Frame the faces over the preview
+
+setting-ai-endpoint = Ollama address
+setting-ai-model = Vision model
+setting-ai-language = Language of the description
+setting-ai-overwrite = Overwrite a title and description already there
+setting-ai-request-size = Size sent to the model (px)
+setting-ai-timeout = Wait for an answer (s)
+
+command-photo-people = People…
+
+people-title = People
+people-scan = Find faces
+people-stop = Stop
+people-no-folder = Open a folder first
+people-no-models =
+    The face models are not in { $folder }. Missing: { $missing }
+people-suggestions = Probably somebody you have named
+people-is-this = Is this { $name }?
+people-yes = Yes
+people-no = No
+people-groups =
+    { $count ->
+        [one] { $count } face nobody has named
+       *[other] { $count } faces nobody has named
+    }
+people-group-count =
+    { $count ->
+        [one] { $count } face
+       *[other] { $count } faces
+    }
+people-new-person = New person…
+people-new-name = Name
+people-not-a-person = Not somebody
+people-known = Known people
+people-rename = Rename
+people-forget = Forget
+people-no-faces = No faces yet
+people-click-to-remove = Click a face that is not them
+people-and-more = + { $count } more
+people-nothing-to-name = No faces yet. Find faces to begin.
+people-scoring = Reading expressions
+
+task-faces = Looking for faces
+people-swept =
+    { $photos ->
+        [one] { $photos } photograph
+       *[other] { $photos } photographs
+    }, { $faces ->
+        [one] { $faces } face
+       *[other] { $faces } faces
+    }
+people-recognised =
+    { $count ->
+        [one] { $count } recognised
+       *[other] { $count } recognised
+    }
+people-to-confirm =
+    { $count ->
+        [one] { $count } to confirm
+       *[other] { $count } to confirm
+    }
+people-scored =
+    { $count ->
+        [one] { $count } older face scored
+       *[other] { $count } older faces scored
+    }
+people-unreadable =
+    { $count ->
+        [one] { $count } could not be read
+       *[other] { $count } could not be read
+    }
+
+filter-section-people = People
+filter-section-expression = Expression
+filter-all-smiling = Everyone smiling
+filter-someone-not-smiling = Someone not smiling
+filter-all-eyes-open = Everyone's eyes open
+filter-someone-blinking = Someone blinking
+
+info-people = people
+info-expression = expression
+info-expression-smiling = everyone smiling
+info-expression-not-smiling = someone not smiling
+info-expression-eyes-open = everyone's eyes open
+info-expression-blinking = someone blinking
+info-faces =
+    { $count ->
+        [one] { $count } face
+       *[other] { $count } faces
+    }
+
+cli-faces-done =
+    { $photos ->
+        [one] swept { $photos } photograph
+       *[other] swept { $photos } photographs
+    }, { $faces ->
+        [one] { $faces } face
+       *[other] { $faces } faces
+    } in { NUMBER($seconds, maximumFractionDigits: 1) } s
+cli-people-total =
+    { $people ->
+        [one] { $people } person
+       *[other] { $people } people
+    }, { $named } of { $faces } faces named
+
+cli-named =
+    { $faces ->
+        [one] named { $faces } face
+       *[other] named { $faces } faces
+    } as { $name }, on { $photos ->
+        [one] { $photos } photograph
+       *[other] { $photos } photographs
+    }
+cli-written =
+    wrote { $written }, could not write { $failed }
