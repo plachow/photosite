@@ -83,4 +83,4 @@ jobs:
           --outputDir artifacts/releases
           --publish
           --releaseName "PhotoSite ${{ steps.version.outputs.number }}"
-          --tag v2-${{ steps.version.outputs.number }}
+          --tag v${{ steps.version.outputs.number }}

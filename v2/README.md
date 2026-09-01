@@ -1007,7 +1007,7 @@ cd v2
 ./packaging/pack.ps1
 ```
 
-An installer — `artifacts/releases/PhotoSite2-win-Setup.exe`, about 37 MB —
+An installer — `artifacts/releases/PhotoSite-win-Setup.exe`, about 37 MB —
 that installs without an administrator into `%LOCALAPPDATA%`, makes the two
 shortcuts, and appears in *Apps & features* to be removed again. Beside it a
 portable zip, for whoever would rather have a folder; `PHOTOSITE_DATA` means
@@ -1017,8 +1017,13 @@ The tool is [Velopack](https://velopack.io), the same one v1 shipped with,
 because the installer and the update are one artefact and one feed rather
 than two, and because it asks for no code signing certificate. What it *is*
 asking for, and the several other tools that were weighed and rejected, is in
-[packaging/README.md](packaging/README.md) — including why the package is
-called PhotoSite2 and installs beside v1 rather than over it.
+[packaging/README.md](packaging/README.md).
+
+**On a machine that ran v1, move `%LOCALAPPDATA%\PhotoSite` aside first.**
+The package is `PhotoSite` and installs there, and Velopack empties the
+install folder before it writes — which is where v1 kept its catalogue and
+its thumbnails. That is the whole of the collision: v2's own catalogue is in
+`%APPDATA%`, is not touched by an install and survives an uninstall.
 
 Two consequences worth knowing about, both in
 [`startup.rs`](crates/photosite-ui/src/startup.rs). The binary is linked for

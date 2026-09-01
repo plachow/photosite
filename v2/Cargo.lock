@@ -2774,7 +2774,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "photosite-ai"
-version = "0.1.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "photosite-core",
@@ -2787,7 +2787,7 @@ dependencies = [
 
 [[package]]
 name = "photosite-batch"
-version = "0.1.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -2800,7 +2800,7 @@ dependencies = [
 
 [[package]]
 name = "photosite-cli"
-version = "0.1.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2817,7 +2817,7 @@ dependencies = [
 
 [[package]]
 name = "photosite-core"
-version = "0.1.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -2836,7 +2836,7 @@ dependencies = [
 
 [[package]]
 name = "photosite-faces"
-version = "0.1.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -2850,7 +2850,7 @@ dependencies = [
 
 [[package]]
 name = "photosite-image"
-version = "0.1.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "fast_image_resize",
@@ -2864,7 +2864,7 @@ dependencies = [
 
 [[package]]
 name = "photosite-meta"
-version = "0.1.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "little_exif",
@@ -2878,7 +2878,7 @@ dependencies = [
 
 [[package]]
 name = "photosite-ui"
-version = "0.1.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "clipboard-win",

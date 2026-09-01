@@ -5,11 +5,14 @@ cd v2
 ./packaging/pack.ps1
 ```
 
-Four minutes later there is a `PhotoSite2-win-Setup.exe` in
+Four minutes later there is a `PhotoSite-win-Setup.exe` in
 `artifacts/releases`. Double-clicking it puts PhotoSite in
-`%LOCALAPPDATA%\PhotoSite2`, a shortcut on the desktop and one in the Start
+`%LOCALAPPDATA%\PhotoSite`, a shortcut on the desktop and one in the Start
 menu, and an entry in *Apps & features* that removes all three again. No
 administrator, no prompt, no reboot.
+
+**Read [the one thing to do first](#the-one-thing-to-do-first) before
+installing on a machine that ran v1.**
 
 ## Velopack, and what it was weighed against
 
@@ -59,20 +62,38 @@ features unify across a binary, so `photosite-ui` now has rustls whether it
 wants it or not. `photosite-cli` does not carry velopack and so is unchanged,
 which is also why the note beside `ureq` is worth keeping exactly as it is.
 
-## Why the package is called PhotoSite2
+## The one thing to do first
 
-Velopack installs into `%LOCALAPPDATA%\<PackId>` and its uninstaller removes
-that folder whole. `%LOCALAPPDATA%\PhotoSite` is where **v1 keeps its
-catalogue** — a hundred megabytes of somebody's culling. An application
-called `PhotoSite` would install on top of it and one uninstall would take
-it.
+The package is `PhotoSite` and the version starts at `2.0.0`, because this is
+PhotoSite — the second of it, and the successor to a v1 that stopped at 0.9.x
+and is frozen. Taking the name is the right call and it has one sharp edge.
 
-So v2 installs beside v1 rather than over it, which is what it is: a second
-application, with its own catalogue in its own folder, that does not yet have
-the editor. The shortcut still says PhotoSite, because `packTitle` is what a
-person reads and `packId` is what the file system does. When v2 has the
-editor and genuinely replaces v1, taking the name back is one line in
-[`pack.ps1`](pack.ps1) and a fresh install.
+**Velopack installs into `%LOCALAPPDATA%\<PackId>` and empties that folder
+before it writes.** `%LOCALAPPDATA%\PhotoSite` is exactly where v1 kept its
+catalogue and its thumbnail cache. On a machine that ran v1 and still has
+that folder, installing takes them — at install time, not at uninstall, so
+there is no moment at which somebody gets to change their mind. Verified,
+not assumed: a folder seeded with a decoy `catalogue.db` and `thumbnails\`
+came back holding nothing but `current`, `packages`, `photosite.exe` and
+`Update.exe`.
+
+So before the first install on such a machine, move v1's data out of the way:
+
+```powershell
+Move-Item "$env:LOCALAPPDATA\PhotoSite" "$env:LOCALAPPDATA\PhotoSite-v1"
+```
+
+Nothing is lost by that and v1 is not much harmed either — it hard-wires the
+path, so it would build itself a fresh catalogue on the next run, and the
+ratings, labels and keywords it would be missing are in the photographs
+themselves, where v1 wrote them. What it would genuinely lose is the flags, a
+culling session's working state, which were never written to disk anywhere
+else.
+
+v2 is not affected in either direction. Its own catalogue lives in
+`%APPDATA%\PhotoSite\PhotoSite\data`, which is not the install folder, is not
+emptied by an install and survives an uninstall. That separation is why an
+update can replace the program without touching the library.
 
 ## What is in it
 
@@ -94,9 +115,10 @@ The version lives in `v2/Cargo.toml` and nowhere else. A release is:
 3. run the **Release PhotoSite v2** workflow.
 
 It builds, runs the tests again, packs with the same script as above, and
-publishes a GitHub release tagged `v2-<version>`. The tag is prefixed because
-v1's releases are `v<version>` in the same repository and the two must not be
-mistaken for one another.
+publishes a GitHub release tagged `v<version>` — so `v2.0.0`, and no prefix,
+because there is one PhotoSite and this is the next of it. Nothing can
+collide: v1 never released anything, and its own workflow would stamp 0.9.x,
+which is older than any version this will ever produce.
 
 ## Updating itself
 

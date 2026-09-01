@@ -5,10 +5,10 @@
 .DESCRIPTION
     Produces, in v2/artifacts/releases:
 
-        PhotoSite2-win-Setup.exe        what somebody double-clicks
-        PhotoSite2-win-Portable.zip     the same thing, unpacked, for a stick
-        PhotoSite2-<version>-full.nupkg what an update is later fetched from
-        releases.win.json               the feed that says which is newest
+        PhotoSite-win-Setup.exe        what somebody double-clicks
+        PhotoSite-win-Portable.zip     the same thing, unpacked, for a stick
+        PhotoSite-<version>-full.nupkg what an update is later fetched from
+        releases.win.json              the feed that says which is newest
 
     Nothing here needs an administrator, a certificate or a machine-wide
     install. The same three commands run in CI; see
@@ -43,14 +43,16 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# The identity of the package, and the one decision here worth explaining.
-# Velopack installs into %LOCALAPPDATA%\<PackId> and its uninstaller removes
-# that folder whole. %LOCALAPPDATA%\PhotoSite is where v1 keeps its
-# catalogue, so an application called PhotoSite would install on top of it and
-# an uninstall would take a hundred megabytes of somebody's work with it.
-# Until v2 has the editor and genuinely replaces v1, it is a second
-# application that happens to share a name on its shortcut.
-$PackId     = 'PhotoSite2'
+# The identity of the package. This is PhotoSite — the second of it, not a
+# neighbour of v1 — which is why the id is the plain name and the version
+# starts at 2.0.0 rather than continuing v1's 0.9.x.
+#
+# There is a consequence on a machine that ran v1. Velopack installs into
+# %LOCALAPPDATA%\<PackId> and **empties that folder first**, and v1 kept its
+# catalogue in exactly that place. Installing over a v1 whose data is still
+# there takes the catalogue and the thumbnails with it — at install time, not
+# only at uninstall. `packaging/README.md` says what to do about it.
+$PackId     = 'PhotoSite'
 $PackTitle  = 'PhotoSite'
 $PackAuthor = 'plachow'
 $VpkVersion = '1.2.0'

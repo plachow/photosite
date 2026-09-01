@@ -3,7 +3,10 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.1.0"
+# Two, because this is PhotoSite — the second of it, not a different
+# application that happens to look like one. v1 stopped at 0.9.x and is
+# frozen; nothing will ever be released between the two.
+version = "2.0.0"
 edition = "2024"
 rust-version = "1.90"
 license = "MIT"
