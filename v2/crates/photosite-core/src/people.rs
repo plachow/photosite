@@ -207,6 +207,15 @@ pub fn from_blob(blob: &[u8]) -> Vec<f32> {
 const FACE_COLUMNS: &str = "f.id, f.photo_id, p.path, f.x, f.y, f.w, f.h, f.confidence, \
                             f.embedding, f.person_id, f.suggested_person_id, f.smile, f.eyes_open";
 
+/// A `LIMIT` SQLite will take.
+///
+/// `usize::MAX as i64` is `-1`, which SQLite happens to read as "no limit" —
+/// and a query that works because of a wrap is one that stops working on the
+/// day somebody changes the cast.
+fn at_most(limit: usize) -> i64 {
+    i64::try_from(limit).unwrap_or(i64::MAX)
+}
+
 fn read_face(row: &rusqlite::Row<'_>) -> rusqlite::Result<Face> {
     Ok(Face {
         id: row.get(0)?,
@@ -378,7 +387,7 @@ impl Catalog {
              WHERE f.person_id = ?1 ORDER BY f.confidence DESC LIMIT ?2"
         ))?;
         Ok(statement
-            .query_map(params![person, limit as i64], read_face)?
+            .query_map(params![person, at_most(limit)], read_face)?
             .collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
@@ -388,7 +397,7 @@ impl Catalog {
              WHERE {predicate} ORDER BY f.confidence DESC LIMIT ?1"
         ))?;
         Ok(statement
-            .query_map(params![limit as i64], read_face)?
+            .query_map(params![at_most(limit)], read_face)?
             .collect::<rusqlite::Result<Vec<_>>>()?)
     }
 

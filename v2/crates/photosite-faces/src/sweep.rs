@@ -84,6 +84,14 @@ pub fn sweep(
             .collect(),
     );
 
+    // Who is called what, read once. Asking the catalogue per named face
+    // would be a query per face on a sweep of ten thousand.
+    let names: std::collections::HashMap<i64, String> = catalog
+        .people()?
+        .into_iter()
+        .map(|person| (person.id, person.name))
+        .collect();
+
     let (send_work, take_work) = crossbeam_channel::bounded::<Photo>(threads * 2);
     let (send_done, take_done) =
         crossbeam_channel::bounded::<(Photo, Option<Vec<Observation>>)>(threads * 2);
@@ -146,15 +154,15 @@ pub fn sweep(
                 continue;
             };
 
-            let mut names: Vec<String> = Vec::new();
+            let mut on_this_one: Vec<String> = Vec::new();
             for face in &found {
                 match face.person {
                     Some(person) => {
                         report.assigned += 1;
-                        if let Some(name) = name_of(catalog, person)
-                            && !names.contains(&name)
+                        if let Some(name) = names.get(&person)
+                            && !on_this_one.contains(name)
                         {
-                            names.push(name);
+                            on_this_one.push(name.clone());
                         }
                     }
                     None if face.suggested.is_some() => report.suggested += 1,
@@ -173,8 +181,8 @@ pub fn sweep(
             // A face recognised without anybody watching still writes a name
             // into the photograph — the same name a person would have typed,
             // through the same path.
-            if !names.is_empty() {
-                catalog.add_keywords(&[photo.id], &names)?;
+            if !on_this_one.is_empty() {
+                catalog.add_keywords(&[photo.id], &on_this_one)?;
 
                 // Only then. A first sweep of a library finds faces on
                 // most of it and names on hardly any, and queueing every
@@ -254,15 +262,6 @@ fn look(
             })
             .collect(),
     )
-}
-
-fn name_of(catalog: &Catalog, person: i64) -> Option<String> {
-    catalog
-        .people()
-        .ok()?
-        .into_iter()
-        .find(|had| had.id == person)
-        .map(|had| had.name)
 }
 
 /// Scores faces the expression models have never seen.
