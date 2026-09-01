@@ -5,6 +5,8 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+# The icon and the version stamped into the executable.
+build = "build.rs"
 
 [[bin]]
 name = "photosite"
@@ -32,9 +34,19 @@ notify.workspace = true
 crossbeam-channel.workspace = true
 rfd.workspace = true
 pollster.workspace = true
+velopack.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 clipboard-win.workspace = true
+windows-sys.workspace = true
+
+# Not under `cfg(windows)`, deliberately. Build scripts are compiled for the
+# host, and a dependency written under a target cfg is not there when the two
+# differ — the build script would then fail to compile on the Linux runner
+# rather than quietly do nothing. It asks what it is *building for* instead,
+# below.
+[build-dependencies]
+winresource.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

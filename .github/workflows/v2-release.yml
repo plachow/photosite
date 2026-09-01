@@ -1,0 +1,86 @@
+name: Release PhotoSite v2
+
+# Manual, like v1's, and for the same reason: a tag pushed for any other
+# purpose must not publish an installer. The version is not an input either —
+# it is read from `v2/Cargo.toml`, so cutting a release is a version bump, a
+# commit, and this button.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    working-directory: v2
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: v2
+
+      # vpk is a .NET tool, and `dnx` is how .NET 10 runs one without
+      # installing it. Nothing else here needs .NET.
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: The version being released
+        id: version
+        shell: pwsh
+        run: |
+          $meta = cargo metadata --format-version 1 --no-deps | ConvertFrom-Json
+          $version = ($meta.packages | Where-Object name -eq 'photosite-ui').version
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "'$version' cannot be released." }
+          "number=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "PhotoSite $version"
+
+      # The push builds run on all three; this one runs again because a
+      # release is the one build nobody gets to redo quietly.
+      - name: Tests
+        run: cargo test --workspace
+
+      - name: Build
+        run: cargo build --release -p photosite-ui -p photosite-cli
+
+      - name: The binary starts up
+        run: cargo run --release -p photosite-cli -- --data ci-data doctor
+
+      # So that this release can be a delta against the last one. It fails on
+      # the first release, when there is nothing to be a delta against, and
+      # that is not an error.
+      - name: Previous releases
+        continue-on-error: true
+        run: >
+          dnx vpk@1.2.0 --yes -- download github
+          --repoUrl https://github.com/${{ github.repository }}
+          --token ${{ secrets.GITHUB_TOKEN }}
+          --outputDir artifacts/releases
+
+      # The same script somebody runs on their own machine. The packaging is
+      # defined once; CI adds only what a local build has no business doing —
+      # fetching the last release and publishing this one.
+      - name: Pack
+        shell: pwsh
+        run: ./packaging/pack.ps1 -SkipBuild
+
+      - name: Publish
+        run: >
+          dnx vpk@1.2.0 --yes -- upload github
+          --repoUrl https://github.com/${{ github.repository }}
+          --token ${{ secrets.GITHUB_TOKEN }}
+          --outputDir artifacts/releases
+          --publish
+          --releaseName "PhotoSite ${{ steps.version.outputs.number }}"
+          --tag v2-${{ steps.version.outputs.number }}

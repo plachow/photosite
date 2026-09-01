@@ -7,6 +7,7 @@ cd v2
 cargo run --release -p photosite-ui              # the application
 cargo run --release -p photosite-cli -- doctor   # where everything lives
 cargo test --workspace                           # 553 tests, no window, no GPU
+./packaging/pack.ps1                             # a Windows installer
 ```
 
 The headless binary runs the whole of it — `scan`, `faces`, `name`,
@@ -999,6 +1000,35 @@ everything else carries on.
 
 `--data` moves both, like everything else.
 
+## Getting it onto a machine that has no toolchain
+
+```powershell
+cd v2
+./packaging/pack.ps1
+```
+
+An installer — `artifacts/releases/PhotoSite2-win-Setup.exe`, about 37 MB —
+that installs without an administrator into `%LOCALAPPDATA%`, makes the two
+shortcuts, and appears in *Apps & features* to be removed again. Beside it a
+portable zip, for whoever would rather have a folder; `PHOTOSITE_DATA` means
+that folder genuinely is portable.
+
+The tool is [Velopack](https://velopack.io), the same one v1 shipped with,
+because the installer and the update are one artefact and one feed rather
+than two, and because it asks for no code signing certificate. What it *is*
+asking for, and the several other tools that were weighed and rejected, is in
+[packaging/README.md](packaging/README.md) — including why the package is
+called PhotoSite2 and installs beside v1 rather than over it.
+
+Two consequences worth knowing about, both in
+[`startup.rs`](crates/photosite-ui/src/startup.rs). The binary is linked for
+the windowed subsystem, so an installed application does not put a black
+rectangle beside its own window; it borrows the terminal's console back when
+it was started from one, which is what keeps `--selftest` able to say
+anything. And `VelopackApp::run()` is the first statement in `main`, before
+the settings are read and before there is a window, because the installer and
+the updater start this executable to do their work and then end it.
+
 ## What is missing, and known to be
 
 **The editor**, which is the last of v1 and will be rebuilt rather than
@@ -1015,6 +1045,13 @@ losslessly, and a lossy one means shipping libwebp. The dialog says so
 rather than leaving somebody to find out from a folder of unexpectedly
 large files.
 
-Beyond the features: a single instance, accessibility, signing and
-notarisation for macOS, automatic updates. Of the languages, only English so
-far — cs-CZ is first in line. None of it requires rewriting what is done.
+Beyond the features: a single instance, accessibility, signing —
+SmartScreen shows its blue panel over an unsigned installer until enough
+people have clicked through it — and notarisation for macOS. **Updating
+itself** is half done: what the updater invokes is in place, and what has no
+code yet is the asking — an `UpdateManager` over the published releases, off
+the main thread, and somewhere in the window to say a new version is there.
+Deliberately not written before there is a release to update from.
+
+Of the languages, only English so far — cs-CZ is first in line. None of it
+requires rewriting what is done.

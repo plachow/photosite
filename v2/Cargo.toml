@@ -47,11 +47,41 @@ pollster = "1"
 # other platform agrees on how to put files on a clipboard, and pretending
 # otherwise would be a portable API over an unportable idea.
 clipboard-win = "5"
+# Installing, and one day updating. Velopack is what v1 shipped with, and the
+# reasons hold better here: it needs no administrator, no MSI and no code
+# signing certificate to produce something somebody can double-click, and the
+# same package it installs from is the one an update is later fetched from.
+# The alternatives were weighed in `packaging/README.md`.
+#
+# It is not free: fifty crates, of which a whole TLS stack, and 1.9 MB on the
+# window binary — 46.9 to 48.8. Fetching a release over HTTPS is what the
+# crate is *for*, so this is the honest price of the feature rather than a
+# stack dragged in by accident; see the note on `ureq` below, which it
+# changes. Only `photosite-ui` carries it, because only the installed
+# application is ever asked to update itself.
+velopack = "1.2"
+# One call — attaching to the console that started us — because the binary is
+# built for the windowed subsystem and would otherwise have nowhere to print.
+# The crate is already in the tree twice over through eframe; naming it here
+# adds a line, not a build.
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Console",
+] }
+# The icon and the version, compiled into the executable. Only ever a build
+# dependency, and only on Windows.
+winresource = "0.1"
 # Talking to Ollama. **No TLS feature, deliberately**: the address is
 # localhost out of the box and the whole feature is built round a model on
 # this machine. Shipping a TLS stack so that a local socket can be spoken to
 # is the trade this application does not make — the same reasoning as
 # exiftool, at a smaller scale.
+#
+# This asks for none, and gets none in `photosite-cli`. In `photosite-ui` it
+# gets one anyway: velopack wants `ureq` with rustls, features unify across a
+# binary, and there is no arguing with that. The line above is still the right
+# request — it is what keeps the headless binary lean, and it is what would
+# take the TLS back out of the window binary on the day the updater goes.
 ureq = { version = "3", default-features = false }
 # JSON, both ways. The model is asked for a fixed schema and answers with
 # JSON inside JSON; hand-writing a parser for that would be inventing a

@@ -8,6 +8,11 @@
 //! from [`Settings`], because what is hard-wired cannot be configured — and
 //! what cannot be configured gets rewritten sooner or later.
 
+// No console. An installed application that opens a black rectangle beside
+// its own window looks broken; `startup::first` lends the process the
+// terminal's console back when it was started from one.
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 mod batch;
 mod clipboard;
 mod compare;
@@ -20,6 +25,7 @@ mod info;
 mod list;
 mod people;
 mod picker;
+mod startup;
 mod theme;
 
 use anyhow::Result;
@@ -72,6 +78,8 @@ impl std::fmt::Debug for Pixels {
 }
 
 fn main() -> Result<()> {
+    startup::first();
+
     let mut args = std::env::args().skip(1);
     let mut data: Option<PathBuf> = None;
     let mut verbose = false;
