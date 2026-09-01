@@ -11,6 +11,7 @@
 mod batch;
 mod clipboard;
 mod compare;
+mod describe;
 mod docks;
 mod files;
 mod filter;
@@ -82,6 +83,7 @@ fn main() -> Result<()> {
     let mut open_filter = false;
     let mut open_people = false;
     let mut open_batch = false;
+    let mut open_describe = false;
     let mut compare = 0usize;
     let mut search: Option<String> = None;
     let mut folder: Option<PathBuf> = None;
@@ -102,6 +104,7 @@ fn main() -> Result<()> {
             // keyboard.
             "--open-people" => open_people = true,
             "--open-batch" => open_batch = true,
+            "--open-describe" => open_describe = true,
             // Opens straight into a comparison of the first few. Like
             // `--open-filter`, it exists so that a view which normally needs
             // a selection and a key can be seen from a command line.
@@ -168,6 +171,10 @@ fn main() -> Result<()> {
             app.people.stale = open_people;
             if open_batch {
                 batch::open(&mut app);
+            }
+
+            if open_describe {
+                describe::open(&mut app);
             }
             // The filter first: narrowing the gallery rebuilds the
             // selection, so choosing tiles before it means choosing tiles
@@ -360,6 +367,12 @@ pub struct App {
     pub people: people::People,
     /// The batch window: the settings, and what they would do.
     pub batch: batch::Batch,
+    /// The describe window.
+    pub describe: describe::Describe,
+    /// The offline gazetteer, when there is one. Loaded once at start —
+    /// it is tens of megabytes of text and reading it per photograph would
+    /// be most of a describe run.
+    pub places: Option<Arc<photosite_core::Gazetteer>>,
     /// The faces of the photograph in the preview, and whose they are.
     /// Read when the preview changes rather than when it is drawn.
     pub preview_faces_of: Option<PhotoId>,
@@ -481,6 +494,7 @@ impl App {
             }
         };
 
+        let paths_for_places = paths.places();
         let theme = palettes::resolve(&settings.appearance, None);
         let settings_layout = settings.window.layout.clone();
         let settings_hidden = settings.window.docks_hidden.clone();
@@ -518,6 +532,17 @@ impl App {
             wanted_faces: Vec::new(),
             people: people::People::default(),
             batch: batch::Batch::default(),
+            describe: describe::Describe::default(),
+            places: match photosite_core::Gazetteer::load(&paths_for_places) {
+                Ok(places) => places.map(Arc::new),
+                Err(error) => {
+                    tracing::warn!(
+                        error = %format!("{error:#}"),
+                        "the gazetteer could not be read; describing will name no places"
+                    );
+                    None
+                }
+            },
             preview_faces_of: None,
             preview_faces: Vec::new(),
             compare: None,
@@ -1160,6 +1185,33 @@ impl App {
         self.ask_for_folder(ctx, Wanted::ToConvertInto);
     }
 
+    /// Notices that a describe run has finished.
+    fn collect_describing(&mut self) {
+        let Some(id) = self.describe.running else {
+            return;
+        };
+
+        let Some(task) = self
+            .tasks
+            .snapshot()
+            .into_iter()
+            .find(|task| task.id == id && task.finished)
+        else {
+            return;
+        };
+
+        self.describe.running = None;
+        self.describe.summary = match &task.error {
+            Some(error) => error.clone(),
+            None => task.message.clone(),
+        };
+        // Titles, descriptions and keywords have changed, so the folder is
+        // read again and the queue drained into the files.
+        self.relist();
+        self.start_writing();
+        self.tasks.forget_finished();
+    }
+
     /// Notices that a conversion has finished, and says how it went.
     fn collect_batch(&mut self) {
         let Some(id) = self.batch.running else {
@@ -1304,6 +1356,7 @@ impl App {
             }
             "view.settings" => self.show_settings = !self.show_settings,
             "photo.batch" => batch::open(self),
+            "photo.describe" => describe::open(self),
             "photo.people" => {
                 self.people.open = !self.people.open;
                 if self.people.open {
@@ -2201,6 +2254,7 @@ impl eframe::App for App {
         self.collect_indexing();
         self.collect_faces();
         self.collect_batch();
+        self.collect_describing();
         self.collect_writing();
         self.collect_disturbance();
         self.take_picked_folder();
@@ -2240,6 +2294,7 @@ impl eframe::App for App {
         self.settings_window(&ctx);
         people::window(self, &ctx, &palette);
         batch::window(self, &ctx, &palette);
+        describe::window(self, &ctx, &palette);
         filter::window(self, &ctx, &palette);
         self.ask_window(&ctx);
 

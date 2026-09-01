@@ -354,6 +354,15 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Ctrl+B"),
         toolbar: true,
     },
+    // Asking a model on this machine what is in them. Ctrl+Shift+A, next
+    // to Ctrl+A which selects what it will run over.
+    Command {
+        id: "photo.describe",
+        title_key: "command-photo-describe",
+        group: Group::Photo,
+        default_shortcut: Some("Ctrl+Shift+A"),
+        toolbar: true,
+    },
     // Who is in the photographs. It is a window rather than a dock: naming a
     // library is a sitting somebody does once and then rarely, and a pane
     // that is empty nine days in ten is a pane in the way.

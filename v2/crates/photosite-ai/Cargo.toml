@@ -1,0 +1,21 @@
+[package]
+name = "photosite-ai"
+description = "Asking a vision model on this machine to describe a photograph."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+photosite-core.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+ureq.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -44,6 +44,12 @@ pub struct Photo {
     /// What somebody has said about it, as opposed to what was read out of
     /// it. A scan never touches this.
     pub organisation: Organisation,
+    /// The description again in English, when the one in the file is not.
+    ///
+    /// Held here and never written into the photograph: the file carries one
+    /// description, in the language somebody asked for, and this is the
+    /// second copy that makes searching work in both.
+    pub description_en: Option<String>,
     /// Who is on it, named. Filled in for a whole folder at once, like the
     /// keywords — one query and not one per tile.
     pub people: Vec<crate::people::Tag>,
@@ -494,6 +500,7 @@ mod tests {
             camera: None,
             lens: None,
             organisation: Organisation::default(),
+            description_en: None,
             people: Vec::new(),
             expressions: Default::default(),
             place: None,

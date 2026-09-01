@@ -710,6 +710,7 @@ mod tests {
             camera: None,
             lens: None,
             organisation: Organisation::default(),
+            description_en: None,
             people: Vec::new(),
             expressions: Default::default(),
             place: None,

@@ -258,9 +258,13 @@ impl Filter {
             .file_name()
             .map(|name| name.to_string_lossy().to_lowercase())
             .unwrap_or_default();
+        // The English copy is searched too, and that is the whole reason it
+        // is kept: a library described in Czech is still findable by
+        // somebody typing English, and the other way round.
         for extra in [
             organisation.title.as_deref(),
             organisation.description.as_deref(),
+            photo.description_en.as_deref(),
         ]
         .into_iter()
         .flatten()
@@ -676,6 +680,7 @@ mod tests {
             camera: None,
             lens: None,
             organisation: Organisation::default(),
+            description_en: None,
             people: Vec::new(),
             expressions: Default::default(),
             place: None,

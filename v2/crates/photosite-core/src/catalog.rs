@@ -225,6 +225,19 @@ const MIGRATIONS: &[Migration] = &[
         );
     ",
     },
+    Migration {
+        name: "0008-english-description",
+        // The description again, in English, when the one somebody chose is
+        // not.
+        //
+        // **It lives here and never in the file.** The photograph carries
+        // one description, in the language it was asked for; this is a
+        // second copy so that searching works in both, and a rescan never
+        // touches it because no file has anything to say about it.
+        sql: "
+        ALTER TABLE photos ADD COLUMN description_en TEXT;
+    ",
+    },
 ];
 
 /// How many times a file is tried before it is left alone.
@@ -248,7 +261,7 @@ const SEPARATOR: char = std::path::MAIN_SEPARATOR;
 /// added to one query and not the other cannot happen.
 const COLUMNS: &str = "id, path, folder, file_size, modified_at, taken_at, width, height, \
                        orientation, camera, lens, rating, label, flag, title, description, \
-                       latitude, longitude, place_verdict, place_reason";
+                       latitude, longitude, place_verdict, place_reason, description_en";
 
 /// The same list, each column under a table alias, for a query that joins.
 ///
@@ -982,6 +995,18 @@ impl Catalog {
         )
     }
 
+    /// The English copy of a description, which lives only here.
+    ///
+    /// One photograph at a time and not a selection: it comes out of a
+    /// describe run, which looks at one photograph at a time by its nature.
+    pub fn set_description_en(&mut self, photo: PhotoId, description: Option<&str>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE photos SET description_en = ?2 WHERE id = ?1",
+            params![photo.0, blank_to_none(description)],
+        )?;
+        Ok(())
+    }
+
     pub fn set_description(&mut self, photos: &[PhotoId], description: Option<&str>) -> Result<()> {
         self.write_each(
             photos,
@@ -1133,7 +1158,7 @@ pub struct Pending {
 }
 
 /// How many columns [`COLUMNS`] names, so a query can add its own after them.
-const COLUMN_COUNT: usize = 20;
+const COLUMN_COUNT: usize = 21;
 
 /// What gets written into the catalogue. No `id`, because the database
 /// hands that out.
@@ -1235,6 +1260,7 @@ pub(crate) fn read_photo(row: &rusqlite::Row<'_>) -> rusqlite::Result<Photo> {
             .and_then(|(latitude, longitude)| Place::new(latitude, longitude)),
         verdict: Verdict::from_number(row.get(18)?),
         reason: Reason::from_number(row.get(19)?),
+        description_en: row.get(20)?,
         organisation: Organisation {
             rating: row
                 .get::<_, i64>(11)?
@@ -1401,6 +1427,54 @@ mod tests {
     /// The count is used to reach past the photograph's own columns in a
     /// query that adds its own. Getting it wrong reads the wrong column, and
     /// nothing else would notice.
+    /// A library described in Czech has to be findable by somebody typing
+    /// English, which is the whole reason a second description is kept.
+    #[test]
+    fn the_english_description_is_kept_and_searched_but_never_written() {
+        let mut catalog = Catalog::in_memory().unwrap();
+        let id = catalog.upsert(&sample("/a/one.jpg")).unwrap();
+        catalog
+            .set_description(&[id], Some("Vychod slunce nad zalivem"))
+            .unwrap();
+        catalog
+            .set_description_en(id, Some("Sunrise over the bay"))
+            .unwrap();
+
+        let photo = catalog.by_path(Path::new("/a/one.jpg")).unwrap().unwrap();
+        assert_eq!(
+            photo.organisation.description.as_deref(),
+            Some("Vychod slunce nad zalivem")
+        );
+        assert_eq!(
+            photo.description_en.as_deref(),
+            Some("Sunrise over the bay")
+        );
+
+        let filter = crate::Filter {
+            search: "sunrise bay".to_owned(),
+            ..Default::default()
+        };
+        assert!(filter.keeps(&photo), "the English copy is not searched");
+    }
+
+    /// A rescan reads the file, and no file has anything to say about this.
+    #[test]
+    fn a_rescan_does_not_forget_the_english_description() {
+        let mut catalog = Catalog::in_memory().unwrap();
+        let id = catalog.upsert(&sample("/a/one.jpg")).unwrap();
+        catalog.set_description_en(id, Some("Sunrise")).unwrap();
+        catalog.upsert(&sample("/a/one.jpg")).unwrap();
+        assert_eq!(
+            catalog
+                .by_path(Path::new("/a/one.jpg"))
+                .unwrap()
+                .unwrap()
+                .description_en
+                .as_deref(),
+            Some("Sunrise")
+        );
+    }
+
     #[test]
     fn the_column_count_matches_the_column_list() {
         assert_eq!(COLUMNS.split(',').count(), COLUMN_COUNT);

@@ -19,6 +19,7 @@ photosite-image.workspace = true
 photosite-meta.workspace = true
 photosite-faces.workspace = true
 photosite-batch.workspace = true
+photosite-ai.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 serde.workspace = true

@@ -98,6 +98,26 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Asks a model on this machine to describe a folder's photographs.
+    Describe {
+        folder: PathBuf,
+        #[arg(long, short)]
+        recursive: bool,
+        /// Where Ollama is.
+        #[arg(long, default_value = photosite_ai::DEFAULT_ENDPOINT)]
+        endpoint: String,
+        /// Which model. Without one, the first vision model the server has.
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long, default_value = "English")]
+        language: String,
+        /// How many to do. Without it, all of them.
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Describe them again even where there is already a description.
+        #[arg(long)]
+        overwrite: bool,
+    },
     /// Writes everything the catalogue is holding back into the files.
     ///
     /// The window drains this queue on its own. Here it is a command, so a
@@ -154,6 +174,24 @@ fn main() -> Result<()> {
             into.as_deref(),
             recursive,
             dry_run,
+        ),
+        Command::Describe {
+            folder,
+            recursive,
+            endpoint,
+            model,
+            language,
+            limit,
+            overwrite,
+        } => describe(
+            &paths,
+            &folder,
+            recursive,
+            &endpoint,
+            model.as_deref(),
+            &language,
+            limit,
+            overwrite,
         ),
         Command::Write => write_out(&paths),
         Command::Doctor => {
@@ -408,6 +446,182 @@ fn convert(
     }
 
     Ok(())
+}
+
+/// Describes a folder's photographs with a model on this machine.
+#[allow(clippy::too_many_arguments)]
+fn describe(
+    paths: &Paths,
+    folder: &Path,
+    recursive: bool,
+    endpoint: &str,
+    model: Option<&str>,
+    language: &str,
+    limit: Option<usize>,
+    overwrite: bool,
+) -> Result<()> {
+    let timeout = std::time::Duration::from_secs(600);
+    let offered = photosite_ai::models(endpoint, std::time::Duration::from_secs(10))?;
+    let model = match model {
+        Some(model) => model.to_owned(),
+        None => offered
+            .first()
+            .cloned()
+            .context("the server offers no models")?,
+    };
+    println!("{model}");
+
+    let places = photosite_core::Gazetteer::load(&paths.places())?;
+    match &places {
+        Some(places) => println!("{}", t!("ai-places-from", source = places.source.clone())),
+        None => println!(
+            "{}",
+            t!(
+                "ai-no-places",
+                folder = paths.places().display().to_string()
+            )
+        ),
+    }
+
+    let mut catalog = Catalog::open(&paths.catalog())?;
+    let mut photos = catalog.in_folder(folder, recursive)?;
+    if let Some(limit) = limit {
+        photos.truncate(limit);
+    }
+
+    let english_too = !language.eq_ignore_ascii_case("english");
+    let mode = if overwrite {
+        photosite_ai::Mode::Overwrite
+    } else {
+        photosite_ai::Mode::FillEmpty
+    };
+
+    let started = std::time::Instant::now();
+    let (mut described, mut skipped, mut failed) = (0i64, 0i64, 0i64);
+    for photo in &photos {
+        if photosite_ai::should_skip(
+            mode,
+            photo.organisation.title.as_deref(),
+            photo.organisation.description.as_deref(),
+        ) {
+            skipped += 1;
+            continue;
+        }
+
+        let name = photo
+            .path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        match describe_one(
+            &mut catalog,
+            photo,
+            endpoint,
+            &model,
+            language,
+            english_too,
+            overwrite,
+            places.as_ref(),
+            timeout,
+        ) {
+            Ok(said) => {
+                described += 1;
+                println!("{name}  {said}");
+            }
+            Err(error) => {
+                failed += 1;
+                println!("{name}  ! {error:#}");
+            }
+        }
+    }
+
+    println!(
+        "{}, {}",
+        t!("ai-described", count = described),
+        t!("ai-in", seconds = started.elapsed().as_secs_f64())
+    );
+    if skipped > 0 {
+        println!("{}", t!("ai-skipped", count = skipped));
+    }
+
+    if failed > 0 {
+        println!("{}", t!("ai-failed", count = failed));
+    }
+
+    Ok(())
+}
+
+/// One photograph, described and written into the catalogue.
+#[allow(clippy::too_many_arguments)]
+fn describe_one(
+    catalog: &mut Catalog,
+    photo: &photosite_core::Photo,
+    endpoint: &str,
+    model: &str,
+    language: &str,
+    english_too: bool,
+    overwrite: bool,
+    places: Option<&photosite_core::Gazetteer>,
+    timeout: std::time::Duration,
+) -> Result<String> {
+    // Never beyond its real size: a small photograph is sent as it is rather
+    // than blown up to fill a number.
+    let want = match photo.shown() {
+        Some((width, height)) => 1024.min(width.max(height)),
+        None => 1024,
+    };
+    let frame = photosite_image::sized(&photo.path, want)?;
+    let jpeg = photosite_image::encode::encode(&frame, photosite_image::encode::Format::Jpeg, 85)?;
+
+    // The place is resolved from the coordinates the catalogue holds, which
+    // may be somebody's correction rather than what the file says.
+    let place = photo
+        .place
+        .zip(places)
+        .and_then(|(place, places)| places.nearest(place.latitude, place.longitude));
+    let direction = place
+        .as_ref()
+        .map(|place| i18n::t(photosite_core::gazetteer::compass(place.bearing)))
+        .unwrap_or_default();
+
+    let insights = photosite_ai::describe(
+        endpoint,
+        model,
+        &jpeg,
+        language,
+        english_too,
+        place.as_ref(),
+        photo.verdict.is_doubted(),
+        &direction,
+        timeout,
+    )?;
+
+    if let Some(title) = &insights.title
+        && (overwrite || photo.organisation.title.is_none())
+    {
+        catalog.set_title(&[photo.id], Some(title))?;
+    }
+
+    if let Some(description) = &insights.description
+        && (overwrite || photo.organisation.description.is_none())
+    {
+        catalog.set_description(&[photo.id], Some(description))?;
+    }
+
+    if let Some(english) = &insights.description_en {
+        catalog.set_description_en(photo.id, Some(english))?;
+    }
+
+    if !insights.keywords.is_empty() {
+        catalog.add_keywords(&[photo.id], &insights.keywords)?;
+    }
+
+    catalog.enqueue(&[photo.id], now())?;
+    Ok(format!(
+        "{}  [{}]",
+        insights.title.clone().unwrap_or_default(),
+        insights.keywords.join(", ")
+    ))
 }
 
 /// Drains the metadata outbox.

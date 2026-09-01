@@ -678,3 +678,53 @@ cli-batch-plan =
     { $name }: { $write } to write, { $skip } left alone, { $overwrite } written over
 cli-batch-done =
     wrote { $written }, left alone { $skipped }, failed { $failed }
+
+compass-north = north
+compass-north-east = north-east
+compass-east = east
+compass-south-east = south-east
+compass-south = south
+compass-south-west = south-west
+compass-west = west
+compass-north-west = north-west
+
+## Describing with a model on this machine
+
+command-photo-describe = Describe…
+ai-title = Describe
+ai-endpoint = Ollama at
+ai-model = Model
+ai-refresh = Ask again
+ai-language = Language
+ai-fill-empty = Fill in the empty ones
+ai-overwrite = Write over what is there
+ai-no-models = The server answered, but offers no models
+ai-places-from = Places come from { $source }
+ai-no-places = No place list in { $folder }, so no place will be named
+ai-run = Describe
+ai-stop = Stop
+ai-waiting =
+    { $count ->
+        [one] { $count } photograph
+       *[other] { $count } photographs
+    }
+ai-pace =
+    { NUMBER($each, maximumFractionDigits: 0) } s each, about { NUMBER($left, maximumFractionDigits: 0) } min left
+ai-described =
+    { $count ->
+        [one] described { $count } photograph
+       *[other] described { $count } photographs
+    }
+ai-in = in { NUMBER($seconds, maximumFractionDigits: 0) } s
+ai-skipped =
+    { $count ->
+        [one] { $count } already had one
+       *[other] { $count } already had one
+    }
+ai-failed =
+    { $count ->
+        [one] { $count } failed
+       *[other] { $count } failed
+    }
+ai-all-failing = The first few all failed; check the address and the model.
+task-describe = Describing

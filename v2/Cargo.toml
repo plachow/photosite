@@ -15,6 +15,7 @@ photosite-image = { path = "crates/photosite-image" }
 photosite-meta = { path = "crates/photosite-meta" }
 photosite-faces = { path = "crates/photosite-faces" }
 photosite-batch = { path = "crates/photosite-batch" }
+photosite-ai = { path = "crates/photosite-ai" }
 
 anyhow = "1"
 thiserror = "2"
@@ -46,6 +47,16 @@ pollster = "1"
 # other platform agrees on how to put files on a clipboard, and pretending
 # otherwise would be a portable API over an unportable idea.
 clipboard-win = "5"
+# Talking to Ollama. **No TLS feature, deliberately**: the address is
+# localhost out of the box and the whole feature is built round a model on
+# this machine. Shipping a TLS stack so that a local socket can be spoken to
+# is the trade this application does not make — the same reasoning as
+# exiftool, at a smaller scale.
+ureq = { version = "3", default-features = false }
+# JSON, both ways. The model is asked for a fixed schema and answers with
+# JSON inside JSON; hand-writing a parser for that would be inventing a
+# worse serde_json.
+serde_json = "1"
 clap = { version = "4", features = ["derive"] }
 jpeg-decoder = "0.3"
 # Writing metadata without shipping exiftool and a copy of Perl. little_exif
