@@ -1,14 +1,10 @@
 [package]
-name = "photosite-cli"
-description = "The headless binary: runs the whole pipeline with no window and no GPU."
+name = "photosite-batch"
+description = "Running a planned conversion. Knows of no UI."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-
-[[bin]]
-name = "photosite-cli"
-path = "src/main.rs"
 
 [lints]
 workspace = true
@@ -17,12 +13,9 @@ workspace = true
 photosite-core.workspace = true
 photosite-image.workspace = true
 photosite-meta.workspace = true
-photosite-faces.workspace = true
-photosite-batch.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
-clap.workspace = true
-walkdir.workspace = true
+crossbeam-channel.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

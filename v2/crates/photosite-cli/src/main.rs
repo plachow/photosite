@@ -79,6 +79,25 @@ enum Command {
         #[arg(long, short)]
         recursive: bool,
     },
+    /// Converts a folder with a stored preset.
+    ///
+    /// The plan is printed before anything is written, the same plan the
+    /// window shows, so a batch can be looked at before it happens from
+    /// here too.
+    Convert {
+        folder: PathBuf,
+        /// Which preset. Without one, the first in the list.
+        #[arg(long)]
+        preset: Option<String>,
+        /// Where the output goes, whatever the preset says.
+        #[arg(long, value_name = "FOLDER")]
+        into: Option<PathBuf>,
+        #[arg(long, short)]
+        recursive: bool,
+        /// Print the plan and write nothing.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Writes everything the catalogue is holding back into the files.
     ///
     /// The window drains this queue on its own. Here it is a command, so a
@@ -122,6 +141,20 @@ fn main() -> Result<()> {
             person,
             recursive,
         } => name(&paths, &folder, &person, recursive),
+        Command::Convert {
+            folder,
+            preset,
+            into,
+            recursive,
+            dry_run,
+        } => convert(
+            &paths,
+            &folder,
+            preset.as_deref(),
+            into.as_deref(),
+            recursive,
+            dry_run,
+        ),
         Command::Write => write_out(&paths),
         Command::Doctor => {
             let mut rows = diagnostics::about(&paths);
@@ -301,6 +334,79 @@ fn name(paths: &Paths, folder: &Path, person: &str, recursive: bool) -> Result<(
             photos = touched.len() as i64
         )
     );
+    Ok(())
+}
+
+/// Converts a folder with a stored preset.
+fn convert(
+    paths: &Paths,
+    folder: &Path,
+    preset: Option<&str>,
+    into: Option<&Path>,
+    recursive: bool,
+    dry_run: bool,
+) -> Result<()> {
+    let mut catalog = Catalog::open(&paths.catalog())?;
+    catalog.seed_presets()?;
+    let stored = catalog.presets(photosite_core::batch::BATCH)?;
+    let chosen = match preset {
+        Some(name) => stored
+            .into_iter()
+            .find(|preset| preset.name.eq_ignore_ascii_case(name))
+            .with_context(|| format!("there is no preset called {name:?}"))?,
+        None => stored.into_iter().next().context("there are no presets")?,
+    };
+    let chosen = photosite_core::batch::Preset {
+        into: into
+            .map(|path| path.to_string_lossy().into_owned())
+            .or(chosen.into),
+        ..chosen
+    };
+
+    let photos = catalog.in_folder(folder, recursive)?;
+    let plan = photosite_core::batch::plan(&photos, &chosen, &|path| path.exists());
+    println!(
+        "{}",
+        t!(
+            "cli-batch-plan",
+            name = chosen.name.clone(),
+            write = plan.writes() as i64,
+            skip = plan.skips() as i64,
+            overwrite = plan.overwrites() as i64
+        )
+    );
+    if let Some(example) = plan.example() {
+        println!("{}", example.display());
+    }
+
+    if dry_run {
+        return Ok(());
+    }
+
+    let tasks = jobs::Tasks::new();
+    let outcome = tasks.here(t!("task-batch"), |cancel, progress| {
+        Ok(photosite_batch::run(
+            &plan,
+            &chosen,
+            jobs::worker_count(),
+            cancel,
+            progress,
+        ))
+    })?;
+
+    println!(
+        "{}",
+        t!(
+            "cli-batch-done",
+            written = outcome.written as i64,
+            skipped = outcome.skipped as i64,
+            failed = outcome.failed as i64
+        )
+    );
+    for error in &outcome.errors {
+        println!("  {error}");
+    }
+
     Ok(())
 }
 

@@ -8,6 +8,7 @@
 //! from [`Settings`], because what is hard-wired cannot be configured — and
 //! what cannot be configured gets rewritten sooner or later.
 
+mod batch;
 mod clipboard;
 mod compare;
 mod docks;
@@ -80,6 +81,7 @@ fn main() -> Result<()> {
     let mut open_settings = false;
     let mut open_filter = false;
     let mut open_people = false;
+    let mut open_batch = false;
     let mut compare = 0usize;
     let mut search: Option<String> = None;
     let mut folder: Option<PathBuf> = None;
@@ -99,6 +101,7 @@ fn main() -> Result<()> {
             // makes it possible to look at one without a hand on the
             // keyboard.
             "--open-people" => open_people = true,
+            "--open-batch" => open_batch = true,
             // Opens straight into a comparison of the first few. Like
             // `--open-filter`, it exists so that a view which normally needs
             // a selection and a key can be seen from a command line.
@@ -163,6 +166,9 @@ fn main() -> Result<()> {
             app.show_filter = open_filter;
             app.people.open = open_people;
             app.people.stale = open_people;
+            if open_batch {
+                batch::open(&mut app);
+            }
             // The filter first: narrowing the gallery rebuilds the
             // selection, so choosing tiles before it means choosing tiles
             // that are about to be let go of.
@@ -202,6 +208,8 @@ pub enum Wanted {
     ToOpen,
     ToCopyInto,
     ToMoveInto,
+    /// Where a batch conversion puts its output.
+    ToConvertInto,
 }
 
 /// A node of the folder tree. Children are loaded only on expansion.
@@ -350,6 +358,8 @@ pub struct App {
     /// The People window: who is known, who is waiting to be named, and the
     /// sweep that finds them.
     pub people: people::People,
+    /// The batch window: the settings, and what they would do.
+    pub batch: batch::Batch,
     /// The faces of the photograph in the preview, and whose they are.
     /// Read when the preview changes rather than when it is drawn.
     pub preview_faces_of: Option<PhotoId>,
@@ -507,6 +517,7 @@ impl App {
             wanted_close: Vec::new(),
             wanted_faces: Vec::new(),
             people: people::People::default(),
+            batch: batch::Batch::default(),
             preview_faces_of: None,
             preview_faces: Vec::new(),
             compare: None,
@@ -1041,6 +1052,7 @@ impl App {
             Wanted::ToOpen => t!("dialog-pick-folder"),
             Wanted::ToCopyInto => t!("copy-into"),
             Wanted::ToMoveInto => t!("move-into"),
+            Wanted::ToConvertInto => t!("batch-into"),
         };
         self.folder_dialog = Some((picker::ask(ctx, title, start), wanted));
     }
@@ -1062,6 +1074,11 @@ impl App {
                     Wanted::ToOpen => self.open(folder),
                     Wanted::ToCopyInto => self.send_to(&folder, Mode::Copy),
                     Wanted::ToMoveInto => self.send_to(&folder, Mode::Move),
+                    Wanted::ToConvertInto => {
+                        self.batch.preset.into = Some(folder.to_string_lossy().into_owned());
+                        self.batch.preset.beside_source = false;
+                        self.batch.stale = true;
+                    }
                 }
             }
         }
@@ -1136,6 +1153,37 @@ impl App {
                 egui::vec2(width as f32, height as f32),
             ),
         ))
+    }
+
+    /// Asks where a batch conversion should put its output.
+    pub fn ask_for_folder_for_batch(&mut self, ctx: &egui::Context) {
+        self.ask_for_folder(ctx, Wanted::ToConvertInto);
+    }
+
+    /// Notices that a conversion has finished, and says how it went.
+    fn collect_batch(&mut self) {
+        let Some(id) = self.batch.running else {
+            return;
+        };
+
+        let Some(task) = self
+            .tasks
+            .snapshot()
+            .into_iter()
+            .find(|task| task.id == id && task.finished)
+        else {
+            return;
+        };
+
+        self.batch.running = None;
+        self.batch.summary = match &task.error {
+            Some(error) => error.clone(),
+            None => task.message.clone(),
+        };
+        // The outputs may have landed in the folder being looked at.
+        self.batch.stale = true;
+        self.reopen();
+        self.tasks.forget_finished();
     }
 
     /// The faces of one photograph, read once and kept until another is
@@ -1255,6 +1303,7 @@ impl App {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
             }
             "view.settings" => self.show_settings = !self.show_settings,
+            "photo.batch" => batch::open(self),
             "photo.people" => {
                 self.people.open = !self.people.open;
                 if self.people.open {
@@ -2151,6 +2200,7 @@ impl eframe::App for App {
         let delivered = self.collect(&ctx);
         self.collect_indexing();
         self.collect_faces();
+        self.collect_batch();
         self.collect_writing();
         self.collect_disturbance();
         self.take_picked_folder();
@@ -2189,6 +2239,7 @@ impl eframe::App for App {
         self.diagnostics_window(&ctx);
         self.settings_window(&ctx);
         people::window(self, &ctx, &palette);
+        batch::window(self, &ctx, &palette);
         filter::window(self, &ctx, &palette);
         self.ask_window(&ctx);
 

@@ -207,6 +207,24 @@ const MIGRATIONS: &[Migration] = &[
         );
     ",
     },
+    Migration {
+        name: "0007-presets",
+        // Named sets of batch settings, kept as text.
+        //
+        // TOML and not a column per setting: a preset is read and written
+        // whole and never queried on, and a table with thirty columns would
+        // need a migration every time one is added. The kind is here so that
+        // an export preset and a batch preset can share the shape without
+        // sharing the list.
+        sql: "
+        CREATE TABLE presets (
+            kind    TEXT NOT NULL,
+            name    TEXT NOT NULL COLLATE NOCASE,
+            settings TEXT NOT NULL,
+            PRIMARY KEY (kind, name)
+        );
+    ",
+    },
 ];
 
 /// How many times a file is tried before it is left alone.

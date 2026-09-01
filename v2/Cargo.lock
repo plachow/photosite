@@ -2562,11 +2562,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
+name = "photosite-batch"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "crossbeam-channel",
+ "photosite-core",
+ "photosite-image",
+ "photosite-meta",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
 name = "photosite-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "photosite-batch",
  "photosite-core",
  "photosite-faces",
  "photosite-image",
@@ -2647,6 +2661,7 @@ dependencies = [
  "eframe",
  "egui",
  "notify",
+ "photosite-batch",
  "photosite-core",
  "photosite-faces",
  "photosite-image",

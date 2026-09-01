@@ -345,6 +345,15 @@ pub const COMMANDS: &[Command] = &[
     // the choice can be bound to a key and named in one place; the toolbar
     // draws it as one control, the way it already does the recursive
     // checkbox.
+    // Converting a lot of them at once. v1's key, because somebody moving
+    // between the two should not have to learn a new one.
+    Command {
+        id: "photo.batch",
+        title_key: "command-photo-batch",
+        group: Group::Photo,
+        default_shortcut: Some("Ctrl+B"),
+        toolbar: true,
+    },
     // Who is in the photographs. It is a window rather than a dock: naming a
     // library is a sitting somebody does once and then rarely, and a pane
     // that is empty nine days in ten is a pane in the way.

@@ -6,11 +6,13 @@
 
 pub mod cache;
 pub mod decode;
+pub mod encode;
 pub mod exif;
 pub mod raw;
 
 pub use cache::Cache;
 pub use decode::{Rgb, fit, quick, rotate, sized};
+pub use encode::{resize, sharpen};
 
 /// Longer edge of a tile in the grid.
 pub const THUMB: u32 = 320;

@@ -582,3 +582,99 @@ cli-named =
     }
 cli-written =
     wrote { $written }, could not write { $failed }
+
+## Batch conversion
+
+command-photo-batch = Convert…
+batch-title = Convert
+batch-where = Where
+batch-beside-source = Beside each original
+batch-into = Into this folder
+batch-choose-folder = Choose…
+batch-folder-per-day = A folder per day
+batch-on-collision = If the name is taken
+collision-number = Take a number
+collision-skip = Leave it alone
+collision-overwrite = Write over it
+
+batch-format = Format
+format-same = Keep the format
+format-jpeg = JPEG
+format-png = PNG
+format-webp = WebP
+format-tiff = TIFF
+format-bmp = BMP
+format-webp-lossless = WebP is written lossless here, so a photograph comes out larger than a JPEG, not smaller.
+batch-quality = Quality
+
+batch-size = Size
+resize-none = Leave the size
+resize-width = Width
+resize-height = Height
+resize-longest = Longest side
+resize-shortest = Shortest side
+resize-percent = Per cent
+batch-allow-enlarging = Enlarge the small ones too
+batch-sharpen = Sharpen
+
+batch-naming = Name
+naming-original = Keep the name
+naming-custom = One name for all
+naming-date = Date taken
+batch-custom-name = Name
+batch-date-tokens = { "{" }year{ "}" } { "{" }month{ "}" } { "{" }day{ "}" } { "{" }hour{ "}" } { "{" }minute{ "}" } { "{" }second{ "}" }
+batch-prefix = Prefix
+batch-suffix = Suffix
+batch-numbering = Number them
+
+batch-carry = Metadata
+carry-everything = Carry it all across
+carry-without-place = All but the position
+carry-nothing = None of it
+
+batch-will-write =
+    { $count ->
+        [one] { $count } to write
+       *[other] { $count } to write
+    }
+batch-will-skip =
+    { $count ->
+        [one] { $count } left alone
+       *[other] { $count } left alone
+    }
+batch-will-overwrite =
+    { $count ->
+        [one] { $count } written over
+       *[other] { $count } written over
+    }
+batch-nowhere = Nowhere to put them yet
+
+batch-run = Convert
+batch-stop = Stop
+batch-save-preset = Save as a preset
+batch-delete-preset = Delete this preset
+batch-preset-name = Preset name
+
+task-batch = Converting
+batch-written =
+    { $count ->
+        [one] { $count } written
+       *[other] { $count } written
+    }
+batch-skipped =
+    { $count ->
+        [one] { $count } left alone
+       *[other] { $count } left alone
+    }
+batch-failed =
+    { $count ->
+        [one] { $count } failed
+       *[other] { $count } failed
+    }
+batch-cancelled = stopped
+batch-exists = the name is taken
+
+cli-batch-plan =
+    { $name }: { $write } to write, { $skip } left alone, { $overwrite } written over
+cli-batch-done =
+    wrote { $written }, left alone { $skipped }, failed { $failed }

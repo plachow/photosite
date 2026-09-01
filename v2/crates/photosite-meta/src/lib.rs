@@ -255,6 +255,134 @@ pub fn write(
     Ok(target)
 }
 
+/// Carries a photograph's metadata onto a converted copy of it.
+///
+/// What a batch conversion needs and nothing else does: the output is
+/// freshly encoded pixels and knows nothing about where it came from, so
+/// when it was taken, with what, at what exposure and everything anybody has
+/// said about it are copied across.
+///
+/// Three tags are deliberately **not** copied, and every one of them would
+/// be a bug that looks like a broken photograph:
+///
+/// * **Orientation.** The output was rendered the right way up — the decode
+///   turned it — so an orientation tag from the source would turn it again.
+///   A folder of exported photographs all lying on their side is exactly
+///   what that looks like.
+/// * **The pixel dimensions.** The output may have been resized, and a tag
+///   saying 6000x4000 over a 2048-pixel file is a lie that some readers
+///   believe.
+/// * **The position**, when asked. That is the whole of `keep_place`, and it
+///   is the reason somebody exports at all before putting a photograph of
+///   their house on the internet.
+///
+/// What can be carried depends on the format. EXIF goes into JPEG, PNG, WebP
+/// and TIFF; our own XMP is embedded only into JPEG, and **no sidecar is
+/// written beside a conversion** — a folder of exported files with a `.xmp`
+/// next to each one is not what anybody meant by "export".
+pub fn carry(source: &Path, destination: &Path, keep_place: bool) -> Result<()> {
+    let Some(kind) = little_exif_kind(destination) else {
+        // BMP, and anything else that holds no metadata at all. Not a
+        // failure: the pixels are what was asked for.
+        tracing::debug!(
+            path = %destination.display(),
+            "this format holds no metadata; the conversion carries none"
+        );
+        return Ok(());
+    };
+
+    match Metadata::new_from_path(source) {
+        Ok(mut metadata) => {
+            // The ones that would be wrong on the output. See above.
+            for (tag, group) in [
+                (0x0112u16, ExifTagGroup::GENERIC),
+                (0x0100, ExifTagGroup::GENERIC),
+                (0x0101, ExifTagGroup::GENERIC),
+                (0xA002, ExifTagGroup::EXIF),
+                (0xA003, ExifTagGroup::EXIF),
+                // A thumbnail of the original inside a resized copy is both
+                // wrong and the largest thing in the block.
+                (0x0201, ExifTagGroup::GENERIC),
+                (0x0202, ExifTagGroup::GENERIC),
+            ] {
+                metadata.remove_tag_by_hex_group(tag, group);
+            }
+
+            if !keep_place {
+                for tag in [
+                    0x0001u16, 0x0002, 0x0003, 0x0004, 0x0005, 0x0006, 0x0007, 0x001D, 0x001F,
+                ] {
+                    metadata.remove_tag_by_hex_group(tag, ExifTagGroup::GPS);
+                }
+            }
+
+            if let Err(error) = metadata.write_to_file(destination) {
+                // A photograph that came out right and lost its date is
+                // worth saying so about, and is not worth failing over.
+                tracing::warn!(
+                    path = %destination.display(),
+                    %error,
+                    "the metadata could not be carried across"
+                );
+            }
+        }
+        Err(error) => tracing::debug!(
+            path = %source.display(),
+            %error,
+            "the original holds no metadata to carry"
+        ),
+    }
+
+    // And what somebody said about it, where the format can hold it. Read
+    // from the source rather than passed in, so that this one function is
+    // the whole of "carry the metadata".
+    if kind == FileExtension::JPEG {
+        let mut said = read(source);
+        if !keep_place {
+            said.place = None;
+        }
+
+        // The face frames belong to the original's own pixel size; a copy
+        // has a different one, and a region list measured against the wrong
+        // frame draws boxes over nothing.
+        said.regions = None;
+        if !said.is_empty() {
+            let raw = std::fs::read(destination)
+                .with_context(|| format!("cannot read {}", destination.display()))?;
+            let packet = xmp::merge(jpeg::xmp(&raw).as_deref(), &said);
+            match jpeg::with_xmp(&raw, &packet) {
+                Ok(out) => replace(destination, &out)?,
+                Err(error) => tracing::warn!(
+                    path = %destination.display(),
+                    error = %format!("{error:#}"),
+                    "what was said about it could not be carried across"
+                ),
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// What little_exif calls this file's kind, or nothing for a format that
+/// holds no metadata.
+fn little_exif_kind(path: &Path) -> Option<FileExtension> {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())?
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "jpg" | "jpeg" => Some(FileExtension::JPEG),
+        "png" => Some(FileExtension::PNG {
+            as_zTXt_chunk: true,
+        }),
+        "webp" => Some(FileExtension::WEBP),
+        "tif" | "tiff" => Some(FileExtension::TIFF),
+        _ => None,
+    }
+}
+
 /// Everything the file needs, worked out in memory before anything on disk is
 /// touched.
 fn embed(raw: &[u8], wanted: &Xmp) -> Result<Vec<u8>> {

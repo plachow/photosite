@@ -216,7 +216,12 @@ impl Cancel {
         self.0.load(Ordering::Relaxed)
     }
 
-    fn cancel(&self) {
+    /// Says nobody wants this any more.
+    ///
+    /// Public because a task can decide to stop itself — and because a test
+    /// of something that takes a `Cancel` has to be able to set one without
+    /// standing up a whole task board.
+    pub fn stop(&self) {
         self.0.store(true, Ordering::Relaxed);
     }
 }
@@ -401,7 +406,7 @@ impl Tasks {
             .iter()
             .find(|(task, _)| *task == id)
         {
-            cancel.cancel();
+            cancel.stop();
         }
     }
 

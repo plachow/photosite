@@ -6,6 +6,7 @@
 //! single reason the v1 port was expensive: nineteen files outside the UI
 //! folders reached for `BitmapSource`.
 
+pub mod batch;
 pub mod catalog;
 pub mod commands;
 pub mod compare;
@@ -24,6 +25,7 @@ pub mod theme;
 pub mod time;
 pub mod transfer;
 
+pub use batch::{Plan, Preset};
 pub use catalog::{Catalog, NewPhoto};
 pub use compare::Compare;
 pub use docks::Layout;
