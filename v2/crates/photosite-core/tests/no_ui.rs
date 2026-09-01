@@ -76,3 +76,13 @@ fn images_do_not_depend_on_the_ui() {
 fn the_face_engine_does_not_depend_on_the_ui() {
     check("photosite-faces");
 }
+
+#[test]
+fn converting_does_not_depend_on_the_ui() {
+    check("photosite-batch");
+}
+
+#[test]
+fn describing_does_not_depend_on_the_ui() {
+    check("photosite-ai");
+}

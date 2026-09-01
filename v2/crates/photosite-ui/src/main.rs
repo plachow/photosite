@@ -2744,6 +2744,40 @@ impl App {
         rows.push((t!("diagnostics-selected"), self.selection.len().to_string()));
         rows.push((t!("diagnostics-blank"), self.blank.to_string()));
         rows.push((t!("diagnostics-unsharp"), self.unsharp.to_string()));
+
+        // What the two downloaded things add up to. This is the first
+        // question a support conversation opens with, and "the models are
+        // missing" is exactly what somebody needs told here rather than
+        // discovered from a People window that will not start.
+        let models = self.model_folder();
+        let availability = photosite_faces::Availability::of(&models);
+        rows.push((
+            t!("diagnostics-models"),
+            if availability.missing.is_empty() {
+                models.display().to_string()
+            } else {
+                t!(
+                    "diagnostics-missing",
+                    missing = availability.missing.join(", ")
+                )
+            },
+        ));
+        rows.push((
+            t!("diagnostics-places"),
+            match &self.places {
+                Some(places) => format!("{} ({})", places.source, places.places),
+                None => self.paths.places().display().to_string(),
+            },
+        ));
+        if let Some(catalog) = self.catalog.as_ref()
+            && let Ok((faces, named, people)) = catalog.face_counts()
+        {
+            rows.push((
+                t!("diagnostics-faces"),
+                t!("diagnostics-faces-of", named = named, faces = faces),
+            ));
+            rows.push((t!("diagnostics-people"), people.to_string()));
+        }
         let width = rows
             .iter()
             .map(|(label, _)| label.chars().count())

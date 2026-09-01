@@ -721,3 +721,10 @@ ai-failed =
     }
 ai-all-failing = The first few all failed; check the address and the model.
 task-describe = Describing
+
+diagnostics-models = face models
+diagnostics-missing = missing: { $missing }
+diagnostics-places = place list
+diagnostics-faces = faces
+diagnostics-faces-of = { $named } of { $faces } named
+diagnostics-people = people
