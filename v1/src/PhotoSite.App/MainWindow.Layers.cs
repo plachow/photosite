@@ -170,6 +170,19 @@ public partial class MainWindow
             || GetSelectedLayer() is TextLayer
                 ? Visibility.Visible
                 : Visibility.Collapsed;
+
+        // A placed image has no stroke, fill or colour; only its opacity
+        // is worth a control.
+        var isImage = PreviewViewer.ActiveTool is AnnotationTool.None or AnnotationTool.Select
+                      && GetSelectedLayer() is ImageLayer;
+        var shapeControls = isImage ? Visibility.Collapsed : Visibility.Visible;
+        AnnotationColorPanel.Visibility = shapeControls;
+        StrokeWidthSlider.Visibility = shapeControls;
+        FillShapeBox.Visibility = shapeControls;
+        if (isImage)
+        {
+            ToolOptionsHeader.Text = "IMAGE";
+        }
     }
 
     private void OnAnnotationColorClick(object sender, RoutedEventArgs eventArgs)

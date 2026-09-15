@@ -1932,6 +1932,7 @@ try
     await AssertToolPresetStoreAsync(repository);
     AssertFolderNavigation(testRoot, photoRoot, nested);
     AssertRawPreviewExtraction();
+    AssertImageLayer(testRoot);
     await AssertImportWorkflowAsync(testRoot);
     await AssertBatchProcessingAsync(testRoot, repository, previews);
 
@@ -3301,6 +3302,60 @@ static void AssertEditorTools()
     Assert(
         legacyStep is { Kind: PhotoFilterKind.Vignette, Mode: 0 },
         "A filter step stored before modes existed must load with mode 0.");
+}
+
+static void AssertImageLayer(string testRoot)
+{
+    var insetPath = Path.Combine(testRoot, "inset.png");
+    SaveTestPng(insetPath, 80, 40);
+
+    var layer = MainWindow.CreateImageLayer(insetPath, 4000, 3000, EditRecipe.Empty);
+    Assert(
+        layer is not null
+        && layer.Name == "inset.png"
+        && Math.Abs(layer.X + (layer.Width / 2) - 0.5) < 0.001
+        && Math.Abs(layer.Y + (layer.Height / 2) - 0.5) < 0.001,
+        "A placed image starts centred on the frame.");
+    Assert(
+        Math.Abs((layer!.Width * 4000) / (layer.Height * 3000) - 2) < 0.01,
+        "A placed image keeps its own proportions in the frame's space.");
+    Assert(
+        MainWindow.CreateImageLayer(Path.Combine(testRoot, "missing.png"), 100, 100, EditRecipe.Empty) is null,
+        "A file that cannot be read gives no layer.");
+
+    var composed = ImageRenderer.Render(
+        CreateTestBitmap(200, 150, 250, 250, 250),
+        EditRecipe.Empty.WithLayer(layer));
+    Assert(
+        CountMarkedPixels(composed) > 1000
+        && ReadPixel(composed, 2, 2) is { Red: 250 },
+        "An image layer is composited into the rendered frame and only there.");
+
+    var resized = layer.ResizeCorner(layer.X + layer.Width + 0.1, layer.Y + layer.Height, movesTopLeft: false);
+    Assert(
+        Math.Abs((resized.Width / resized.Height) - (layer.Width / layer.Height)) < 0.001
+        && resized.Width > layer.Width
+        && resized.X == layer.X,
+        "Dragging the bottom-right corner keeps the proportions and the top-left anchor.");
+    var shrunk = layer.ResizeCorner(layer.X + 0.05, layer.Y + 0.05, movesTopLeft: true);
+    Assert(
+        Math.Abs(shrunk.X + shrunk.Width - (layer.X + layer.Width)) < 0.001
+        && shrunk.Width < layer.Width,
+        "Dragging the top-left corner keeps the bottom-right anchor.");
+
+    var roundTrip = JsonSerializer.Deserialize<EditRecipe>(
+        JsonSerializer.Serialize(EditRecipe.Empty.WithLayer(layer)));
+    Assert(
+        roundTrip?.Layers.Single() is ImageLayer { Path: var storedPath } && storedPath == insetPath,
+        "An image layer must survive the recipe's JSON round-trip.");
+
+    var missing = layer with { Path = Path.Combine(testRoot, "gone.png") };
+    var placeholder = ImageRenderer.Render(
+        CreateTestBitmap(200, 150, 250, 250, 250),
+        EditRecipe.Empty.WithLayer(missing));
+    Assert(
+        CountMarkedPixels(placeholder) > 100,
+        "A layer whose file is gone keeps its place with a crossed frame.");
 }
 
 static async Task AssertToolPresetStoreAsync(PhotoCatalogRepository repository)

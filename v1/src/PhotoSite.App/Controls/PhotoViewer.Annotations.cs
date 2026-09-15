@@ -217,7 +217,7 @@ public sealed partial class PhotoViewer
             ToScreen(new Point(region.Right, region.Bottom), bounds));
         rectangle.Inflate(3, 3);
         drawingContext.DrawRectangle(null, LayerSelectionPen, rectangle);
-        if (layer is ShapeLayer)
+        if (layer is ShapeLayer or ImageLayer)
         {
             DrawHandle(drawingContext, rectangle.TopLeft);
             DrawHandle(drawingContext, rectangle.BottomRight);
@@ -305,6 +305,21 @@ public sealed partial class PhotoViewer
         Point position,
         Rect bounds)
     {
+        if (layer is ImageLayer image)
+        {
+            var imageRegion = image.GetBounds();
+            var imageTopLeft = ToScreen(new Point(imageRegion.X, imageRegion.Y), bounds);
+            var imageBottomRight = ToScreen(new Point(imageRegion.Right, imageRegion.Bottom), bounds);
+            if ((position - imageTopLeft).Length <= LayerHitTolerance)
+            {
+                return LayerDragMode.ResizeStart;
+            }
+
+            return (position - imageBottomRight).Length <= LayerHitTolerance
+                ? LayerDragMode.ResizeEnd
+                : LayerDragMode.Move;
+        }
+
         if (layer is not ShapeLayer shape)
         {
             return LayerDragMode.Move;
@@ -365,6 +380,10 @@ public sealed partial class PhotoViewer
                 ResizeShape(shape, point, movesStart: true),
             LayerDragMode.ResizeEnd when layerAtDragStart is ShapeLayer shape =>
                 ResizeShape(shape, point, movesStart: false),
+            LayerDragMode.ResizeStart when layerAtDragStart is ImageLayer image =>
+                image.ResizeCorner(point.X, point.Y, movesTopLeft: true),
+            LayerDragMode.ResizeEnd when layerAtDragStart is ImageLayer image =>
+                image.ResizeCorner(point.X, point.Y, movesTopLeft: false),
             _ => layerAtDragStart
         };
         InvalidateVisual();

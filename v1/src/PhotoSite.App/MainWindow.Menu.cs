@@ -28,6 +28,8 @@ public partial class MainWindow
             ["colors"] = () => new ColorsTool(),
             ["white-balance"] = () => new WhiteBalanceTool(),
             ["shadows"] = () => new ShadowsTool(),
+            ["combined"] = () => new CombinedTool(),
+            ["old-photo"] = () => new OldPhotoTool(),
             ["sharpen"] = () => new SharpenTool(),
             ["blur"] = () => new BlurTool(),
             ["noise-reduction"] = () => new NoiseReductionTool(),
@@ -59,6 +61,7 @@ public partial class MainWindow
         (Key.D1, ModifierKeys.Control, "exposure"),
         (Key.D2, ModifierKeys.Control, "colors"),
         (Key.D3, ModifierKeys.Control, "white-balance"),
+        (Key.D4, ModifierKeys.Control, "combined"),
         (Key.D5, ModifierKeys.Control, "sharpen"),
         (Key.D6, ModifierKeys.Control, "blur"),
         (Key.D7, ModifierKeys.Control, "shadows"),
@@ -184,6 +187,88 @@ public partial class MainWindow
     private async void OnMenuPasteClick(object sender, RoutedEventArgs eventArgs) =>
         await PasteImageFromClipboardAsync();
 
+    private void OnMenuInsertImageClick(object sender, RoutedEventArgs eventArgs)
+    {
+        if (viewModel.SelectedPhoto is not { } photo
+            || PreviewViewer.OriginalBitmap is not { } source)
+        {
+            return;
+        }
+
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "Image from file",
+            Filter = "Images|*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.tif;*.tiff;*.gif|All files|*.*",
+            CheckFileExists = true
+        };
+        if (dialog.ShowDialog(this) != true)
+        {
+            return;
+        }
+
+        var layer = CreateImageLayer(
+            dialog.FileName,
+            source.PixelWidth,
+            source.PixelHeight,
+            photo.EditRecipe);
+        if (layer is null)
+        {
+            viewModel.ReportStatus(
+                $"{System.IO.Path.GetFileName(dialog.FileName)} could not be read as an image");
+            return;
+        }
+
+        photo.SetLayers(photo.EditRecipe.WithLayer(layer).Layers);
+        PreviewViewer.SelectedLayerId = layer.Id;
+        SetAnnotationTool(AnnotationTool.Select);
+        RefreshLayerList();
+        viewModel.ReportStatus(
+            $"{layer.Name} placed as a layer · drag it, resize by its corners");
+    }
+
+    /// <summary>
+    /// A layer for an image file, a third of the frame wide and centred,
+    /// in the normalized space of the finished image so it keeps its own
+    /// proportions whatever the photograph's are.
+    /// </summary>
+    internal static Domain.ImageLayer? CreateImageLayer(
+        string path,
+        int sourceWidth,
+        int sourceHeight,
+        Domain.EditRecipe recipe)
+    {
+        if (Services.Imaging.ImageLayerCache.Measure(path) is not { } size
+            || size.Width <= 0
+            || size.Height <= 0)
+        {
+            return null;
+        }
+
+        var (frameWidth, frameHeight) = Services.Imaging.ImageRenderer.MeasureFrame(
+            sourceWidth,
+            sourceHeight,
+            recipe);
+        var width = 0.35;
+        var pixelWidth = width * Math.Max(1, frameWidth);
+        var pixelHeight = pixelWidth * size.Height / size.Width;
+        var height = pixelHeight / Math.Max(1, frameHeight);
+        if (height > 0.8)
+        {
+            width *= 0.8 / height;
+            height = 0.8;
+        }
+
+        return new Domain.ImageLayer
+        {
+            Name = System.IO.Path.GetFileName(path),
+            Path = path,
+            X = 0.5 - (width / 2),
+            Y = 0.5 - (height / 2),
+            Width = width,
+            Height = height
+        };
+    }
+
     private void OnMenuRotate180Click(object sender, RoutedEventArgs eventArgs)
     {
         if (viewModel.SelectedPhoto is not { } photo)
@@ -234,6 +319,12 @@ public partial class MainWindow
 
     private void OnMenuFitClick(object sender, RoutedEventArgs eventArgs) =>
         PreviewViewer.FitToViewport();
+
+    private void OnMenuZoomInClick(object sender, RoutedEventArgs eventArgs) =>
+        PreviewViewer.ZoomIn();
+
+    private void OnMenuZoomOutClick(object sender, RoutedEventArgs eventArgs) =>
+        PreviewViewer.ZoomOut();
 
     private void OnMenuActualSizeClick(object sender, RoutedEventArgs eventArgs) =>
         PreviewViewer.ShowActualSize();

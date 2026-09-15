@@ -184,18 +184,23 @@ inside the editor moves the current tab to it instead of piling up new tabs.
 - **Enhance** - levels over a histogram with an Auto stretch; curves, master
   and per channel, drawn on a curve editor; exposure with its own Auto;
   colours (hue, saturation, vibrance); colour temperature with Auto and an
-  eyedropper on the preview; brighten shadows; sharpen as a simple pass, an
+  eyedropper on the preview; a combined window with light, white balance
+  and colour together; brighten shadows; sharpen as a simple pass, an
   unsharp mask or a wide-radius Gaussian, optionally on luminance only; blur
   as soft, Gaussian or motion; noise reduction; chromatic aberration; lens
   distortion; vignetting with midpoint and feather; deinterlace;
-- **Effects** - grayscale, sepia, invert, posterize, solarize, pixelize and
-  grain (monochrome or coloured), all stacking as filter steps;
+- **Effects** - grayscale, sepia, invert, posterize, solarize, pixelize,
+  grain (monochrome or coloured) and an old-photo look, all stacking as
+  filter steps;
 - **Resize** - an output size on the recipe, applied on save and export so
   the file you opened is never touched; a straighten and perspective window
   with a grid;
 - **Layers** - arrows, lines, rectangles, ellipses, text and freehand drawing
   stay editable vector objects until export. They reorder, duplicate, hide and
-  delete, and every step takes part in undo;
+  delete, and every step takes part in undo; **Image from file as layer** puts
+  another picture over the photograph - a logo, a signature, an inset - which
+  drags, resizes by its corners keeping its proportions, and is read from its
+  file again at export time;
 - **Before / after** as a straight toggle or a split canvas;
 - **Export** with resize, format, quality, metadata handling and its own preset
   list.
@@ -244,7 +249,7 @@ labels and keywords for RAW files are written to an `.xmp` sidecar.
 | `Ctrl+L` / `Ctrl+R` | Rotate left / right |
 | `Ctrl+0` | Auto enhance |
 | `Shift+L` / `Shift+C` | Levels / Curves |
-| `Ctrl+1` `Ctrl+2` `Ctrl+3` | Enhance exposure, adjust colours, colour temperature |
+| `Ctrl+1` `Ctrl+2` `Ctrl+3` `Ctrl+4` | Enhance exposure, adjust colours, colour temperature, combined adjustment |
 | `Ctrl+5` / `Ctrl+6` / `Ctrl+7` | Sharpen / blur / brighten shadows |
 | `Ctrl+Shift+R` `A` `D` `V` `L` `N` | Noise reduction, chromatic aberration, lens distortion, vignetting, deinterlace, add noise |
 | `Shift+E` | Resize |

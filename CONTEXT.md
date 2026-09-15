@@ -21,9 +21,11 @@ step: sharpen, blur, pixelize, sepia and so on. Filters stack in order; the
 same filter can appear twice. Adjustments do not stack — there is one set.
 
 **Layer** (`AnnotationLayer`) — a vector object above the photograph: shape,
-text or freehand. Layers are positioned in the coordinate space of the
-finished, oriented, cropped image, which is the space the exporter composes
-into. They stay editable until export; nothing is ever rasterized on creation.
+text, freehand, or an **image layer** (`ImageLayer`), which holds only the
+path of another picture and reads its pixels at render time. Layers are
+positioned in the coordinate space of the finished, oriented, cropped image,
+which is the space the exporter composes into. They stay editable until
+export; nothing is ever rasterized on creation.
 
 **Crop region** (`CropRegion`) — a rectangle normalized to 0..1 of the source
 frame. Used both for the recipe's crop and for a transient canvas selection.

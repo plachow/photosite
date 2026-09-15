@@ -14,7 +14,8 @@ public enum LayerKind
 {
     Shape,
     Text,
-    Freehand
+    Freehand,
+    Image
 }
 
 /// <summary>
@@ -26,6 +27,7 @@ public enum LayerKind
 [JsonDerivedType(typeof(ShapeLayer), "shape")]
 [JsonDerivedType(typeof(TextLayer), "text")]
 [JsonDerivedType(typeof(FreehandLayer), "freehand")]
+[JsonDerivedType(typeof(ImageLayer), "image")]
 public abstract record AnnotationLayer
 {
     public string Id { get; init; } = Guid.NewGuid().ToString("N");
@@ -167,5 +169,57 @@ public sealed record FreehandLayer : AnnotationLayer
         }
 
         return hash.ToHashCode();
+    }
+}
+
+/// <summary>
+/// Another photograph placed over this one - a logo, a signature, an inset.
+/// The layer keeps only the path; the pixels are read at render time, so the
+/// recipe stays small and the file can be replaced in place.
+/// </summary>
+public sealed record ImageLayer : AnnotationLayer
+{
+    public string Path { get; init; } = string.Empty;
+
+    public double X { get; init; }
+
+    public double Y { get; init; }
+
+    public double Width { get; init; } = 0.3;
+
+    public double Height { get; init; } = 0.2;
+
+    public override LayerKind Kind => LayerKind.Image;
+
+    public override AnnotationLayer Translate(double deltaX, double deltaY) =>
+        this with { X = X + deltaX, Y = Y + deltaY };
+
+    public override CropRegion GetBounds() => new(X, Y, Width, Height);
+
+    /// <summary>
+    /// Moves one corner while the opposite one stays put, keeping the
+    /// layer's shape: the larger of the two movements decides the size.
+    /// </summary>
+    public ImageLayer ResizeCorner(double pointX, double pointY, bool movesTopLeft)
+    {
+        var aspect = Height <= 0 ? 1 : Width / Height;
+        var anchorX = movesTopLeft ? X + Width : X;
+        var anchorY = movesTopLeft ? Y + Height : Y;
+        var width = Math.Abs(pointX - anchorX);
+        var height = Math.Abs(pointY - anchorY);
+        if (width / Math.Max(aspect, 0.0001) >= height)
+        {
+            height = width / Math.Max(aspect, 0.0001);
+        }
+        else
+        {
+            width = height * aspect;
+        }
+
+        width = Math.Max(0.01, width);
+        height = Math.Max(0.01, height);
+        return movesTopLeft
+            ? this with { X = anchorX - width, Y = anchorY - height, Width = width, Height = height }
+            : this with { Width = width, Height = height };
     }
 }

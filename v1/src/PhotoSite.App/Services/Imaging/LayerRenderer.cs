@@ -42,6 +42,9 @@ internal static class LayerRenderer
                     case FreehandLayer freehand:
                         DrawFreehand(drawingContext, freehand, imageSize);
                         break;
+                    case ImageLayer image:
+                        DrawImageLayer(drawingContext, image, imageSize);
+                        break;
                 }
             }
             finally
@@ -265,6 +268,28 @@ internal static class LayerRenderer
             1,
             Math.Min(imageSize.Width, imageSize.Height));
         return Math.Max(1, layer.StrokeWidth * shorterSide);
+    }
+
+    private static void DrawImageLayer(
+        DrawingContext drawingContext,
+        ImageLayer layer,
+        Size imageSize)
+    {
+        var bounds = new Rect(
+            ToPixels(layer.X, layer.Y, imageSize),
+            ToPixels(layer.X + layer.Width, layer.Y + layer.Height, imageSize));
+        if (ImageLayerCache.TryLoad(layer.Path) is { } bitmap)
+        {
+            drawingContext.DrawImage(bitmap, bounds);
+            return;
+        }
+
+        // The file is gone: keep the place with a crossed frame rather than
+        // silently dropping the layer.
+        var pen = new Pen(CreateBrush(0xFFFF3B30), Math.Max(1, imageSize.Width * 0.002));
+        drawingContext.DrawRectangle(CreateBrush(0x40000000), pen, bounds);
+        drawingContext.DrawLine(pen, bounds.TopLeft, bounds.BottomRight);
+        drawingContext.DrawLine(pen, bounds.TopRight, bounds.BottomLeft);
     }
 
     private static Pen CreatePen(AnnotationLayer layer, Size imageSize)
