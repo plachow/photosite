@@ -52,13 +52,13 @@ internal static class ImageLayerCache
 
         try
         {
-            var bitmap = new BitmapImage();
-            bitmap.BeginInit();
-            bitmap.CacheOption = BitmapCacheOption.OnLoad;
-            bitmap.CreateOptions = BitmapCreateOptions.IgnoreColorProfile;
-            bitmap.UriSource = new Uri(path);
-            bitmap.EndInit();
-            bitmap.Freeze();
+            // The same decode the canvas uses, so a phone photo comes in
+            // the right way up and a RAW arrives as its embedded preview.
+            var bitmap = PreviewService.Load(path, 0, CancellationToken.None);
+            if (!bitmap.IsFrozen && bitmap.CanFreeze)
+            {
+                bitmap.Freeze();
+            }
 
             if (Entries.Count >= Capacity)
             {
@@ -73,7 +73,8 @@ internal static class ImageLayerCache
         catch (Exception exception) when (exception is IOException
                                               or NotSupportedException
                                               or UnauthorizedAccessException
-                                              or System.Runtime.InteropServices.COMException)
+                                              or System.Runtime.InteropServices.COMException
+                                              or MetadataExtractor.ImageProcessingException)
         {
             return null;
         }

@@ -328,11 +328,8 @@ public partial class EditToolDialog : Window
     private void OnLivePreviewChanged(object sender, RoutedEventArgs eventArgs) =>
         ScheduleRender();
 
-    private void OnBeforeToggled(object sender, RoutedEventArgs eventArgs)
-    {
-        PreviewBadge.Text = BeforeButton.IsChecked == true ? "BEFORE" : "AFTER";
+    private void OnBeforeToggled(object sender, RoutedEventArgs eventArgs) =>
         ScheduleRender();
-    }
 
     private void OnGridToggled(object sender, RoutedEventArgs eventArgs) =>
         GridOverlay.Visibility = GridButton.IsChecked == true
@@ -372,6 +369,7 @@ public partial class EditToolDialog : Window
         var token = renderCancellation.Token;
 
         var showBase = BeforeButton.IsChecked == true || LivePreviewBox.IsChecked != true;
+        PreviewBadge.Text = showBase ? "BEFORE" : "AFTER";
         var recipe = showBase ? baseRecipe : tool.Apply(baseRecipe);
         var (outputWidth, outputHeight) = ImageRenderer.MeasureOutput(
             fullWidth,
@@ -408,22 +406,32 @@ public partial class EditToolDialog : Window
         }
     }
 
-    private async void OnOkClick(object sender, RoutedEventArgs eventArgs)
+    private void OnOkClick(object sender, RoutedEventArgs eventArgs)
     {
         Result = tool.Apply(baseRecipe);
-        if (presets is not null)
+        if (presets is { } store)
         {
-            try
-            {
-                await presets.SaveLastUsedAsync(tool.Id, tool.Serialize());
-            }
-            catch
-            {
-                // Remembering the settings is a convenience; the edit itself
-                // must not fail over it.
-            }
+            // Remembering the settings is a convenience that must neither
+            // delay the edit nor fail it, so it is not awaited.
+            _ = RememberLastUsedAsync(store, tool.Id, tool.Serialize());
         }
 
         DialogResult = true;
+    }
+
+    private static async Task RememberLastUsedAsync(
+        ToolPresetStore store,
+        string toolId,
+        string payload)
+    {
+        try
+        {
+            await store.SaveLastUsedAsync(toolId, payload);
+        }
+        catch
+        {
+            // A failed write here loses nothing but the next opening's
+            // starting point.
+        }
     }
 }

@@ -16,6 +16,16 @@ public sealed class PreviewService
             cancellationToken);
     }
 
+    /// <summary>
+    /// The decode itself, on the calling thread, for callers already off
+    /// the dispatcher - an image layer being drawn during a render.
+    /// </summary>
+    internal static BitmapSource Load(
+        string path,
+        int decodePixelWidth,
+        CancellationToken cancellationToken) =>
+        LoadCore(path, decodePixelWidth, cancellationToken);
+
     private static BitmapSource LoadCore(
         string path,
         int decodePixelWidth,
