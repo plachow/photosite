@@ -175,9 +175,24 @@ inside the editor moves the current tab to it instead of piling up new tabs.
   just enough that no empty corner is left behind;
 - **Crop** - free, original, 1:1, 4:3, 3:2, 16:9, 3:4 and 2:3, held while
   dragging any handle;
-- **Filters** - sharpen, unsharp mask, blur, Gaussian blur, pixelize, noise
-  reduction, add noise, grayscale, sepia and vignette, each with a live preview
-  and a before toggle;
+- **Tool windows** - every entry of the editor's File / Edit / Enhance /
+  Effects / Layers / View menu that ends in an ellipsis opens the same kind of
+  window: a preset strip (default, last used, and any number of saved
+  presets, kept in the catalogue), a live preview of the whole recipe with
+  the tool applied, a Before toggle, a grid where lines matter, and OK as a
+  single undo step;
+- **Enhance** - levels over a histogram with an Auto stretch; curves, master
+  and per channel, drawn on a curve editor; exposure with its own Auto;
+  colours (hue, saturation, vibrance); colour temperature with Auto and an
+  eyedropper on the preview; brighten shadows; sharpen as a simple pass, an
+  unsharp mask or a wide-radius Gaussian, optionally on luminance only; blur
+  as soft, Gaussian or motion; noise reduction; chromatic aberration; lens
+  distortion; vignetting with midpoint and feather; deinterlace;
+- **Effects** - grayscale, sepia, invert, posterize, solarize, pixelize and
+  grain (monochrome or coloured), all stacking as filter steps;
+- **Resize** - an output size on the recipe, applied on save and export so
+  the file you opened is never touched; a straighten and perspective window
+  with a grid;
 - **Layers** - arrows, lines, rectangles, ellipses, text and freehand drawing
   stay editable vector objects until export. They reorder, duplicate, hide and
   delete, and every step takes part in undo;
@@ -225,6 +240,14 @@ labels and keywords for RAW files are written to an `.xmp` sidecar.
 | Key | Action |
 | --- | --- |
 | `Ctrl+Z` / `Ctrl+Y` | Undo / redo |
+| `Ctrl+C` | Copy the selection, or the whole edited image |
+| `Ctrl+L` / `Ctrl+R` | Rotate left / right |
+| `Ctrl+0` | Auto enhance |
+| `Shift+L` / `Shift+C` | Levels / Curves |
+| `Ctrl+1` `Ctrl+2` `Ctrl+3` | Enhance exposure, adjust colours, colour temperature |
+| `Ctrl+5` / `Ctrl+6` / `Ctrl+7` | Sharpen / blur / brighten shadows |
+| `Ctrl+Shift+R` `A` `D` `V` `L` `N` | Noise reduction, chromatic aberration, lens distortion, vignetting, deinterlace, add noise |
+| `Shift+E` | Resize |
 | `Ctrl+Shift+S` | Save as |
 | `Ctrl+E` | Export |
 | `Ctrl+U` | Upload to Imgur and copy the URL |
@@ -303,8 +326,16 @@ The WPF surface sits on top of small, testable services:
   per-channel operation into one 3×256 lookup table and only runs the
   operations that genuinely need neighbouring channels per pixel.
 - `Domain/EditRecipe` is the complete non-destructive description of an edit:
-  geometry, adjustments, filters and vector layers. It compares its list
-  members by value, which is what makes undo and dirty tracking correct.
+  geometry, adjustments, filters, vector layers and the output size. It
+  compares its list members by value, which is what makes undo and dirty
+  tracking correct.
+- `EditorTools` holds the editor's tools. An `EditTool` is one immutable
+  settings record plus `Apply(recipe)`; `ToolPanelBuilder` turns getters and
+  `with` expressions into the settings panel, `ToolPresetStore` keeps named
+  and last-used settings per tool in the catalogue, and
+  `Dialogs/EditToolDialog` is the one window all of them open in. A new tool
+  is a record, an `Apply` and a dozen lines of panel description; the menu
+  entry in `MainWindow.Menu` gives it a shortcut.
 - `Services/Batch` plans every destination before writing and reports progress
   off the UI thread.
 - `Infrastructure/PhotoCatalogRepository` owns the SQLite schema and migrates

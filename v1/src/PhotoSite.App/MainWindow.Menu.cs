@@ -151,7 +151,14 @@ public partial class MainWindow
     private void OnMenuCloseEditorClick(object sender, RoutedEventArgs eventArgs) =>
         _ = LeaveEditorAsync();
 
-    private async void OnMenuCopyClick(object sender, RoutedEventArgs eventArgs)
+    private async void OnMenuCopyClick(object sender, RoutedEventArgs eventArgs) =>
+        await CopySelectionOrImageAsync();
+
+    /// <summary>
+    /// Ctrl+C in the editor: the selection when there is one, otherwise the
+    /// whole finished image.
+    /// </summary>
+    private async Task CopySelectionOrImageAsync()
     {
         if (PreviewViewer.HasSelection)
         {
@@ -252,6 +259,12 @@ public partial class MainWindow
         if (IsAutoEnhanceShortcut(key, modifiers))
         {
             OnAutoFixRequested(this, EventArgs.Empty);
+            return true;
+        }
+
+        if (key == Key.C && modifiers == ModifierKeys.Control && !PreviewViewer.HasSelection)
+        {
+            _ = CopySelectionOrImageAsync();
             return true;
         }
 

@@ -192,6 +192,11 @@ public partial class EditToolDialog : Window
                     PresetBox.SelectedItem = lastUsed;
                 }
             }
+
+            if (PresetBox.SelectedItem is null && tool.IsAtDefaults)
+            {
+                PresetBox.SelectedIndex = 0;
+            }
         }
         finally
         {

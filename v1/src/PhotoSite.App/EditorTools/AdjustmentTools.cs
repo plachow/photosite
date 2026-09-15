@@ -242,13 +242,23 @@ internal sealed class WhiteBalanceTool : AdjustmentTool<WhiteBalanceSettings>
             Tint = settings.Tint
         };
 
+    private BitmapSource? neutralRender;
+
     public override void OnPreviewPicked(
         EditToolContext context,
         double x,
         double y,
         BitmapSource displayed)
     {
-        var (red, green, blue) = SamplePatch(displayed, x, y);
+        // Sampled from the photograph with no white balance at all, so the
+        // solved values are absolute and a second click on the same patch
+        // lands on the same answer instead of chasing its own correction.
+        neutralRender ??= context.Render(
+            context.BaseRecipe with
+            {
+                Adjustments = Write(context.BaseRecipe.Adjustments, new WhiteBalanceSettings())
+            });
+        var (red, green, blue) = SamplePatch(neutralRender, x, y);
         var (temperature, tint) = AdjustmentsViewModel.SolveWhiteBalance(red, green, blue);
         Settings = new WhiteBalanceSettings(temperature, tint);
     }
@@ -478,5 +488,5 @@ internal sealed class DistortionTool : AdjustmentTool<DistortionSettings>
     protected override ToolPanelBuilder<DistortionSettings> Describe(
         ToolPanelBuilder<DistortionSettings> panel,
         EditToolContext context) =>
-        panel.Slider("Barrel / pincushion", -100, 100, s => s.Distortion, (s, v) => s with { Distortion = v });
+        panel.Slider("Correction", -100, 100, s => s.Distortion, (s, v) => s with { Distortion = v });
 }

@@ -28,6 +28,24 @@ into. They stay editable until export; nothing is ever rasterized on creation.
 **Crop region** (`CropRegion`) — a rectangle normalized to 0..1 of the source
 frame. Used both for the recipe's crop and for a transient canvas selection.
 
+**Output size** (`EditRecipe.OutputWidth`/`OutputHeight`, the Resize tool) —
+the pixel size the finished, cropped and oriented image is scaled to on save
+and export; 0 means native, one side alone keeps the aspect ratio. Layers are
+composed after it, so they keep their place at every size. Rejected synonyms:
+*resample*, *downscale* (that is the batch's resize, applied after this one).
+
+**Tool** (v1: `EditTool`, `EditToolDialog`) — one entry of the editor menu
+that opens a window: a settings record, `Apply(recipe)`, and a panel built
+from that record. Every tool opens in the same window, which owns the
+preset strip, the live preview through `ImageRenderer`, the Before toggle
+and OK as one undo step. An **adjustment tool** opens on the values the
+recipe already holds and writes them back (levels, curves, exposure — it
+never stacks); a **filter tool** appends a `FilterStep` and opens on what
+was used last time. A **tool preset** is the settings record in JSON, kept
+in the `presets` table under `tool:<id>`; the **last used** settings are a
+setting under `tool_last_used:<id>`. Rejected synonyms: *dialog*, *effect
+window*, *plugin*.
+
 **Record** (`PhotoRecord`) — one immutable row of the catalogue: the file's
 identity, its indexed metadata, and the organisation applied to it.
 

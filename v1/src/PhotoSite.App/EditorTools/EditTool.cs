@@ -68,6 +68,9 @@ internal abstract class EditTool
 
     public abstract void Reset();
 
+    /// <summary>Whether the settings are the defaults, for the preset strip.</summary>
+    public abstract bool IsAtDefaults { get; }
+
     public abstract string Serialize();
 
     public abstract bool TryDeserialize(string json);
@@ -130,6 +133,8 @@ internal abstract class EditTool<TSettings> : EditTool
     }
 
     public override void Reset() => Settings = Defaults;
+
+    public override bool IsAtDefaults => Equals(settings, Defaults);
 
     public override string Serialize() =>
         JsonSerializer.Serialize(settings, JsonOptions);

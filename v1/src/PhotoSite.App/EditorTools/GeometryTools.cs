@@ -53,7 +53,6 @@ internal sealed class StraightenTool : EditTool<StraightenSettings>
         ToolPanelBuilder<StraightenSettings> panel,
         EditToolContext context) =>
         panel
-            .Header("Straighten")
             .Slider("Angle", -45, 45, s => s.Angle, (s, v) => s with { Angle = v }, "0.0°")
             .Header("Perspective")
             .Slider("Vertical", -100, 100, s => s.Vertical, (s, v) => s with { Vertical = v })

@@ -128,11 +128,19 @@ public partial class MainWindow
         histogramCancellation?.Cancel();
         histogramCancellation?.Dispose();
         histogramCancellation = new CancellationTokenSource();
-        await Histogram.UpdateAsync(
-                PreviewViewer.DisplayedBitmap,
-                histogramCancellation.Token)
-            .ConfigureAwait(false);
-        await Dispatcher.InvokeAsync(UpdateClippingText);
+        try
+        {
+            await Histogram.UpdateAsync(
+                    PreviewViewer.DisplayedBitmap,
+                    histogramCancellation.Token)
+                .ConfigureAwait(false);
+            await Dispatcher.InvokeAsync(UpdateClippingText);
+        }
+        catch (TaskCanceledException)
+        {
+            // The window closed while the frame was being measured; the
+            // dispatcher is gone and there is nothing left to update.
+        }
     }
 
     private void UpdateClippingText()
