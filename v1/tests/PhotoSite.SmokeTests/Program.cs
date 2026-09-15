@@ -1933,6 +1933,7 @@ try
     AssertFolderNavigation(testRoot, photoRoot, nested);
     AssertRawPreviewExtraction();
     AssertImageLayer(testRoot);
+    AssertFrames();
     await AssertImportWorkflowAsync(testRoot);
     await AssertBatchProcessingAsync(testRoot, repository, previews);
 
@@ -3356,6 +3357,78 @@ static void AssertImageLayer(string testRoot)
     Assert(
         CountMarkedPixels(placeholder) > 100,
         "A layer whose file is gone keeps its place with a crossed frame.");
+}
+
+static void AssertFrames()
+{
+    var framed = ImageRenderer.Render(
+        CreateTestBitmap(100, 50, 20, 20, 20),
+        EditRecipe.Empty with { Frame = new PhotoFrame(0.1, 0xFFFFFFFF) });
+    Assert(
+        framed.PixelWidth == 110 && framed.PixelHeight == 60,
+        "A frame grows the finished image by twice its band.");
+    Assert(
+        ReadPixel(framed, 2, 2) is { Red: 255, Green: 255, Blue: 255 }
+        && ReadPixel(framed, 55, 30) is { Red: 20 },
+        "The band is the frame colour and the photograph sits inside it.");
+
+    var piece = ImageRenderer.Render(
+        CreateTestBitmap(100, 50, 20, 20, 20),
+        EditRecipe.Empty with { Frame = new PhotoFrame(0.1, 0xFFFFFFFF) },
+        new RenderRequest(RegionOverride: new CropRegion(0, 0, 0.5, 1)));
+    Assert(
+        piece.PixelWidth == 50 && ReadPixel(piece, 1, 1).Red == 20,
+        "Copying a piece of the photograph leaves the frame off.");
+
+    var lined = ImageRenderer.Render(
+        CreateTestBitmap(100, 50, 200, 200, 200),
+        EditRecipe.Empty with { Frame = new PhotoFrame(0, 0xFFFFFFFF, 0.1, 0xFF000000) });
+    Assert(
+        lined.PixelWidth == 100
+        && ReadPixel(lined, 1, 25).Red < 10
+        && ReadPixel(lined, 50, 25).Red == 200,
+        "A line alone keeps the size and paints just inside the edge.");
+
+    Assert(
+        ImageRenderer.MeasureOutput(
+            4000,
+            3000,
+            EditRecipe.Empty with
+            {
+                OutputWidth = 1000,
+                Frame = new PhotoFrame(0.1, 0xFFFFFFFF)
+            }) == (1150, 900),
+        "The frame is measured after the resize, on the shorter side.");
+    Assert(
+        EditRecipe.Empty.MeasureFrame(300, 200) == (300, 200)
+        && (EditRecipe.Empty with { Frame = new PhotoFrame(0, 0xFFFFFFFF) }).HasFrame == false,
+        "A frame without a band or a line is no frame.");
+
+    var tool = new FrameTool();
+    tool.LoadFrom(EditRecipe.Empty);
+    Assert(
+        tool.Apply(EditRecipe.Empty).Frame is { Thickness: 0.03 },
+        "Opening the frame tool on a bare recipe proposes a modest white band.");
+    tool.Settings = new FrameSettings(Thickness: 0, LineThickness: 0);
+    Assert(
+        tool.Apply(EditRecipe.Empty with { Frame = new PhotoFrame() }).Frame is null,
+        "Zero widths take the frame off the recipe.");
+    var stored = new PhotoFrame(0.05, FrameTool.Palette[4].Argb, 0.005, FrameTool.Palette[1].Argb);
+    var reread = FrameTool.ToFrame(FrameTool.FromFrame(stored));
+    Assert(
+        reread is not null
+        && Math.Abs(reread.Thickness - stored.Thickness) < 0.0001
+        && reread.Color == stored.Color
+        && Math.Abs(reread.LineThickness - stored.LineThickness) < 0.0001
+        && reread.LineColor == stored.LineColor,
+        "The frame tool reads a recipe frame back without loss.");
+
+    var roundTrip = JsonSerializer.Deserialize<EditRecipe>(
+        JsonSerializer.Serialize(EditRecipe.Empty with { Frame = stored }));
+    Assert(
+        roundTrip?.Frame == stored
+        && roundTrip != EditRecipe.Empty,
+        "A frame survives the recipe's JSON round-trip and counts as an edit.");
 }
 
 static async Task AssertToolPresetStoreAsync(PhotoCatalogRepository repository)

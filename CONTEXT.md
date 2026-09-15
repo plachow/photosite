@@ -36,6 +36,14 @@ and export; 0 means native, one side alone keeps the aspect ratio. Layers are
 composed after it, so they keep their place at every size. Rejected synonyms:
 *resample*, *downscale* (that is the batch's resize, applied after this one).
 
+**Frame** (`PhotoFrame`, `EditRecipe.Frame`) — a band of colour added
+outside the finished image on save and export, with an optional line just
+inside its edge. Its widths are fractions of the shorter side of the image
+it surrounds, measured after the resize; layers are composed before it, so
+they stay on the photograph. A copied selection is a piece of the
+photograph and carries no frame. Rejected synonyms: *border* (the thin line
+is the border), *canvas size*.
+
 **Tool** (v1: `EditTool`, `EditToolDialog`) — one entry of the editor menu
 that opens a window: a settings record, `Apply(recipe)`, and a panel built
 from that record. Every tool opens in the same window, which owns the

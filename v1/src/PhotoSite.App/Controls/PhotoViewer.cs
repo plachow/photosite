@@ -686,21 +686,32 @@ public sealed partial class PhotoViewer : FrameworkElement
         EditRecipe recipe,
         double opacity)
     {
-        var fit = GetFitScale(source, recipe);
-        var scale = Math.Max(0.0001, fit * zoom);
         var crop = GetCropPixelRect(source, recipe);
+        var local = new Rect(
+            -crop.Width / 2,
+            -crop.Height / 2,
+            crop.Width,
+            crop.Height);
 
         var group = CreateViewerTransform(source, recipe, pan);
 
         drawingContext.PushOpacity(opacity);
         drawingContext.PushTransform(group);
-        drawingContext.PushClip(
-            new RectangleGeometry(
-                new Rect(
-                    -crop.Width / 2,
-                    -crop.Height / 2,
-                    crop.Width,
-                    crop.Height)));
+        if (recipe.Frame is { IsEmpty: false } frame)
+        {
+            // The band is painted under the photograph in the same space
+            // the crop lives in, so it follows every rotation and zoom
+            // without a render of its own.
+            var band = GetFrameBand(crop, frame);
+            var framed = local;
+            framed.Inflate(band, band);
+            drawingContext.DrawRectangle(
+                FrameRenderer.CreateBrush(frame.Color),
+                null,
+                framed);
+        }
+
+        drawingContext.PushClip(new RectangleGeometry(local));
         drawingContext.DrawImage(
             source,
             new Rect(
@@ -709,9 +720,22 @@ public sealed partial class PhotoViewer : FrameworkElement
                 source.PixelWidth,
                 source.PixelHeight));
         drawingContext.Pop();
+        if (recipe.Frame is { LineThickness: > 0 } lined)
+        {
+            FrameRenderer.DrawLine(
+                drawingContext,
+                lined,
+                Math.Clamp(lined.LineThickness, 0, 0.5) * Math.Min(crop.Width, crop.Height),
+                local);
+        }
+
         drawingContext.Pop();
         drawingContext.Pop();
     }
+
+    /// <summary>The frame band in the bitmap's own pixels.</summary>
+    private static double GetFrameBand(Rect crop, PhotoFrame frame) =>
+        Math.Clamp(frame.Thickness, 0, 0.5) * Math.Min(crop.Width, crop.Height);
 
     private void DrawSelection(DrawingContext drawingContext)
     {
@@ -1035,8 +1059,13 @@ public sealed partial class PhotoViewer : FrameworkElement
         var rotation = (int)recipe.Rotation * 90;
         var swapsDimensions = rotation is 90 or 270;
         var crop = GetCropPixelRect(source, recipe);
-        var displayedWidth = swapsDimensions ? crop.Height : crop.Width;
-        var displayedHeight = swapsDimensions ? crop.Width : crop.Height;
+        // A framed photograph fits with its frame, or the band would be the
+        // first thing to leave the viewport.
+        var band = recipe.Frame is { IsEmpty: false } frame
+            ? 2 * GetFrameBand(crop, frame)
+            : 0;
+        var displayedWidth = (swapsDimensions ? crop.Height : crop.Width) + band;
+        var displayedHeight = (swapsDimensions ? crop.Width : crop.Height) + band;
         return Math.Max(
             0.0001,
             Math.Min(

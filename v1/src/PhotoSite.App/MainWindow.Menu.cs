@@ -37,6 +37,7 @@ public partial class MainWindow
             ["distortion"] = () => new DistortionTool(),
             ["straighten"] = () => new StraightenTool(),
             ["resize"] = () => new ResizeTool(),
+            ["frame"] = () => new FrameTool(),
             ["filter.vignette"] = EditorToolCatalog.Vignette,
             ["filter.deinterlace"] = EditorToolCatalog.Deinterlace,
             ["filter.addnoise"] = EditorToolCatalog.AddNoise,
@@ -58,6 +59,7 @@ public partial class MainWindow
         (Key.L, ModifierKeys.Shift, "levels"),
         (Key.C, ModifierKeys.Shift, "curves"),
         (Key.E, ModifierKeys.Shift, "resize"),
+        (Key.B, ModifierKeys.Control | ModifierKeys.Shift, "frame"),
         (Key.D1, ModifierKeys.Control, "exposure"),
         (Key.D2, ModifierKeys.Control, "colors"),
         (Key.D3, ModifierKeys.Control, "white-balance"),
@@ -125,11 +127,14 @@ public partial class MainWindow
         }
 
         var tool = CreateTool(toolId);
+        var (fullWidth, fullHeight) = ResolveFullSize(photo, source);
         var dialog = new EditToolDialog(
             tool,
             source,
             photo.EditRecipe,
-            App.Services.ToolPresets)
+            App.Services.ToolPresets,
+            fullWidth,
+            fullHeight)
         {
             Owner = this
         };
@@ -149,6 +154,31 @@ public partial class MainWindow
         // has to tell the sliders to look again.
         photo.Adjustments.NotifyAll();
         viewModel.ReportStatus($"Applied {tool.Title} · Ctrl+Z takes it back");
+    }
+
+    /// <summary>
+    /// The photograph's real pixel size. The canvas decodes a large file
+    /// reduced, so the catalogue's dimensions are preferred - turned to
+    /// agree with the decoded frame, whose EXIF rotation the catalogue does
+    /// not apply.
+    /// </summary>
+    internal static (int Width, int Height) ResolveFullSize(
+        ViewModels.PhotoItemViewModel photo,
+        System.Windows.Media.Imaging.BitmapSource decoded)
+    {
+        if (photo.Record.PixelWidth is not { } width
+            || photo.Record.PixelHeight is not { } height
+            || width <= 0
+            || height <= 0)
+        {
+            return (decoded.PixelWidth, decoded.PixelHeight);
+        }
+
+        var recordIsLandscape = width > height;
+        var decodedIsLandscape = decoded.PixelWidth > decoded.PixelHeight;
+        return recordIsLandscape == decodedIsLandscape
+            ? (width, height)
+            : (height, width);
     }
 
     private void OnMenuCloseEditorClick(object sender, RoutedEventArgs eventArgs) =>

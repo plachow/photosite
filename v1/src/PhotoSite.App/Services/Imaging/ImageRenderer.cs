@@ -16,7 +16,8 @@ internal sealed record RenderRequest(
     bool IncludeAdjustments = true,
     bool IncludeFilters = true,
     bool IncludeLayers = true,
-    int MaxDimension = 0)
+    int MaxDimension = 0,
+    bool IncludeFrame = true)
 {
     public static RenderRequest Full { get; } = new();
 
@@ -24,7 +25,8 @@ internal sealed record RenderRequest(
     public static RenderRequest GeometryOnly { get; } = new(
         IncludeAdjustments: false,
         IncludeFilters: false,
-        IncludeLayers: false);
+        IncludeLayers: false,
+        IncludeFrame: false);
 }
 
 /// <summary>
@@ -76,6 +78,15 @@ internal static class ImageRenderer
         if (request.IncludeLayers && recipe.Layers.Count > 0)
         {
             bitmap = LayerRenderer.Compose(bitmap, recipe.Layers);
+        }
+
+        // A region render is a piece of the photograph, and a piece has no
+        // frame; the whole frame does.
+        if (request.IncludeFrame
+            && request.RegionOverride is null
+            && recipe.Frame is { IsEmpty: false } frame)
+        {
+            bitmap = FrameRenderer.Compose(bitmap, frame);
         }
 
         return bitmap;
@@ -263,7 +274,8 @@ internal static class ImageRenderer
         EditRecipe recipe)
     {
         var (width, height) = MeasureFrame(sourceWidth, sourceHeight, recipe);
-        return recipe.MeasureResize(width, height);
+        var (resizedWidth, resizedHeight) = recipe.MeasureResize(width, height);
+        return recipe.MeasureFrame(resizedWidth, resizedHeight);
     }
 
     /// <summary>

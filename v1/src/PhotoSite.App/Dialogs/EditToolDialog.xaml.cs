@@ -34,7 +34,8 @@ public partial class EditToolDialog : Window
 
     private readonly EditTool tool;
     private readonly ToolPresetStore? presets;
-    private readonly BitmapSource fullSource;
+    private readonly int fullWidth;
+    private readonly int fullHeight;
     private readonly EditRecipe baseRecipe;
     private readonly EditToolContext context;
     private readonly DispatcherTimer renderTimer;
@@ -43,11 +44,19 @@ public partial class EditToolDialog : Window
     private bool isLoadingPreset;
     private bool suppressPresetReset;
 
+    /// <param name="source">
+    /// The photograph as the canvas holds it, which for a large file is a
+    /// reduced decode; <paramref name="fullWidth"/> and
+    /// <paramref name="fullHeight"/> state the real pixel size so the output
+    /// dimensions the window quotes are the ones an export will produce.
+    /// </param>
     internal EditToolDialog(
         EditTool tool,
         BitmapSource source,
         EditRecipe baseRecipe,
-        ToolPresetStore? presets)
+        ToolPresetStore? presets,
+        int fullWidth = 0,
+        int fullHeight = 0)
     {
         InitializeComponent();
         DarkWindowChrome.Apply(this);
@@ -55,7 +64,8 @@ public partial class EditToolDialog : Window
         this.tool = tool;
         this.presets = presets;
         this.baseRecipe = baseRecipe;
-        fullSource = source;
+        this.fullWidth = fullWidth > 0 ? fullWidth : source.PixelWidth;
+        this.fullHeight = fullHeight > 0 ? fullHeight : source.PixelHeight;
         Title = tool.Title;
         SettingsHeader.Text = tool.Title.ToUpperInvariant();
         HintText.Text = tool.Hint;
@@ -76,8 +86,8 @@ public partial class EditToolDialog : Window
             previewSource,
             baseRecipe,
             recipe => ImageRenderer.Render(previewSource, recipe, PreviewRequest),
-            source.PixelWidth,
-            source.PixelHeight);
+            this.fullWidth,
+            this.fullHeight);
 
         renderTimer = new DispatcherTimer
         {
@@ -364,8 +374,8 @@ public partial class EditToolDialog : Window
         var showBase = BeforeButton.IsChecked == true || LivePreviewBox.IsChecked != true;
         var recipe = showBase ? baseRecipe : tool.Apply(baseRecipe);
         var (outputWidth, outputHeight) = ImageRenderer.MeasureOutput(
-            fullSource.PixelWidth,
-            fullSource.PixelHeight,
+            fullWidth,
+            fullHeight,
             recipe);
 
         PreviewStatus.Text = "Rendering…";

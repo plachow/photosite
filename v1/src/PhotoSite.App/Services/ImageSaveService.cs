@@ -1,6 +1,7 @@
 using System.Windows.Media.Imaging;
 using PhotoSite.Controls;
 using PhotoSite.Domain;
+using PhotoSite.Services.Imaging;
 
 namespace PhotoSite.Services;
 
@@ -39,12 +40,13 @@ public sealed class ImageSaveService
             sourcePath,
             0,
             cancellationToken);
-        var crop = recipe.Crop?.ConstrainToUnit()
-            ?? new CropRegion(0, 0, 1, 1);
-        var rendered = PhotoViewer.RenderSelection(
+        // The whole recipe, frame included; a region render is for copying
+        // a piece of the photograph and leaves the frame off.
+        var rendered = ImageRenderer.Render(
             source,
             recipe,
-            crop);
+            RenderRequest.Full,
+            cancellationToken);
         await Task.Run(
             () => WriteAtomically(
                 rendered,
@@ -65,12 +67,11 @@ public sealed class ImageSaveService
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(source);
-        var crop = recipe.Crop?.ConstrainToUnit()
-            ?? new CropRegion(0, 0, 1, 1);
-        var rendered = PhotoViewer.RenderSelection(
+        var rendered = ImageRenderer.Render(
             source,
             recipe,
-            crop);
+            RenderRequest.Full,
+            cancellationToken);
         await Task.Run(
             () => WriteAtomically(
                 rendered,

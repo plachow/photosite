@@ -66,6 +66,28 @@ public readonly record struct CropRegion(
 }
 
 /// <summary>
+/// A border added around the finished image: a band of colour, optionally
+/// with a thin line just inside it. Thicknesses are fractions of the shorter
+/// side of the image they surround, so the same frame looks the same on the
+/// canvas, in a 1600 px export and in a full-size one.
+/// </summary>
+public sealed record PhotoFrame(
+    double Thickness = 0.03,
+    uint Color = 0xFFFFFFFF,
+    double LineThickness = 0,
+    uint LineColor = 0xFF111318)
+{
+    public bool IsEmpty => Thickness <= 0 && LineThickness <= 0;
+
+    /// <summary>The band in pixels for an image of the given size.</summary>
+    public int MeasureBand(int width, int height) =>
+        (int)Math.Round(Math.Clamp(Thickness, 0, 0.5) * Math.Min(width, height));
+
+    public int MeasureLine(int width, int height) =>
+        (int)Math.Round(Math.Clamp(LineThickness, 0, 0.5) * Math.Min(width, height));
+}
+
+/// <summary>
 /// The complete non-destructive description of an edit. Nothing here touches
 /// the source file: the viewer, the exporter and the batch processor all
 /// render from the original pixels plus this recipe.
@@ -101,6 +123,12 @@ public sealed record EditRecipe(
 
     public int OutputHeight { get; init; }
 
+    /// <summary>
+    /// A border around the finished image, added after the resize and the
+    /// layers so that layers keep their place on the photograph.
+    /// </summary>
+    public PhotoFrame? Frame { get; init; }
+
     public PhotoAdjustments Adjustments { get; init; } =
         PhotoAdjustments.Neutral;
 
@@ -124,6 +152,21 @@ public sealed record EditRecipe(
 
     [JsonIgnore]
     public bool HasResize => OutputWidth > 0 || OutputHeight > 0;
+
+    [JsonIgnore]
+    public bool HasFrame => Frame is { IsEmpty: false };
+
+    /// <summary>The size a finished image grows to once the frame is added.</summary>
+    public (int Width, int Height) MeasureFrame(int width, int height)
+    {
+        if (Frame is not { IsEmpty: false } frame)
+        {
+            return (width, height);
+        }
+
+        var band = frame.MeasureBand(width, height);
+        return (width + (2 * band), height + (2 * band));
+    }
 
     /// <summary>
     /// The size a finished image of <paramref name="width"/> by
@@ -238,6 +281,7 @@ public sealed record EditRecipe(
                && PerspectiveHorizontal.Equals(other.PerspectiveHorizontal)
                && OutputWidth == other.OutputWidth
                && OutputHeight == other.OutputHeight
+               && Equals(Frame, other.Frame)
                && Adjustments == other.Adjustments
                && Filters.SequenceEqual(other.Filters)
                && Layers.SequenceEqual(other.Layers);
@@ -255,6 +299,7 @@ public sealed record EditRecipe(
         hash.Add(PerspectiveHorizontal);
         hash.Add(OutputWidth);
         hash.Add(OutputHeight);
+        hash.Add(Frame);
         hash.Add(Adjustments);
         hash.Add(Filters.Count);
         foreach (var filter in Filters)

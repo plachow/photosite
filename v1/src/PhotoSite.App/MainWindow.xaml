@@ -1317,6 +1317,11 @@
                     Style="{StaticResource EditorMenuItemStyle}"
                     Tag="resize"
                     Click="OnToolMenuClick" />
+          <MenuItem Header="Borders and frames…"
+                    InputGestureText="Ctrl+Shift+B"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Tag="frame"
+                    Click="OnToolMenuClick" />
           <MenuItem Header="Crop"
                     InputGestureText="C"
                     Style="{StaticResource EditorMenuItemStyle}"

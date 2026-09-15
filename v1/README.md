@@ -195,6 +195,9 @@ inside the editor moves the current tab to it instead of piling up new tabs.
 - **Resize** - an output size on the recipe, applied on save and export so
   the file you opened is never touched; a straighten and perspective window
   with a grid;
+- **Borders and frames** - a band of colour around the finished image with
+  an optional thin line inside it, in percent of the shorter side so a preset
+  fits every photograph; the canvas paints it live and fits the framed image;
 - **Layers** - arrows, lines, rectangles, ellipses, text and freehand drawing
   stay editable vector objects until export. They reorder, duplicate, hide and
   delete, and every step takes part in undo; **Image from file as layer** puts
@@ -253,6 +256,7 @@ labels and keywords for RAW files are written to an `.xmp` sidecar.
 | `Ctrl+5` / `Ctrl+6` / `Ctrl+7` | Sharpen / blur / brighten shadows |
 | `Ctrl+Shift+R` `A` `D` `V` `L` `N` | Noise reduction, chromatic aberration, lens distortion, vignetting, deinterlace, add noise |
 | `Shift+E` | Resize |
+| `Ctrl+Shift+B` | Borders and frames |
 | `Ctrl+Shift+S` | Save as |
 | `Ctrl+E` | Export |
 | `Ctrl+U` | Upload to Imgur and copy the URL |
