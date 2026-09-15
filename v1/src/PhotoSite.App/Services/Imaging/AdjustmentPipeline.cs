@@ -85,6 +85,7 @@ internal static class AdjustmentPipeline
     {
         var channelLut = BuildChannelLut(adjustments);
         var toneGain = BuildHighlightShadowGain(adjustments);
+        var hueMatrix = BuildHueMatrix(adjustments.Hue);
         var saturation = 1 + (adjustments.Saturation / 100);
         var vibrance = adjustments.Vibrance / 100;
         var needsSaturation = adjustments.Saturation != 0 || vibrance != 0;
@@ -116,6 +117,22 @@ internal static class AdjustmentPipeline
                         red *= gain;
                         green *= gain;
                         blue *= gain;
+                    }
+
+                    if (hueMatrix is not null)
+                    {
+                        var rotatedRed = (hueMatrix[0] * red)
+                                         + (hueMatrix[1] * green)
+                                         + (hueMatrix[2] * blue);
+                        var rotatedGreen = (hueMatrix[3] * red)
+                                           + (hueMatrix[4] * green)
+                                           + (hueMatrix[5] * blue);
+                        var rotatedBlue = (hueMatrix[6] * red)
+                                          + (hueMatrix[7] * green)
+                                          + (hueMatrix[8] * blue);
+                        red = rotatedRed;
+                        green = rotatedGreen;
+                        blue = rotatedBlue;
                     }
 
                     if (needsSaturation)
@@ -159,6 +176,64 @@ internal static class AdjustmentPipeline
         red = luminance + ((red - luminance) * factor);
         green = luminance + ((green - luminance) * factor);
         blue = luminance + ((blue - luminance) * factor);
+    }
+
+    /// <summary>
+    /// Hue rotation as one 3x3 matrix: into YIQ, turn the chroma plane by the
+    /// angle, back to RGB. Luminance is the axis of the rotation, so a
+    /// pixel keeps its brightness and only its colour moves round the wheel.
+    /// </summary>
+    internal static double[]? BuildHueMatrix(double hueDegrees)
+    {
+        if (hueDegrees == 0)
+        {
+            return null;
+        }
+
+        // Negated so that a positive turn goes red, green, blue - the way
+        // every hue wheel is read - rather than the direction the I/Q axes
+        // happen to spin.
+        var angle = -Math.Clamp(hueDegrees, -180, 180) * Math.PI / 180;
+        var cos = Math.Cos(angle);
+        var sin = Math.Sin(angle);
+
+        double[] forward =
+        [
+            0.299, 0.587, 0.114,
+            0.596, -0.274, -0.322,
+            0.211, -0.523, 0.312
+        ];
+        double[] rotation =
+        [
+            1, 0, 0,
+            0, cos, -sin,
+            0, sin, cos
+        ];
+        double[] inverse =
+        [
+            1, 0.956, 0.621,
+            1, -0.272, -0.647,
+            1, -1.106, 1.703
+        ];
+
+        return Multiply(inverse, Multiply(rotation, forward));
+    }
+
+    private static double[] Multiply(double[] left, double[] right)
+    {
+        var result = new double[9];
+        for (var row = 0; row < 3; row++)
+        {
+            for (var column = 0; column < 3; column++)
+            {
+                result[(row * 3) + column] =
+                    (left[row * 3] * right[column])
+                    + (left[(row * 3) + 1] * right[3 + column])
+                    + (left[(row * 3) + 2] * right[6 + column]);
+            }
+        }
+
+        return result;
     }
 
     /// <summary>

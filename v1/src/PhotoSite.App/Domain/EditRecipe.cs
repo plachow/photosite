@@ -91,6 +91,16 @@ public sealed record EditRecipe(
 
     public double PerspectiveHorizontal { get; init; }
 
+    /// <summary>
+    /// The pixel size the finished image is scaled to, 0 meaning the native
+    /// size. One of the two at 0 keeps the aspect ratio; both set stretch.
+    /// Applied after crop and orientation and before the layers, so a layer
+    /// keeps its place on the photograph at every output size.
+    /// </summary>
+    public int OutputWidth { get; init; }
+
+    public int OutputHeight { get; init; }
+
     public PhotoAdjustments Adjustments { get; init; } =
         PhotoAdjustments.Neutral;
 
@@ -111,6 +121,30 @@ public sealed record EditRecipe(
     [JsonIgnore]
     public bool HasPixelWork =>
         !Adjustments.IsNeutral || Filters.Count > 0;
+
+    [JsonIgnore]
+    public bool HasResize => OutputWidth > 0 || OutputHeight > 0;
+
+    /// <summary>
+    /// The size a finished image of <paramref name="width"/> by
+    /// <paramref name="height"/> ends up at after the recipe's resize.
+    /// </summary>
+    public (int Width, int Height) MeasureResize(int width, int height)
+    {
+        if (!HasResize || width <= 0 || height <= 0)
+        {
+            return (width, height);
+        }
+
+        if (OutputWidth > 0 && OutputHeight > 0)
+        {
+            return (OutputWidth, OutputHeight);
+        }
+
+        return OutputWidth > 0
+            ? (OutputWidth, Math.Max(1, (int)Math.Round(height * (OutputWidth / (double)width))))
+            : (Math.Max(1, (int)Math.Round(width * (OutputHeight / (double)height))), OutputHeight);
+    }
 
     [JsonIgnore]
     public bool HasLayers => Layers.Count > 0;
@@ -202,6 +236,8 @@ public sealed record EditRecipe(
                && StraightenAngle.Equals(other.StraightenAngle)
                && PerspectiveVertical.Equals(other.PerspectiveVertical)
                && PerspectiveHorizontal.Equals(other.PerspectiveHorizontal)
+               && OutputWidth == other.OutputWidth
+               && OutputHeight == other.OutputHeight
                && Adjustments == other.Adjustments
                && Filters.SequenceEqual(other.Filters)
                && Layers.SequenceEqual(other.Layers);
@@ -217,6 +253,8 @@ public sealed record EditRecipe(
         hash.Add(StraightenAngle);
         hash.Add(PerspectiveVertical);
         hash.Add(PerspectiveHorizontal);
+        hash.Add(OutputWidth);
+        hash.Add(OutputHeight);
         hash.Add(Adjustments);
         hash.Add(Filters.Count);
         foreach (var filter in Filters)

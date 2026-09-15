@@ -274,30 +274,6 @@ public partial class MainWindow
     private void OnFlipVerticalClick(object sender, RoutedEventArgs eventArgs) =>
         viewModel.SelectedPhoto?.FlipVertical();
 
-    private void OnFiltersClick(object sender, RoutedEventArgs eventArgs)
-    {
-        if (viewModel.SelectedPhoto is not { } photo
-            || PreviewViewer.OriginalBitmap is not { } source)
-        {
-            return;
-        }
-
-        var dialog = new Dialogs.FilterDialog(source)
-        {
-            Owner = this
-        };
-        if (dialog.ShowDialog() != true || dialog.Result is not { } filter)
-        {
-            return;
-        }
-
-        // Filters stack, so the new one joins the recipe rather than replacing
-        // it; Undo removes exactly this step.
-        photo.SetFilters([.. photo.EditRecipe.Filters, filter]);
-        viewModel.ReportStatus(
-            $"Applied {filter.DisplayName} · Ctrl+Z removes it");
-    }
-
     private async void OnExportClick(object sender, RoutedEventArgs eventArgs) =>
         await ExportCurrentPhotoAsync();
 

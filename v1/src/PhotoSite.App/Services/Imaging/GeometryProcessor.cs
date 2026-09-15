@@ -8,7 +8,8 @@ namespace PhotoSite.Services.Imaging;
 internal static class GeometryProcessor
 {
     /// <summary>
-    /// Straightening and keystone correction in one resampling pass.
+    /// Straightening, keystone and lens distortion correction in one
+    /// resampling pass.
     /// </summary>
     /// <remarks>
     /// Doing them separately would resample the photograph twice and lose
@@ -22,26 +23,38 @@ internal static class GeometryProcessor
         double straightenDegrees,
         double keystoneVertical,
         double keystoneHorizontal,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        double lensDistortion = 0)
     {
         var angle = Math.Clamp(straightenDegrees, -45, 45) * Math.PI / 180;
         var vertical = Math.Clamp(keystoneVertical, -100, 100) / 100 * 0.5;
         var horizontal = Math.Clamp(keystoneHorizontal, -100, 100) / 100 * 0.5;
-        if (angle == 0 && vertical == 0 && horizontal == 0)
+        // A positive slider removes barrel distortion by pulling the corners
+        // outward, a negative one removes pincushion; a full slider moves
+        // the corner of a 3:2 frame by roughly a fifth of the half-height,
+        // which is more than any real lens needs.
+        var distortion = -Math.Clamp(lensDistortion, -100, 100) / 100 * 0.25;
+        if (angle == 0 && vertical == 0 && horizontal == 0 && distortion == 0)
         {
             return source;
         }
 
         var cos = Math.Cos(angle);
         var sin = Math.Sin(angle);
-        var scale = FindCoveringScale(cos, sin, vertical, horizontal);
-
         var width = source.Width;
         var height = source.Height;
+        var aspect = width / (double)height;
+        var scale = FindCoveringScale(
+            cos,
+            sin,
+            vertical,
+            horizontal,
+            distortion,
+            aspect);
+
         var destination = source.CloneEmpty();
         var sourcePixels = source.Pixels;
         var destinationPixels = destination.Pixels;
-        var aspect = width / (double)height;
 
         Parallel.For(
             0,
@@ -62,6 +75,7 @@ internal static class GeometryProcessor
                             vertical,
                             horizontal,
                             scale,
+                            distortion,
                             out var sourceX,
                             out var sourceY))
                     {
@@ -86,7 +100,9 @@ internal static class GeometryProcessor
 
     /// <summary>
     /// Maps a destination point back onto the source frame by undoing scale,
-    /// rotation and then both keystone shears in reverse order.
+    /// rotation, both keystone shears and finally the lens correction, in
+    /// reverse order. The lens is the first thing that ever touched the
+    /// frame, so its correction is the last thing undone.
     /// </summary>
     private static bool TryProjectToSource(
         double x,
@@ -96,6 +112,7 @@ internal static class GeometryProcessor
         double vertical,
         double horizontal,
         double scale,
+        double distortion,
         out double sourceX,
         out double sourceY)
     {
@@ -123,6 +140,14 @@ internal static class GeometryProcessor
 
         sourceX = rotatedX / verticalFactor;
         sourceY = shearedY;
+        if (distortion != 0)
+        {
+            var radiusSquared = (sourceX * sourceX) + (sourceY * sourceY);
+            var factor = 1 + (distortion * radiusSquared);
+            sourceX *= factor;
+            sourceY *= factor;
+        }
+
         return true;
     }
 
@@ -135,14 +160,23 @@ internal static class GeometryProcessor
         double cos,
         double sin,
         double vertical,
-        double horizontal)
+        double horizontal,
+        double distortion,
+        double aspect)
     {
         var low = 1.0;
         var high = 4.0;
         for (var iteration = 0; iteration < 28; iteration++)
         {
             var middle = (low + high) / 2;
-            if (CoversFrame(cos, sin, vertical, horizontal, middle))
+            if (CoversFrame(
+                    cos,
+                    sin,
+                    vertical,
+                    horizontal,
+                    distortion,
+                    aspect,
+                    middle))
             {
                 high = middle;
             }
@@ -160,11 +194,16 @@ internal static class GeometryProcessor
         double sin,
         double vertical,
         double horizontal,
+        double distortion,
+        double aspect,
         double scale)
     {
         // Sampling the edges as well as the corners matters: a keystone shear
         // bows an edge inwards, so four corner checks alone would still leave
-        // a sliver of empty pixels along the middle of a side.
+        // a sliver of empty pixels along the middle of a side. The frame is
+        // measured in half-height units, the same space Warp projects in,
+        // so a wide frame's corner sits where it really is.
+        var halfWidth = aspect / 2;
         for (var stepX = 0; stepX <= 8; stepX++)
         {
             for (var stepY = 0; stepY <= 8; stepY++)
@@ -174,7 +213,7 @@ internal static class GeometryProcessor
                     continue;
                 }
 
-                var x = (stepX / 8d) - 0.5;
+                var x = ((stepX / 8d) - 0.5) * aspect;
                 var y = (stepY / 8d) - 0.5;
                 if (!TryProjectToSource(
                         x,
@@ -184,9 +223,10 @@ internal static class GeometryProcessor
                         vertical,
                         horizontal,
                         scale,
+                        distortion,
                         out var sourceX,
                         out var sourceY)
-                    || Math.Abs(sourceX) > 0.5
+                    || Math.Abs(sourceX) > halfWidth
                     || Math.Abs(sourceY) > 0.5)
                 {
                     return false;

@@ -18,14 +18,6 @@ internal static class ImageFilters
         switch (filter.Kind)
         {
             case PhotoFilterKind.Sharpen:
-                ApplyUnsharpMask(
-                    buffer,
-                    filter.Amount,
-                    Math.Max(0.3, filter.Radius),
-                    filter.Threshold,
-                    invert: false,
-                    cancellationToken);
-                break;
             case PhotoFilterKind.UnsharpMask:
                 ApplyUnsharpMask(
                     buffer,
@@ -33,19 +25,25 @@ internal static class ImageFilters
                     Math.Max(0.3, filter.Radius),
                     filter.Threshold,
                     invert: false,
-                    cancellationToken);
+                    cancellationToken,
+                    luminanceOnly: filter.Mode == 1);
                 break;
             case PhotoFilterKind.Blur:
+            case PhotoFilterKind.GaussianBlur:
                 ApplyBlend(
                     buffer,
                     BlurCopy(buffer, Math.Max(0.5, filter.Radius), cancellationToken),
                     filter.Amount / 100,
                     cancellationToken);
                 break;
-            case PhotoFilterKind.GaussianBlur:
+            case PhotoFilterKind.MotionBlur:
                 ApplyBlend(
                     buffer,
-                    BlurCopy(buffer, Math.Max(0.5, filter.Radius), cancellationToken),
+                    MotionBlurCopy(
+                        buffer,
+                        filter.Radius,
+                        filter.Threshold,
+                        cancellationToken),
                     filter.Amount / 100,
                     cancellationToken);
                 break;
@@ -60,11 +58,15 @@ internal static class ImageFilters
                 NoiseReducer.Apply(
                     buffer,
                     filter.Amount,
-                    filter.Amount * 0.7,
+                    filter.Mode == 1 ? filter.Radius : filter.Amount * 0.7,
                     cancellationToken);
                 break;
             case PhotoFilterKind.AddNoise:
-                ApplyNoise(buffer, filter.Amount, cancellationToken);
+                ApplyNoise(
+                    buffer,
+                    filter.Amount,
+                    colored: filter.Mode == 1,
+                    cancellationToken);
                 break;
             case PhotoFilterKind.Grayscale:
                 ApplyMonochrome(buffer, filter.Amount / 100, sepia: false, cancellationToken);
@@ -73,7 +75,43 @@ internal static class ImageFilters
                 ApplyMonochrome(buffer, filter.Amount / 100, sepia: true, cancellationToken);
                 break;
             case PhotoFilterKind.Vignette:
-                ApplyVignette(buffer, filter.Amount, filter.Radius, cancellationToken);
+                ApplyVignette(
+                    buffer,
+                    filter.Amount,
+                    filter.Radius,
+                    cancellationToken,
+                    feather: filter.Threshold);
+                break;
+            case PhotoFilterKind.Deinterlace:
+                ApplyDeinterlace(
+                    buffer,
+                    filter.Mode,
+                    filter.Amount / 100,
+                    cancellationToken);
+                break;
+            case PhotoFilterKind.Invert:
+                ApplyPointOperation(
+                    buffer,
+                    filter.Amount / 100,
+                    static value => 255 - value,
+                    cancellationToken);
+                break;
+            case PhotoFilterKind.Posterize:
+                var levels = Math.Clamp((int)Math.Round(filter.Radius), 2, 64);
+                var step = 255d / (levels - 1);
+                ApplyPointOperation(
+                    buffer,
+                    filter.Amount / 100,
+                    value => Math.Round(value / step) * step,
+                    cancellationToken);
+                break;
+            case PhotoFilterKind.Solarize:
+                var flip = Math.Clamp(filter.Radius, 0, 100) * 2.55;
+                ApplyPointOperation(
+                    buffer,
+                    filter.Amount / 100,
+                    value => value > flip ? 255 - value : value,
+                    cancellationToken);
                 break;
         }
     }
@@ -84,7 +122,8 @@ internal static class ImageFilters
         double radius,
         double threshold,
         bool invert,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool luminanceOnly = false)
     {
         if (amount == 0)
         {
@@ -108,6 +147,25 @@ internal static class ImageFilters
                 for (var column = 0; column < width; column++)
                 {
                     var index = offset + (column * PixelBuffer.BytesPerPixel);
+                    if (luminanceOnly)
+                    {
+                        // One offset shared by the three channels keeps the
+                        // chroma where it was; only the brightness of the
+                        // edge changes, so no colour halo can appear.
+                        var difference =
+                            Luminance(pixels, index) - Luminance(blurredPixels, index);
+                        if (Math.Abs(difference) < thresholdBytes)
+                        {
+                            continue;
+                        }
+
+                        var delta = difference * strength;
+                        pixels[index] = ToByte(pixels[index] + delta);
+                        pixels[index + 1] = ToByte(pixels[index + 1] + delta);
+                        pixels[index + 2] = ToByte(pixels[index + 2] + delta);
+                        continue;
+                    }
+
                     for (var channel = 0; channel < 3; channel++)
                     {
                         var original = pixels[index + channel];
@@ -124,11 +182,17 @@ internal static class ImageFilters
             });
     }
 
+    private static double Luminance(byte[] pixels, int index) =>
+        (0.2126 * pixels[index + 2])
+        + (0.7152 * pixels[index + 1])
+        + (0.0722 * pixels[index]);
+
     public static void ApplyVignette(
         PixelBuffer buffer,
         double amount,
         double midpoint,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        double feather = 0)
     {
         if (amount == 0)
         {
@@ -137,6 +201,11 @@ internal static class ImageFilters
 
         var strength = Math.Clamp(amount, -100, 100) / 100;
         var center = Math.Clamp(midpoint, 1, 100) / 100;
+        // Feather is the exponent of the roll-off: 50 is the classic square
+        // law, lower bites harder at the midpoint, higher fades in gently.
+        // A recipe from before the feather existed carries 0 and keeps the
+        // square.
+        var exponent = feather <= 0 ? 2 : Math.Clamp(feather, 1, 100) / 25;
         var pixels = buffer.Pixels;
         var width = buffer.Width;
         var height = buffer.Height;
@@ -161,9 +230,9 @@ internal static class ImageFilters
                         (distance - center) / Math.Max(0.0001, 1 - center),
                         0,
                         1);
-                    // Squaring keeps the centre untouched and rolls the
+                    // The power keeps the centre untouched and rolls the
                     // darkening on gradually towards the corners.
-                    var factor = 1 - (strength * falloff * falloff);
+                    var factor = 1 - (strength * Math.Pow(falloff, exponent));
                     if (Math.Abs(factor - 1) < 0.0005)
                     {
                         continue;
@@ -452,6 +521,7 @@ internal static class ImageFilters
     private static void ApplyNoise(
         PixelBuffer buffer,
         double amount,
+        bool colored,
         CancellationToken cancellationToken)
     {
         var strength = Math.Clamp(amount, 0, 100) / 100 * 96;
@@ -477,6 +547,11 @@ internal static class ImageFilters
                     var delta = (random.NextDouble() - 0.5) * 2 * strength;
                     for (var channel = 0; channel < 3; channel++)
                     {
+                        if (colored && channel > 0)
+                        {
+                            delta = (random.NextDouble() - 0.5) * 2 * strength;
+                        }
+
                         pixels[index + channel] = ToByte(
                             pixels[index + channel] + delta);
                     }
@@ -532,6 +607,174 @@ internal static class ImageFilters
                     pixels[index] = ToByte(blue + ((targetBlue - blue) * strength));
                     pixels[index + 1] = ToByte(green + ((targetGreen - green) * strength));
                     pixels[index + 2] = ToByte(red + ((targetRed - red) * strength));
+                }
+            });
+    }
+
+    /// <summary>
+    /// Averages every pixel along one direction, the streak a moving subject
+    /// or a panning camera leaves. Samples step one pixel at a time so the
+    /// cost is pixels times length; the length is capped so a full-size
+    /// render stays within seconds.
+    /// </summary>
+    public static PixelBuffer MotionBlurCopy(
+        PixelBuffer buffer,
+        double length,
+        double angleDegrees,
+        CancellationToken cancellationToken = default)
+    {
+        var result = buffer.Clone();
+        var span = (int)Math.Round(Math.Clamp(length, 0, 200));
+        if (span < 1)
+        {
+            return result;
+        }
+
+        var angle = angleDegrees * Math.PI / 180;
+        var stepX = Math.Cos(angle);
+        var stepY = -Math.Sin(angle);
+        var width = buffer.Width;
+        var height = buffer.Height;
+        var source = buffer.Pixels;
+        var pixels = result.Pixels;
+        var half = span / 2;
+
+        Parallel.For(
+            0,
+            height,
+            new ParallelOptions { CancellationToken = cancellationToken },
+            row =>
+            {
+                var offset = row * width * PixelBuffer.BytesPerPixel;
+                for (var column = 0; column < width; column++)
+                {
+                    var sumBlue = 0;
+                    var sumGreen = 0;
+                    var sumRed = 0;
+                    var count = 0;
+                    for (var sample = -half; sample <= span - half; sample++)
+                    {
+                        var x = (int)Math.Round(column + (sample * stepX));
+                        var y = (int)Math.Round(row + (sample * stepY));
+                        if (x < 0 || x >= width || y < 0 || y >= height)
+                        {
+                            continue;
+                        }
+
+                        var index = ((y * width) + x) * PixelBuffer.BytesPerPixel;
+                        sumBlue += source[index];
+                        sumGreen += source[index + 1];
+                        sumRed += source[index + 2];
+                        count++;
+                    }
+
+                    if (count == 0)
+                    {
+                        continue;
+                    }
+
+                    var target = offset + (column * PixelBuffer.BytesPerPixel);
+                    pixels[target] = (byte)(sumBlue / count);
+                    pixels[target + 1] = (byte)(sumGreen / count);
+                    pixels[target + 2] = (byte)(sumRed / count);
+                }
+            });
+
+        return result;
+    }
+
+    /// <summary>
+    /// Rebuilds one field of an interlaced frame from the other, or blends
+    /// neighbouring lines, which is what takes the comb out of a video still.
+    /// </summary>
+    private static void ApplyDeinterlace(
+        PixelBuffer buffer,
+        int mode,
+        double weight,
+        CancellationToken cancellationToken)
+    {
+        var strength = Math.Clamp(weight, 0, 1);
+        var height = buffer.Height;
+        if (strength <= 0 || height < 3)
+        {
+            return;
+        }
+
+        var stride = buffer.Stride;
+        var pixels = buffer.Pixels;
+        var source = new byte[pixels.Length];
+        Buffer.BlockCopy(pixels, 0, source, 0, pixels.Length);
+
+        Parallel.For(
+            0,
+            height,
+            new ParallelOptions { CancellationToken = cancellationToken },
+            row =>
+            {
+                // Mode 0 keeps the even lines and rebuilds the odd ones, mode
+                // 1 the reverse; mode 2 rebuilds every line from its
+                // neighbours.
+                var rebuild = mode switch
+                {
+                    0 => row % 2 == 1,
+                    1 => row % 2 == 0,
+                    _ => true
+                };
+                if (!rebuild)
+                {
+                    return;
+                }
+
+                var above = Math.Max(0, row - 1) * stride;
+                var below = Math.Min(height - 1, row + 1) * stride;
+                var offset = row * stride;
+                for (var index = 0; index < stride; index++)
+                {
+                    var rebuilt = (source[above + index] + source[below + index]) / 2d;
+                    pixels[offset + index] = ToByte(
+                        source[offset + index]
+                        + ((rebuilt - source[offset + index]) * strength));
+                }
+            });
+    }
+
+    /// <summary>
+    /// A per-channel mapping blended in by weight - invert, posterize and
+    /// solarize are all this with a different function.
+    /// </summary>
+    private static void ApplyPointOperation(
+        PixelBuffer buffer,
+        double weight,
+        Func<double, double> map,
+        CancellationToken cancellationToken)
+    {
+        var strength = Math.Clamp(weight, 0, 1);
+        if (strength <= 0)
+        {
+            return;
+        }
+
+        var table = new byte[256];
+        for (var value = 0; value < 256; value++)
+        {
+            table[value] = ToByte(value + ((map(value) - value) * strength));
+        }
+
+        var pixels = buffer.Pixels;
+        var width = buffer.Width;
+        Parallel.For(
+            0,
+            buffer.Height,
+            new ParallelOptions { CancellationToken = cancellationToken },
+            row =>
+            {
+                var offset = row * width * PixelBuffer.BytesPerPixel;
+                for (var column = 0; column < width; column++)
+                {
+                    var index = offset + (column * PixelBuffer.BytesPerPixel);
+                    pixels[index] = table[pixels[index]];
+                    pixels[index + 1] = table[pixels[index + 1]];
+                    pixels[index + 2] = table[pixels[index + 2]];
                 }
             });
     }

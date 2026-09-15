@@ -385,14 +385,24 @@ public sealed partial class PhotoViewer : FrameworkElement
         SetSelection(null);
     }
 
-    public async Task<(int Width, int Height)> CopySelectionToClipboardAsync(
-        CancellationToken cancellationToken = default)
-    {
-        if (selection is not { } selected)
-        {
-            return default;
-        }
+    public Task<(int Width, int Height)> CopySelectionToClipboardAsync(
+        CancellationToken cancellationToken = default) =>
+        selection is { } selected
+            ? CopyToClipboardAsync(selected, cancellationToken)
+            : Task.FromResult<(int, int)>(default);
 
+    /// <summary>
+    /// Copies the whole finished image - crop, adjustments, filters and
+    /// layers - the way an export would write it.
+    /// </summary>
+    public Task<(int Width, int Height)> CopyImageToClipboardAsync(
+        CancellationToken cancellationToken = default) =>
+        CopyToClipboardAsync(null, cancellationToken);
+
+    private async Task<(int Width, int Height)> CopyToClipboardAsync(
+        CropRegion? region,
+        CancellationToken cancellationToken)
+    {
         var recipe = EditRecipe;
         var source = SourceBitmap;
         if (source is null)
@@ -409,7 +419,9 @@ public sealed partial class PhotoViewer : FrameworkElement
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        var rendered = RenderSelection(source, recipe, selected);
+        var rendered = region is { } selected
+            ? RenderSelection(source, recipe, selected)
+            : ImageRenderer.Render(source, recipe, RenderRequest.Full, cancellationToken);
         await SetClipboardImageAsync(rendered, cancellationToken);
         return (rendered.PixelWidth, rendered.PixelHeight);
     }

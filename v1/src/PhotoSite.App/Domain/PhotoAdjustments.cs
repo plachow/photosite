@@ -36,6 +36,9 @@ public sealed record PhotoAdjustments
 
     public double Tint { get; init; }
 
+    /// <summary>Hue rotation in degrees, -180..180.</summary>
+    public double Hue { get; init; }
+
     public double Gamma { get; init; } = 1;
 
     // Levels, expressed in 0..255 input space with a midtone gamma.
@@ -88,6 +91,7 @@ public sealed record PhotoAdjustments
         || Vibrance != 0
         || Temperature != 0
         || Tint != 0
+        || Hue != 0
         || Gamma != 1
         || BlackPoint != 0
         || WhitePoint != 255
@@ -108,6 +112,13 @@ public sealed record PhotoAdjustments
         Vignette != 0 || LensVignetting != 0 || LensDistortion != 0;
 
     /// <summary>
+    /// Whether the frame has to be resampled before anything else - lens
+    /// distortion is geometry and lives with straightening, not with the
+    /// per-pixel work.
+    /// </summary>
+    public bool HasDistortion => LensDistortion != 0;
+
+    /// <summary>
     /// Resets only the tonal and colour sliders, keeping detail and lens work.
     /// </summary>
     public PhotoAdjustments WithNeutralTone() =>
@@ -124,6 +135,7 @@ public sealed record PhotoAdjustments
             Vibrance = 0,
             Temperature = 0,
             Tint = 0,
+            Hue = 0,
             Gamma = 1,
             BlackPoint = 0,
             WhitePoint = 255,

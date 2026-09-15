@@ -14,6 +14,7 @@ using Microsoft.Data.Sqlite;
 using PhotoSite;
 using PhotoSite.Controls;
 using PhotoSite.Domain;
+using PhotoSite.EditorTools;
 using PhotoSite.Infrastructure;
 using PhotoSite.Services;
 using PhotoSite.Services.Batch;
@@ -1927,6 +1928,8 @@ try
         "Metadata written by exiftool should be read back during indexing.");
 
     AssertImagingPipeline();
+    AssertEditorTools();
+    await AssertToolPresetStoreAsync(repository);
     AssertFolderNavigation(testRoot, photoRoot, nested);
     AssertRawPreviewExtraction();
     await AssertImportWorkflowAsync(testRoot);
@@ -2979,6 +2982,422 @@ static void AssertImagingPipeline()
         "A full recipe should survive a JSON round-trip including layer types.");
 }
 
+static IEnumerable<T> FindDescendants<T>(DependencyObject root)
+    where T : DependencyObject
+{
+    var count = VisualTreeHelper.GetChildrenCount(root);
+    if (count == 0 && root is FrameworkElement element)
+    {
+        element.ApplyTemplate();
+        count = VisualTreeHelper.GetChildrenCount(root);
+    }
+
+    // Panels built in code have logical children before they are ever
+    // measured; walk those so a never-shown window can be inspected.
+    var children = count > 0
+        ? Enumerable.Range(0, count).Select(index => VisualTreeHelper.GetChild(root, index))
+        : LogicalTreeHelper.GetChildren(root).OfType<DependencyObject>();
+    foreach (var child in children)
+    {
+        if (child is T match)
+        {
+            yield return match;
+        }
+
+        foreach (var nested in FindDescendants<T>(child))
+        {
+            yield return nested;
+        }
+    }
+}
+
+static void AssertEditorTools()
+{
+    // A filter tool appends its step; an adjustment tool writes the
+    // recipe's sliders and reads them back, so opening it twice shows the
+    // same values it left.
+    var sharpen = new SharpenTool
+    {
+        Settings = new SharpenSettings(
+            SharpenTool.GaussianType,
+            Amount: 40,
+            GaussianRadius: 20,
+            NoiseSuppression: 5,
+            LuminanceOnly: true)
+    };
+    var sharpened = sharpen.Apply(EditRecipe.Empty);
+    Assert(
+        sharpened.Filters.Count == 1
+        && sharpened.Filters[0] is
+        {
+            Kind: PhotoFilterKind.UnsharpMask,
+            Amount: 40,
+            Radius: 20,
+            Threshold: 5,
+            Mode: 1
+        },
+        "The sharpen tool should append one unsharp-mask step with its mode.");
+    Assert(
+        sharpen.Apply(sharpened).Filters.Count == 2,
+        "Filters stack: applying the tool again appends a second step.");
+
+    var levels = new LevelsTool();
+    var withLevels = EditRecipe.Empty with
+    {
+        Adjustments = PhotoAdjustments.Neutral with { BlackPoint = 12, WhitePoint = 240 }
+    };
+    levels.LoadFrom(withLevels);
+    Assert(
+        levels.Settings == new LevelsSettings(12, 1, 240),
+        "An adjustment tool must open on the values the recipe holds.");
+    levels.Settings = levels.Settings with { MidPoint = 1.4 };
+    var adjusted = levels.Apply(withLevels);
+    Assert(
+        adjusted.Adjustments is { BlackPoint: 12, MidPoint: 1.4, WhitePoint: 240 }
+        && levels.Apply(adjusted) == adjusted,
+        "An adjustment tool replaces its slice of the adjustments and does "
+        + "not stack.");
+
+    var reset = new LevelsTool();
+    reset.LoadFrom(withLevels);
+    reset.Reset();
+    Assert(
+        reset.Apply(withLevels).Adjustments.BlackPoint == 0,
+        "Reset must return an adjustment tool to its neutral defaults.");
+
+    // Presets are the settings in JSON; a preset written by one instance
+    // must load into another and yield the same recipe.
+    var blur = new BlurTool
+    {
+        Settings = new BlurSettings(BlurTool.MotionType, 80, Length: 30, Angle: 45)
+    };
+    var loaded = new BlurTool();
+    Assert(
+        loaded.TryDeserialize(blur.Serialize())
+        && loaded.Settings == blur.Settings
+        && loaded.Apply(EditRecipe.Empty).Filters[0] is
+        {
+            Kind: PhotoFilterKind.MotionBlur,
+            Amount: 80,
+            Radius: 30,
+            Threshold: 45
+        },
+        "A tool preset must round-trip through its JSON.");
+    Assert(
+        !loaded.TryDeserialize("not json"),
+        "An unreadable preset must be refused, not thrown.");
+
+    var curves = new CurvesTool
+    {
+        Settings = new CurvesSettings
+        {
+            Red = ToneCurve.FromPoints([new CurvePoint(0, 0.2), new CurvePoint(1, 1)])
+        }
+    };
+    var curvesCopy = new CurvesTool();
+    Assert(
+        curvesCopy.TryDeserialize(curves.Serialize())
+        && curvesCopy.Settings == curves.Settings
+        && curvesCopy.Apply(EditRecipe.Empty).Adjustments.RedCurve.Points.Count == 2,
+        "Curves presets must carry the control points of every channel.");
+
+    var raised = 0;
+    var vignette = EditorToolCatalog.Vignette();
+    vignette.SettingsChanged += (_, _) => raised++;
+    vignette.Settings = vignette.Settings with { Amount = 60 };
+    vignette.Settings = vignette.Settings with { Amount = 60 };
+    Assert(
+        raised == 1,
+        "Setting equal settings must not raise a change, or the preview "
+        + "would render in a loop.");
+
+    var resize = new ResizeTool();
+    resize.LoadFrom(EditRecipe.Empty with { OutputWidth = 800 });
+    Assert(
+        resize.Settings.Width == 800 && resize.Settings.Height == 0,
+        "The resize tool reads the recipe's output size.");
+    var resized = resize.Apply(EditRecipe.Empty);
+    Assert(
+        resized.HasResize
+        && resized.MeasureResize(4000, 3000) == (800, 600)
+        && EditRecipe.Empty.MeasureResize(4000, 3000) == (4000, 3000)
+        && (EditRecipe.Empty with { OutputHeight = 300 }).MeasureResize(4000, 3000) == (400, 300),
+        "A single output dimension keeps the aspect ratio.");
+    Assert(
+        ImageRenderer.MeasureOutput(
+            4000,
+            3000,
+            EditRecipe.Empty with
+            {
+                Rotation = QuarterRotation.Clockwise90,
+                OutputWidth = 600
+            }) == (600, 800),
+        "The measured output combines orientation and the recipe resize.");
+    var renderedResize = ImageRenderer.Render(
+        CreateTestBitmap(40, 20, 120, 120, 120),
+        EditRecipe.Empty with { OutputWidth = 20 });
+    Assert(
+        renderedResize.PixelWidth == 20 && renderedResize.PixelHeight == 10,
+        "Rendering must scale the finished frame to the recipe's size.");
+
+    // Every menu entry names a tool the window can create, and every
+    // shortcut points at one of them.
+    foreach (var toolId in MainWindow.ToolIds)
+    {
+        var tool = MainWindow.CreateTool(toolId);
+        Assert(
+            tool.Id == toolId && !string.IsNullOrWhiteSpace(tool.Title),
+            $"Tool '{toolId}' must report the id it is registered under.");
+    }
+
+    Assert(
+        MainWindow.TryGetToolShortcut(Key.L, ModifierKeys.Shift) == "levels"
+        && MainWindow.TryGetToolShortcut(Key.C, ModifierKeys.Shift) == "curves"
+        && MainWindow.TryGetToolShortcut(Key.D5, ModifierKeys.Control) == "sharpen"
+        && MainWindow.TryGetToolShortcut(Key.L, ModifierKeys.None) is null
+        && MainWindow.TryGetToolShortcut(Key.D5, ModifierKeys.None) is null,
+        "Tool shortcuts must need their modifier so plain keys keep their "
+        + "old meaning (L is the line tool, 5 is a rating).");
+    Assert(
+        MainWindow.IsAutoEnhanceShortcut(Key.D0, ModifierKeys.Control)
+        && !MainWindow.IsAutoEnhanceShortcut(Key.D0, ModifierKeys.None),
+        "Ctrl+0 is auto enhance; a bare 0 still clears the colour label.");
+
+    // The new pixel work behind the tools.
+    var hueRotated = ImageRenderer.Render(
+        CreateTestBitmap(8, 8, 200, 30, 30),
+        EditRecipe.Empty with
+        {
+            Adjustments = PhotoAdjustments.Neutral with { Hue = 120 }
+        });
+    var huePixel = ReadPixel(hueRotated, 4, 4);
+    Assert(
+        huePixel.Green > huePixel.Red && huePixel.Green > huePixel.Blue,
+        "A 120 degree hue turn should make a red frame green.");
+    Assert(
+        AdjustmentPipeline.BuildHueMatrix(0) is null,
+        "No hue shift means no matrix work per pixel.");
+
+    var inverted = ImageRenderer.Render(
+        CreateTestBitmap(8, 8, 200, 100, 50),
+        EditRecipe.Empty with
+        {
+            Filters = [new FilterStep(PhotoFilterKind.Invert, 100)]
+        });
+    Assert(
+        ReadPixel(inverted, 2, 2) is { Red: 55, Green: 155, Blue: 205 },
+        "Invert should mirror every channel.");
+
+    var posterized = ImageRenderer.Render(
+        CreateGradientBitmap(64, 4),
+        EditRecipe.Empty with
+        {
+            Filters = [new FilterStep(PhotoFilterKind.Posterize, 100, 2)]
+        });
+    Assert(
+        ReadPixel(posterized, 10, 1).Red == 0 && ReadPixel(posterized, 60, 1).Red == 255,
+        "Two posterize levels leave only black and white.");
+
+    var streaked = ImageRenderer.Render(
+        CreateEdgeBitmap(64, 16),
+        EditRecipe.Empty with
+        {
+            Filters = [new FilterStep(PhotoFilterKind.MotionBlur, 100, 24, 0)]
+        });
+    var nearEdge = ReadPixel(streaked, 33, 8).Red;
+    Assert(
+        nearEdge > 20 && nearEdge < 235,
+        $"A horizontal motion blur should smear the edge, got {nearEdge}.");
+    var verticalStreak = ImageRenderer.Render(
+        CreateEdgeBitmap(64, 16),
+        EditRecipe.Empty with
+        {
+            Filters = [new FilterStep(PhotoFilterKind.MotionBlur, 100, 24, 90)]
+        });
+    Assert(
+        ReadPixel(verticalStreak, 33, 8).Red > 235,
+        "A vertical motion blur must leave a vertical edge alone.");
+
+    var combed = CreateCombBitmap(16, 16);
+    var deinterlaced = ImageRenderer.Render(
+        combed,
+        EditRecipe.Empty with
+        {
+            Filters = [new FilterStep(PhotoFilterKind.Deinterlace, 100) { Mode = 0 }]
+        });
+    Assert(
+        ReadPixel(deinterlaced, 4, 5).Red == ReadPixel(deinterlaced, 4, 4).Red,
+        "Keeping the even field must rebuild the odd lines from it.");
+
+    var luminanceSharpened = ImageRenderer.Render(
+        CreateEdgeBitmap(32, 8),
+        EditRecipe.Empty with
+        {
+            Filters = [new FilterStep(PhotoFilterKind.UnsharpMask, 200, 2, 0) { Mode = 1 }]
+        });
+    var edgePixel = ReadPixel(luminanceSharpened, 14, 4);
+    Assert(
+        edgePixel.Red == edgePixel.Green && edgePixel.Green == edgePixel.Blue,
+        "Luminance-only sharpening must not tint a grey edge.");
+
+    var barrel = ImageRenderer.Render(
+        CreateTestBitmap(64, 48, 200, 180, 160),
+        EditRecipe.Empty with
+        {
+            Adjustments = PhotoAdjustments.Neutral with { LensDistortion = -60 }
+        });
+    Assert(
+        barrel.PixelWidth == 64
+        && ReadPixel(barrel, 1, 1).Alpha == 255
+        && ReadPixel(barrel, 62, 46).Alpha == 255,
+        "Lens correction keeps the frame size and leaves no empty corner.");
+    var distortedGrid = ImageRenderer.Render(
+        CreateGradientBitmap(64, 48),
+        EditRecipe.Empty with
+        {
+            Adjustments = PhotoAdjustments.Neutral with { LensDistortion = 100 }
+        });
+    Assert(
+        ReadPixel(distortedGrid, 4, 24).Red != ReadPixel(CreateGradientBitmap(64, 48), 4, 24).Red,
+        "A full distortion slider must visibly move the edge of the frame.");
+    Assert(
+        ImageRenderer.Render(
+            CreateGradientBitmap(64, 48),
+            EditRecipe.Empty with
+            {
+                Adjustments = PhotoAdjustments.Neutral with { LensDistortion = 100 }
+            }).PixelHeight == 48,
+        "Distortion is applied in the warp and keeps the frame size.");
+
+    Assert(
+        LevelsTool.AutoLevels(HistogramData.FromBitmap(CreateGradientBitmap(256, 8)))
+            is { BlackPoint: <= 3, WhitePoint: >= 252 },
+        "Auto levels on a full-range gradient should barely move the points.");
+    var narrow = LevelsTool.AutoLevels(HistogramData.FromBitmap(CreateTestBitmap(32, 32, 100, 100, 100)));
+    Assert(
+        narrow.BlackPoint < narrow.WhitePoint,
+        "Auto levels must never cross the black and white points.");
+
+    var patch = WhiteBalanceTool.SamplePatch(CreateTestBitmap(20, 20, 180, 160, 140), 0.5, 0.5);
+    Assert(
+        Math.Abs(patch.Red - 180) < 1 && Math.Abs(patch.Green - 160) < 1 && Math.Abs(patch.Blue - 140) < 1,
+        "The eyedropper patch must average the clicked neighbourhood.");
+
+    var roundTrip = JsonSerializer.Deserialize<EditRecipe>(
+        JsonSerializer.Serialize(
+            EditRecipe.Empty with
+            {
+                OutputWidth = 1200,
+                Adjustments = PhotoAdjustments.Neutral with { Hue = -30, LensDistortion = 15 },
+                Filters = [new FilterStep(PhotoFilterKind.AddNoise, 20) { Mode = 1 }]
+            }));
+    Assert(
+        roundTrip is { OutputWidth: 1200 }
+        && roundTrip.Adjustments is { Hue: -30, LensDistortion: 15 }
+        && roundTrip.Filters[0].Mode == 1,
+        "The new recipe members must survive a JSON round-trip.");
+    var legacyStep = JsonSerializer.Deserialize<FilterStep>(
+        """{"Kind":9,"Amount":45,"Radius":55,"Threshold":0}""");
+    Assert(
+        legacyStep is { Kind: PhotoFilterKind.Vignette, Mode: 0 },
+        "A filter step stored before modes existed must load with mode 0.");
+}
+
+static async Task AssertToolPresetStoreAsync(PhotoCatalogRepository repository)
+{
+    var store = new ToolPresetStore(repository);
+    Assert(
+        await store.LoadLastUsedAsync("sharpen") is null
+        && (await store.LoadAsync("sharpen")).Count == 0,
+        "A fresh catalogue holds no tool presets.");
+
+    await store.SaveAsync("sharpen", "Portrait", """{"Type":1,"Amount":60}""");
+    await store.SaveAsync("sharpen", "Landscape", """{"Type":2,"Amount":30}""");
+    await store.SaveAsync("blur", "Soft", """{"Type":0}""");
+    await store.SaveLastUsedAsync("sharpen", """{"Type":0,"Amount":90}""");
+
+    var presets = await store.LoadAsync("sharpen");
+    Assert(
+        presets.Count == 2
+        && presets[0].Name == "Landscape"
+        && presets[1].Payload == """{"Type":1,"Amount":60}""",
+        "Presets are kept per tool and listed by name.");
+    Assert(
+        await store.LoadLastUsedAsync("sharpen") == """{"Type":0,"Amount":90}"""
+        && await store.LoadLastUsedAsync("blur") is null,
+        "The last used settings are remembered per tool.");
+
+    await store.SaveAsync("sharpen", "portrait", """{"Type":1,"Amount":70}""");
+    presets = await store.LoadAsync("sharpen");
+    Assert(
+        presets.Count == 2 && presets[1].Payload == """{"Type":1,"Amount":70}""",
+        "Saving under an existing name, in any case, replaces the preset.");
+
+    await store.DeleteAsync("sharpen", "Portrait");
+    Assert(
+        (await store.LoadAsync("sharpen")).Count == 1
+        && (await store.LoadAsync("blur")).Count == 1,
+        "Deleting a preset removes only that one.");
+}
+
+static BitmapSource CreateEdgeBitmap(int width, int height)
+{
+    var pixels = new byte[width * height * 4];
+    for (var row = 0; row < height; row++)
+    {
+        for (var column = 0; column < width; column++)
+        {
+            var value = (byte)(column < width / 2 ? 0 : 255);
+            var index = ((row * width) + column) * 4;
+            pixels[index] = value;
+            pixels[index + 1] = value;
+            pixels[index + 2] = value;
+            pixels[index + 3] = 255;
+        }
+    }
+
+    var bitmap = BitmapSource.Create(
+        width,
+        height,
+        96,
+        96,
+        PixelFormats.Bgra32,
+        null,
+        pixels,
+        width * 4);
+    bitmap.Freeze();
+    return bitmap;
+}
+
+static BitmapSource CreateCombBitmap(int width, int height)
+{
+    var pixels = new byte[width * height * 4];
+    for (var row = 0; row < height; row++)
+    {
+        var value = (byte)(row % 2 == 0 ? 200 : 40);
+        for (var column = 0; column < width; column++)
+        {
+            var index = ((row * width) + column) * 4;
+            pixels[index] = value;
+            pixels[index + 1] = value;
+            pixels[index + 2] = value;
+            pixels[index + 3] = 255;
+        }
+    }
+
+    var bitmap = BitmapSource.Create(
+        width,
+        height,
+        96,
+        96,
+        PixelFormats.Bgra32,
+        null,
+        pixels,
+        width * 4);
+    bitmap.Freeze();
+    return bitmap;
+}
+
 static BitmapSource CreateTestBitmap(
     int width,
     int height,
@@ -3123,20 +3542,38 @@ static async Task AssertWindowClosesCleanlyAsync(
                         + "without it typed text goes nowhere.");
                 }
 
-                // The filter dialog opens as its own window, so every
-                // StaticResource it names must resolve from application
-                // scope alone; a key that only exists in MainWindow's
-                // dictionary crashes the app on the Filters… click.
-                var filterDialog = new PhotoSite.Dialogs.FilterDialog(
-                    pastedBitmap);
-                if (filterDialog.FilterList.Items.Count
-                    != Enum.GetValues<PhotoFilterKind>().Length)
+                // Every tool opens in the shared tool window as its own
+                // top-level window, so every StaticResource it names must
+                // resolve from application scope alone; a key that only
+                // exists in MainWindow's dictionary crashes the app on the
+                // menu click. Building each tool's editor also proves the
+                // panel builder can describe all of them.
+                foreach (var toolId in MainWindow.ToolIds)
                 {
-                    throw new InvalidOperationException(
-                        "The filter dialog must list every filter kind.");
-                }
+                    var tool = MainWindow.CreateTool(toolId);
+                    var toolDialog = new PhotoSite.Dialogs.EditToolDialog(
+                        tool,
+                        pastedBitmap,
+                        EditRecipe.Empty,
+                        null);
+                    if (toolDialog.EditorContent is null
+                        || toolDialog.Title != tool.Title)
+                    {
+                        throw new InvalidOperationException(
+                            $"The tool window must host the editor of '{toolId}'.");
+                    }
 
-                filterDialog.Close();
+                    if (toolId == "sharpen"
+                        && FindDescendants<AdjustmentSlider>(toolDialog.EditorContent)
+                            .Count(slider => slider.Visibility == Visibility.Visible) != 3)
+                    {
+                        throw new InvalidOperationException(
+                            "The sharpen tool should show strength, radius and "
+                            + "threshold for the unsharp mask type.");
+                    }
+
+                    toolDialog.Close();
+                }
                 application.DispatcherUnhandledException += (_, eventArgs) =>
                 {
                     dispatcherException = eventArgs.Exception;
@@ -3163,6 +3600,7 @@ static async Task AssertWindowClosesCleanlyAsync(
                 window.ValidateManagerChromeForSmokeTest();
                 window.ValidateDateFilterCalendarForSmokeTest();
                 window.ValidateEditorPanelForSmokeTest();
+                window.ValidateEditorMenuForSmokeTest();
                 window.ValidateEditorTabsForSmokeTest();
                 window.ValidatePreviewWheelNavigationForSmokeTest();
                 window.Loaded += (_, _) =>

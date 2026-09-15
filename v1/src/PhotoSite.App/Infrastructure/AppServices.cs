@@ -34,6 +34,7 @@ public sealed class AppServices
         Geolocator = new ExifToolGeolocator();
         MetadataOutbox = new MetadataOutboxProcessor(Catalog, MetadataWriter);
         BatchPresets = new BatchPresetStore(Catalog);
+        ToolPresets = new EditorTools.ToolPresetStore(Catalog);
         Batch = new BatchProcessor(Previews, MetadataWriter);
         Importer = new ImportService();
     }
@@ -65,6 +66,8 @@ public sealed class AppServices
     internal MetadataOutboxProcessor MetadataOutbox { get; }
 
     internal BatchPresetStore BatchPresets { get; }
+
+    internal EditorTools.ToolPresetStore ToolPresets { get; }
 
     internal BatchProcessor Batch { get; }
 

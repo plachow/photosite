@@ -387,6 +387,120 @@
       </Setter>
     </Style>
 
+    <!-- The editor's menu bar. Headers open the same dark popup the context
+         menus use; the rows reuse the context menu item styles so a menu
+         and a right-click read as one family. -->
+    <Style x:Key="EditorMenuHeaderStyle" TargetType="MenuItem">
+      <Setter Property="Foreground" Value="#F2F4F8" />
+      <Setter Property="Padding" Value="11,5" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="MenuItem">
+            <Grid>
+              <Border x:Name="HeaderBorder"
+                      Padding="{TemplateBinding Padding}"
+                      Background="Transparent"
+                      CornerRadius="3"
+                      SnapsToDevicePixels="True">
+                <ContentPresenter VerticalAlignment="Center"
+                                  ContentSource="Header"
+                                  RecognizesAccessKey="True" />
+              </Border>
+              <Popup x:Name="PART_Popup"
+                     AllowsTransparency="True"
+                     Focusable="False"
+                     IsOpen="{Binding IsSubmenuOpen,
+                                      RelativeSource={RelativeSource TemplatedParent}}"
+                     Placement="Bottom"
+                     PlacementTarget="{Binding ElementName=HeaderBorder}"
+                     PopupAnimation="Fade"
+                     VerticalOffset="2">
+                <Border Padding="5"
+                        Background="{StaticResource RaisedBrush}"
+                        BorderBrush="#4A5160"
+                        BorderThickness="1"
+                        CornerRadius="6">
+                  <ScrollViewer MaxHeight="620"
+                                VerticalScrollBarVisibility="Auto">
+                    <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Cycle" />
+                  </ScrollViewer>
+                </Border>
+              </Popup>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsHighlighted" Value="True">
+                <Setter TargetName="HeaderBorder"
+                        Property="Background"
+                        Value="#2A3140" />
+              </Trigger>
+              <Trigger Property="IsSubmenuOpen" Value="True">
+                <Setter TargetName="HeaderBorder"
+                        Property="Background"
+                        Value="#315676" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- A menu row with a check mark for the toggles under View. -->
+    <Style x:Key="EditorMenuItemStyle" TargetType="MenuItem">
+      <Setter Property="Background" Value="{StaticResource RaisedBrush}" />
+      <Setter Property="Foreground" Value="#F2F4F8" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="MenuItem">
+            <Border x:Name="ItemBorder"
+                    MinWidth="300"
+                    Height="30"
+                    Background="{TemplateBinding Background}"
+                    CornerRadius="3"
+                    SnapsToDevicePixels="True">
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="30" />
+                  <ColumnDefinition Width="*" />
+                  <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="CheckMark"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           FontFamily="Segoe UI Symbol"
+                           Foreground="#8BC8FF"
+                           Text="✓"
+                           Visibility="Collapsed" />
+                <ContentPresenter Grid.Column="1"
+                                  Margin="3,0,12,0"
+                                  VerticalAlignment="Center"
+                                  ContentSource="Header"
+                                  RecognizesAccessKey="True" />
+                <TextBlock Grid.Column="2"
+                           Margin="12,0,12,0"
+                           VerticalAlignment="Center"
+                           Foreground="#AAB2C0"
+                           Text="{TemplateBinding InputGestureText}" />
+              </Grid>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsChecked" Value="True">
+                <Setter TargetName="CheckMark" Property="Visibility" Value="Visible" />
+              </Trigger>
+              <Trigger Property="IsHighlighted" Value="True">
+                <Setter TargetName="ItemBorder"
+                        Property="Background"
+                        Value="#315676" />
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Opacity" Value="0.45" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
     <ContextMenu x:Key="PhotoFileContextMenu"
                  Style="{StaticResource PhotoContextMenuStyle}"
                  DataContext="{Binding PlacementTarget.Tag,
@@ -987,6 +1101,7 @@
     </Grid.Resources>
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
       <RowDefinition Style="{StaticResource ManagerChromeRowStyle}" />
       <RowDefinition Height="*" />
       <RowDefinition Style="{StaticResource ManagerChromeRowStyle}" />
@@ -1104,9 +1219,308 @@
       </ScrollViewer>
     </Border>
 
+    <!-- Editor menu: the File / Edit / Enhance / Effects / Layers / View
+         strip every photo editor is expected to have. Each entry ending in
+         an ellipsis opens the shared tool window with presets and a live
+         preview; the rest act at once. Manager keeps its own toolbar. -->
+    <Border x:Name="EditorMenuBar"
+            Grid.Row="1"
+            Background="#14161C"
+            BorderBrush="#303541"
+            BorderThickness="0,0,0,1"
+            Padding="4,1">
+      <Border.Style>
+        <Style TargetType="Border">
+          <Setter Property="Visibility" Value="Collapsed" />
+          <Style.Triggers>
+            <MultiDataTrigger>
+              <MultiDataTrigger.Conditions>
+                <Condition Binding="{Binding IsEditorMode}" Value="True" />
+                <Condition Binding="{Binding IsFullscreenMode}" Value="False" />
+              </MultiDataTrigger.Conditions>
+              <Setter Property="Visibility" Value="Visible" />
+            </MultiDataTrigger>
+          </Style.Triggers>
+        </Style>
+      </Border.Style>
+      <Menu x:Name="EditorMenu"
+            Background="Transparent"
+            Foreground="#F2F4F8"
+            AutomationProperties.Name="Editor menu">
+        <MenuItem Header="_File" Style="{StaticResource EditorMenuHeaderStyle}">
+          <MenuItem Header="Save as…"
+                    InputGestureText="Ctrl+Shift+S"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Click="OnSaveAsClick" />
+          <MenuItem Header="Export…"
+                    InputGestureText="Ctrl+E"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Click="OnExportClick" />
+          <MenuItem Header="Upload to Imgur"
+                    InputGestureText="Ctrl+U"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Click="OnUploadToImgurClick" />
+          <Separator Style="{StaticResource PhotoContextMenuSeparatorStyle}" />
+          <MenuItem Header="Close editor"
+                    InputGestureText="Esc"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Click="OnMenuCloseEditorClick" />
+        </MenuItem>
+        <MenuItem Header="_Edit" Style="{StaticResource EditorMenuHeaderStyle}">
+          <MenuItem Header="Undo"
+                    InputGestureText="Ctrl+Z"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Command="{Binding SelectedPhoto.UndoEditCommand}" />
+          <MenuItem Header="Redo"
+                    InputGestureText="Ctrl+Y"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Command="{Binding SelectedPhoto.RedoEditCommand}" />
+          <Separator Style="{StaticResource PhotoContextMenuSeparatorStyle}" />
+          <MenuItem Header="Copy"
+                    InputGestureText="Ctrl+C"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    ToolTip="Copy the selection, or the whole edited image"
+                    Click="OnMenuCopyClick" />
+          <MenuItem Header="Paste as new image"
+                    InputGestureText="Ctrl+V"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Click="OnMenuPasteClick" />
+          <Separator Style="{StaticResource PhotoContextMenuSeparatorStyle}" />
+          <MenuItem Header="Rotate left"
+                    InputGestureText="Ctrl+L"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Command="{Binding SelectedPhoto.RotateLeftCommand}" />
+          <MenuItem Header="Rotate right"
+                    InputGestureText="Ctrl+R"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Command="{Binding SelectedPhoto.RotateRightCommand}" />
+          <MenuItem Header="Rotate 180°"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Click="OnMenuRotate180Click" />
+          <MenuItem Header="Flip horizontally"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Command="{Binding SelectedPhoto.FlipHorizontalCommand}" />
+          <MenuItem Header="Flip vertically"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Click="OnFlipVerticalClick" />
+          <Separator Style="{StaticResource PhotoContextMenuSeparatorStyle}" />
+          <MenuItem Header="Straighten and perspective…"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Tag="straighten"
+                    Click="OnToolMenuClick" />
+          <MenuItem Header="Resize…"
+                    InputGestureText="Shift+E"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Tag="resize"
+                    Click="OnToolMenuClick" />
+          <MenuItem Header="Crop"
+                    InputGestureText="C"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    ToolTip="Select a region; Enter crops to it"
+                    Click="OnStartSelectionClick" />
+          <MenuItem Header="Clear crop"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Click="OnClearCropClick" />
+          <Separator Style="{StaticResource PhotoContextMenuSeparatorStyle}" />
+          <MenuItem Header="Reset all edits"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Command="{Binding SelectedPhoto.ResetEditsCommand}" />
+        </MenuItem>
+        <MenuItem Header="En_hance" Style="{StaticResource EditorMenuHeaderStyle}">
+          <MenuItem Header="Auto enhance"
+                    InputGestureText="Ctrl+0"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Click="OnMenuAutoEnhanceClick" />
+          <MenuItem Header="Auto white balance"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Click="OnMenuAutoWhiteBalanceClick" />
+          <Separator Style="{StaticResource PhotoContextMenuSeparatorStyle}" />
+          <MenuItem Header="Levels…"
+                    InputGestureText="Shift+L"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Tag="levels"
+                    Click="OnToolMenuClick" />
+          <MenuItem Header="Curves…"
+                    InputGestureText="Shift+C"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Tag="curves"
+                    Click="OnToolMenuClick" />
+          <MenuItem Header="Enhance exposure…"
+                    InputGestureText="Ctrl+1"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Tag="exposure"
+                    Click="OnToolMenuClick" />
+          <MenuItem Header="Adjust colours…"
+                    InputGestureText="Ctrl+2"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Tag="colors"
+                    Click="OnToolMenuClick" />
+          <MenuItem Header="Colour temperature…"
+                    InputGestureText="Ctrl+3"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Tag="white-balance"
+                    Click="OnToolMenuClick" />
+          <MenuItem Header="Brighten shadows…"
+                    InputGestureText="Ctrl+7"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Tag="shadows"
+                    Click="OnToolMenuClick" />
+          <Separator Style="{StaticResource PhotoContextMenuSeparatorStyle}" />
+          <MenuItem Header="Sharpen…"
+                    InputGestureText="Ctrl+5"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Tag="sharpen"
+                    Click="OnToolMenuClick" />
+          <MenuItem Header="Blur…"
+                    InputGestureText="Ctrl+6"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Tag="blur"
+                    Click="OnToolMenuClick" />
+          <Separator Style="{StaticResource PhotoContextMenuSeparatorStyle}" />
+          <MenuItem Header="Noise reduction…"
+                    InputGestureText="Ctrl+Shift+R"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Tag="noise-reduction"
+                    Click="OnToolMenuClick" />
+          <MenuItem Header="Chromatic aberration…"
+                    InputGestureText="Ctrl+Shift+A"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Tag="chromatic-aberration"
+                    Click="OnToolMenuClick" />
+          <MenuItem Header="Lens distortion…"
+                    InputGestureText="Ctrl+Shift+D"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Tag="distortion"
+                    Click="OnToolMenuClick" />
+          <MenuItem Header="Vignetting…"
+                    InputGestureText="Ctrl+Shift+V"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Tag="filter.vignette"
+                    Click="OnToolMenuClick" />
+          <MenuItem Header="Deinterlace…"
+                    InputGestureText="Ctrl+Shift+L"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Tag="filter.deinterlace"
+                    Click="OnToolMenuClick" />
+        </MenuItem>
+        <MenuItem Header="Effe_cts" Style="{StaticResource EditorMenuHeaderStyle}">
+          <MenuItem Header="Grayscale…"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Tag="filter.grayscale"
+                    Click="OnToolMenuClick" />
+          <MenuItem Header="Sepia…"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Tag="filter.sepia"
+                    Click="OnToolMenuClick" />
+          <MenuItem Header="Invert…"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Tag="filter.invert"
+                    Click="OnToolMenuClick" />
+          <MenuItem Header="Posterize…"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Tag="filter.posterize"
+                    Click="OnToolMenuClick" />
+          <MenuItem Header="Solarize…"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Tag="filter.solarize"
+                    Click="OnToolMenuClick" />
+          <MenuItem Header="Pixelize…"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Tag="filter.pixelize"
+                    Click="OnToolMenuClick" />
+          <MenuItem Header="Add noise…"
+                    InputGestureText="Ctrl+Shift+N"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Tag="filter.addnoise"
+                    Click="OnToolMenuClick" />
+        </MenuItem>
+        <MenuItem Header="_Layers" Style="{StaticResource EditorMenuHeaderStyle}">
+          <MenuItem Header="Select"
+                    InputGestureText="V"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Tag="Select"
+                    Click="OnMenuAnnotationToolClick" />
+          <MenuItem Header="Arrow"
+                    InputGestureText="A"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Tag="Arrow"
+                    Click="OnMenuAnnotationToolClick" />
+          <MenuItem Header="Line"
+                    InputGestureText="L"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Tag="Line"
+                    Click="OnMenuAnnotationToolClick" />
+          <MenuItem Header="Rectangle"
+                    InputGestureText="S"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Tag="Rectangle"
+                    Click="OnMenuAnnotationToolClick" />
+          <MenuItem Header="Ellipse"
+                    InputGestureText="O"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Tag="Ellipse"
+                    Click="OnMenuAnnotationToolClick" />
+          <MenuItem Header="Text"
+                    InputGestureText="T"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Tag="Text"
+                    Click="OnMenuAnnotationToolClick" />
+          <MenuItem Header="Draw"
+                    InputGestureText="D"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Tag="Freehand"
+                    Click="OnMenuAnnotationToolClick" />
+          <Separator Style="{StaticResource PhotoContextMenuSeparatorStyle}" />
+          <MenuItem Header="Bring forward"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Click="OnLayerMoveUpClick" />
+          <MenuItem Header="Send back"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Click="OnLayerMoveDownClick" />
+          <MenuItem Header="Duplicate"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Click="OnLayerDuplicateClick" />
+          <MenuItem Header="Delete layer"
+                    InputGestureText="Del"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Click="OnLayerDeleteClick" />
+        </MenuItem>
+        <MenuItem Header="_View" Style="{StaticResource EditorMenuHeaderStyle}">
+          <MenuItem Header="Before"
+                    InputGestureText="B"
+                    IsChecked="{Binding IsChecked, ElementName=BeforeAfterButton, Mode=OneWay}"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Click="OnMenuBeforeClick" />
+          <MenuItem Header="Split comparison"
+                    IsChecked="{Binding IsChecked, ElementName=SplitCompareButton, Mode=OneWay}"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Click="OnMenuSplitClick" />
+          <MenuItem Header="Face frames"
+                    IsChecked="{Binding IsChecked, ElementName=FacesOverlayButton, Mode=OneWay}"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Click="OnMenuFacesClick" />
+          <MenuItem Header="Photo info"
+                    IsChecked="{Binding IsChecked, ElementName=MetadataPanelButton, Mode=OneWay}"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Click="OnMenuInfoClick" />
+          <Separator Style="{StaticResource PhotoContextMenuSeparatorStyle}" />
+          <MenuItem Header="Fit to window"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Click="OnMenuFitClick" />
+          <MenuItem Header="Actual size"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Click="OnMenuActualSizeClick" />
+          <MenuItem Header="Fullscreen"
+                    InputGestureText="F"
+                    Style="{StaticResource EditorMenuItemStyle}"
+                    Command="{Binding ToggleFullscreenCommand}" />
+        </MenuItem>
+      </Menu>
+    </Border>
+
     <!-- Navigation -->
     <Border x:Name="NavigationBar"
-            Grid.Row="1"
+            Grid.Row="2"
             Background="{StaticResource PanelBrush}"
             BorderBrush="#303541"
             BorderThickness="0,0,0,1"
@@ -1216,7 +1630,7 @@
       </Grid>
     </Border>
 
-    <Grid Grid.Row="2">
+    <Grid Grid.Row="3">
       <Grid.ColumnDefinitions>
         <ColumnDefinition x:Name="NavigatorColumn"
                           Width="260"
@@ -1871,11 +2285,6 @@
                           ToolTip="Split the canvas: original left, edited right"
                           Click="OnBeforeAfterChanged" />
             <Separator Margin="8,2" />
-            <Button AutomationProperties.Name="Apply a filter"
-                    Content="Filters…"
-                    Style="{StaticResource EditorActionButtonStyle}"
-                    ToolTip="Sharpen, blur, pixelize, grayscale and more"
-                    Click="OnFiltersClick" />
             <Button AutomationProperties.Name="Save current image as JPEG"
                     Content="Save as…"
                     Style="{StaticResource EditorActionButtonStyle}"
@@ -3137,7 +3546,7 @@
       </Border>
     </Grid>
 
-    <Border Grid.Row="3"
+    <Border Grid.Row="4"
             Background="{StaticResource PanelBrush}"
             BorderBrush="#303541"
             BorderThickness="0,1,0,0"

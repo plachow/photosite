@@ -2835,6 +2835,12 @@ public partial class MainWindow : Window
         var shortcutKey = eventArgs.Key == Key.System
             ? eventArgs.SystemKey
             : eventArgs.Key;
+        if (TryHandleMenuShortcut(shortcutKey, Keyboard.Modifiers))
+        {
+            eventArgs.Handled = true;
+            return;
+        }
+
         if (!viewModel.IsEditorMode
             && !viewModel.IsFullscreenMode
             && PhotoList.IsKeyboardFocusWithin

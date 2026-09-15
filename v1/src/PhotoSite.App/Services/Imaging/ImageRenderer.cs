@@ -47,6 +47,27 @@ internal static class ImageRenderer
         var buffer = RenderToBuffer(source, recipe, request, cancellationToken);
         var bitmap = buffer.ToBitmap();
 
+        if (recipe.HasResize)
+        {
+            // The recipe's size is stated for the whole finished frame; a
+            // region render (copying a selection) gets the same scale so
+            // the copied pixels match what an export of the frame would
+            // hold.
+            var (nativeWidth, nativeHeight) = MeasureFrame(
+                source.PixelWidth,
+                source.PixelHeight,
+                recipe);
+            var (outputWidth, outputHeight) = recipe.MeasureResize(
+                nativeWidth,
+                nativeHeight);
+            var scaleX = outputWidth / (double)Math.Max(1, nativeWidth);
+            var scaleY = outputHeight / (double)Math.Max(1, nativeHeight);
+            bitmap = ResizeTo(
+                bitmap,
+                Math.Max(1, (int)Math.Round(bitmap.PixelWidth * scaleX)),
+                Math.Max(1, (int)Math.Round(bitmap.PixelHeight * scaleY)));
+        }
+
         if (request.MaxDimension > 0)
         {
             bitmap = Resize(bitmap, request.MaxDimension);
@@ -89,16 +110,15 @@ internal static class ImageRenderer
         }
 
         var buffer = PixelBuffer.FromBitmap(source);
-        if (recipe.StraightenAngle != 0
-            || recipe.PerspectiveVertical != 0
-            || recipe.PerspectiveHorizontal != 0)
+        if (NeedsWarp(recipe))
         {
             buffer = GeometryProcessor.Warp(
                 buffer,
                 recipe.StraightenAngle,
                 recipe.PerspectiveVertical,
                 recipe.PerspectiveHorizontal,
-                cancellationToken);
+                cancellationToken,
+                recipe.Adjustments.LensDistortion);
         }
 
         if (!recipe.Adjustments.IsNeutral)
@@ -132,16 +152,15 @@ internal static class ImageRenderer
         var buffer = PixelBuffer.FromBitmap(source);
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (recipe.StraightenAngle != 0
-            || recipe.PerspectiveVertical != 0
-            || recipe.PerspectiveHorizontal != 0)
+        if (NeedsWarp(recipe))
         {
             buffer = GeometryProcessor.Warp(
                 buffer,
                 recipe.StraightenAngle,
                 recipe.PerspectiveVertical,
                 recipe.PerspectiveHorizontal,
-                cancellationToken);
+                cancellationToken,
+                recipe.Adjustments.LensDistortion);
         }
 
         var region = request.RegionOverride
@@ -228,11 +247,30 @@ internal static class ImageRenderer
         return rendered;
     }
 
+    private static bool NeedsWarp(EditRecipe recipe) =>
+        recipe.StraightenAngle != 0
+        || recipe.PerspectiveVertical != 0
+        || recipe.PerspectiveHorizontal != 0
+        || recipe.Adjustments.HasDistortion;
+
     /// <summary>
     /// The pixel size a recipe produces for a given source, without doing any
     /// of the work. Dialogs use it to show the resulting dimensions live.
     /// </summary>
     public static (int Width, int Height) MeasureOutput(
+        int sourceWidth,
+        int sourceHeight,
+        EditRecipe recipe)
+    {
+        var (width, height) = MeasureFrame(sourceWidth, sourceHeight, recipe);
+        return recipe.MeasureResize(width, height);
+    }
+
+    /// <summary>
+    /// The size of the cropped and oriented frame before the recipe's own
+    /// resize - the space the resize is stated against.
+    /// </summary>
+    public static (int Width, int Height) MeasureFrame(
         int sourceWidth,
         int sourceHeight,
         EditRecipe recipe)
