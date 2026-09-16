@@ -1934,6 +1934,7 @@ try
     AssertRawPreviewExtraction();
     AssertImageLayer(testRoot);
     AssertFrames();
+    AssertZoomRegionMapping();
     await AssertImportWorkflowAsync(testRoot);
     await AssertBatchProcessingAsync(testRoot, repository, previews);
 
@@ -3431,6 +3432,99 @@ static void AssertFrames()
         "A frame survives the recipe's JSON round-trip and counts as an edit.");
 }
 
+static void AssertZoomRegionMapping()
+{
+    // Four flat quadrants: whatever the orientation, the region that the
+    // zoomed preview asks for must render the same colour the full frame
+    // shows at that spot.
+    var quadrants = CreateQuadrantBitmap(80, 40);
+    foreach (var rotation in Enum.GetValues<QuarterRotation>())
+    {
+        foreach (var flipHorizontal in new[] { false, true })
+        {
+            foreach (var flipVertical in new[] { false, true })
+            {
+                var recipe = EditRecipe.Empty with
+                {
+                    Rotation = rotation,
+                    FlipHorizontal = flipHorizontal,
+                    FlipVertical = flipVertical,
+                    Crop = new CropRegion(0.1, 0.1, 0.8, 0.8)
+                };
+                var full = ImageRenderer.Render(quadrants, recipe);
+                var (frameWidth, frameHeight) = ImageRenderer.MeasureFrame(80, 40, recipe);
+                Assert(
+                    full.PixelWidth == frameWidth && full.PixelHeight == frameHeight,
+                    "The measured frame must match the rendered one.");
+
+                foreach (var rect in new[]
+                         {
+                             new Rect(0, 0, frameWidth / 2d, frameHeight / 2d),
+                             new Rect(frameWidth / 2d, frameHeight / 2d, frameWidth / 2d, frameHeight / 2d),
+                             new Rect(frameWidth / 2d, 0, frameWidth / 2d, frameHeight / 2d)
+                         })
+                {
+                    var region = PhotoSite.Dialogs.EditToolDialog.MapFrameRectToSource(
+                        rect,
+                        frameWidth,
+                        frameHeight,
+                        recipe);
+                    var piece = ImageRenderer.Render(
+                        quadrants,
+                        recipe,
+                        new RenderRequest(RegionOverride: region, IncludeLayers: false));
+                    var expected = ReadPixel(
+                        full,
+                        (int)(rect.X + (rect.Width / 2)),
+                        (int)(rect.Y + (rect.Height / 2)));
+                    var actual = ReadPixel(piece, piece.PixelWidth / 2, piece.PixelHeight / 2);
+                    Assert(
+                        Math.Abs(piece.PixelWidth - rect.Width) <= 1
+                        && Math.Abs(piece.PixelHeight - rect.Height) <= 1,
+                        $"A zoom region of {rotation}/{flipHorizontal}/{flipVertical} must render at the size of the rectangle it stands for.");
+                    Assert(
+                        expected == actual,
+                        $"A zoom region of {rotation}/{flipHorizontal}/{flipVertical} must show what the full frame shows there, got {actual} for {expected}.");
+                }
+            }
+        }
+    }
+}
+
+static BitmapSource CreateQuadrantBitmap(int width, int height)
+{
+    var pixels = new byte[width * height * 4];
+    for (var row = 0; row < height; row++)
+    {
+        for (var column = 0; column < width; column++)
+        {
+            var index = ((row * width) + column) * 4;
+            var right = column >= width / 2;
+            var bottom = row >= height / 2;
+            (pixels[index + 2], pixels[index + 1], pixels[index]) = (right, bottom) switch
+            {
+                (false, false) => ((byte)220, (byte)30, (byte)30),
+                (true, false) => ((byte)30, (byte)200, (byte)40),
+                (false, true) => ((byte)40, (byte)60, (byte)230),
+                _ => ((byte)240, (byte)220, (byte)40)
+            };
+            pixels[index + 3] = 255;
+        }
+    }
+
+    var bitmap = BitmapSource.Create(
+        width,
+        height,
+        96,
+        96,
+        PixelFormats.Bgra32,
+        null,
+        pixels,
+        width * 4);
+    bitmap.Freeze();
+    return bitmap;
+}
+
 static async Task AssertToolPresetStoreAsync(PhotoCatalogRepository repository)
 {
     var store = new ToolPresetStore(repository);
@@ -3698,6 +3792,31 @@ static async Task AssertWindowClosesCleanlyAsync(
                         throw new InvalidOperationException(
                             "The sharpen tool should show strength, radius and "
                             + "threshold for the unsharp mask type.");
+                    }
+
+                    if (toolId == "sharpen")
+                    {
+                        toolDialog.SetZoom(1, null);
+                        if (toolDialog.IsFitted || Math.Abs(toolDialog.CurrentZoom - 1) > 0.001)
+                        {
+                            throw new InvalidOperationException(
+                                "100 % must leave the fitted view for one finished "
+                                + "pixel per screen pixel.");
+                        }
+
+                        toolDialog.StepZoom(+1, null);
+                        if (Math.Abs(toolDialog.CurrentZoom - 1.5) > 0.001)
+                        {
+                            throw new InvalidOperationException(
+                                "Zooming in from 100 % must step to 150 %.");
+                        }
+
+                        toolDialog.SetFitted();
+                        if (!toolDialog.IsFitted)
+                        {
+                            throw new InvalidOperationException(
+                                "Fit must return to the whole photograph.");
+                        }
                     }
 
                     toolDialog.Close();

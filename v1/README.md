@@ -180,7 +180,10 @@ inside the editor moves the current tab to it instead of piling up new tabs.
   window: a preset strip (default, last used, and any number of saved
   presets, kept in the catalogue), a live preview of the whole recipe with
   the tool applied, a Before toggle, a grid where lines matter, and OK as a
-  single undo step;
+  single undo step. The preview fits the photograph or zooms (+/−, wheel,
+  100 %, Fit, drag to pan); zoomed, only the visible region is rendered,
+  from the full-size file at 100 % and above, so sharpening and noise are
+  judged on the pixels an export will hold;
 - **Enhance** - levels over a histogram with an Auto stretch; curves, master
   and per channel, drawn on a curve editor; exposure with its own Auto;
   colours (hue, saturation, vibrance); colour temperature with Auto and an

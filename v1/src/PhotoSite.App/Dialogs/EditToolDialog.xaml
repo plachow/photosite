@@ -102,14 +102,20 @@
               BorderBrush="#303541"
               BorderThickness="1"
               CornerRadius="4">
-        <Grid x:Name="PreviewHost">
+        <Grid x:Name="PreviewHost"
+              Background="Transparent"
+              ClipToBounds="True"
+              SizeChanged="OnPreviewHostSizeChanged"
+              MouseWheel="OnPreviewMouseWheel"
+              MouseLeftButtonDown="OnPreviewMouseDown"
+              MouseMove="OnPreviewMouseMove"
+              MouseLeftButtonUp="OnPreviewMouseUp">
           <Image x:Name="PreviewImage"
                  Margin="1"
                  HorizontalAlignment="Center"
                  VerticalAlignment="Center"
                  RenderOptions.BitmapScalingMode="HighQuality"
-                 Stretch="Uniform"
-                 MouseLeftButtonDown="OnPreviewMouseDown" />
+                 Stretch="Uniform" />
           <Rectangle x:Name="GridOverlay"
                      Margin="1"
                      HorizontalAlignment="Center"
@@ -147,6 +153,54 @@
                      VerticalAlignment="Bottom"
                      FontSize="11"
                      Foreground="#9299A7" />
+          <!-- Zoom: fit, steps, and 1:1 with the finished pixels, so
+               sharpening and noise are judged on what the export holds
+               rather than on the reduced fit preview. -->
+          <Border Margin="8"
+                  Padding="4,3"
+                  HorizontalAlignment="Right"
+                  VerticalAlignment="Top"
+                  Background="#B0111318"
+                  BorderBrush="#4A5160"
+                  BorderThickness="1"
+                  CornerRadius="4">
+            <StackPanel Orientation="Horizontal">
+              <Button MinWidth="28"
+                      Padding="6,1"
+                      AutomationProperties.Name="Zoom out"
+                      Content="−"
+                      ToolTip="Zoom out"
+                      Click="OnZoomOutClick" />
+              <TextBlock x:Name="ZoomLabel"
+                         MinWidth="64"
+                         Margin="6,0"
+                         VerticalAlignment="Center"
+                         FontSize="11"
+                         Foreground="#C8CDD8"
+                         Text="Fit"
+                         TextAlignment="Center" />
+              <Button MinWidth="28"
+                      Padding="6,1"
+                      AutomationProperties.Name="Zoom in"
+                      Content="+"
+                      ToolTip="Zoom in"
+                      Click="OnZoomInClick" />
+              <Button MinWidth="44"
+                      Margin="6,0,0,0"
+                      Padding="6,1"
+                      AutomationProperties.Name="Actual pixels"
+                      Content="100 %"
+                      ToolTip="One finished pixel per screen pixel"
+                      Click="OnZoomActualClick" />
+              <Button MinWidth="36"
+                      Margin="4,0,0,0"
+                      Padding="6,1"
+                      AutomationProperties.Name="Fit to window"
+                      Content="Fit"
+                      ToolTip="The whole photograph"
+                      Click="OnZoomFitClick" />
+            </StackPanel>
+          </Border>
         </Grid>
       </Border>
 

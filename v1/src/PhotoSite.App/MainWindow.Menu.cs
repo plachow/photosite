@@ -128,13 +128,20 @@ public partial class MainWindow
 
         var tool = CreateTool(toolId);
         var (fullWidth, fullHeight) = ResolveFullSize(photo, source);
+        // The zoomed preview wants the real pixels; a pasted image already
+        // is them, a file is decoded again at full size when first needed.
+        Func<CancellationToken, Task<System.Windows.Media.Imaging.BitmapSource>>? loadFull =
+            photo.IsTransient
+                ? null
+                : token => App.Services.Previews.LoadAsync(photo.Path, 0, token);
         var dialog = new EditToolDialog(
             tool,
             source,
             photo.EditRecipe,
             App.Services.ToolPresets,
             fullWidth,
-            fullHeight)
+            fullHeight,
+            loadFull)
         {
             Owner = this
         };
