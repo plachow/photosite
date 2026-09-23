@@ -721,6 +721,38 @@ photograph goes, which part of it is seen, how far in it will go and how the
 space is divided. What is left in the drawing layer is a wheel notch turning
 into a view, and a view turning into rectangles.
 
+## One photograph on its own
+
+A double-click on a tile — or `Enter` on the one the cursor is on — opens
+the photograph in a tab of its own. The strip along the top holds the
+manager first, which cannot be closed, and after it one tab per photograph.
+A photograph opened twice has one tab: two tabs of one file would be two
+views of one truth, and once the editor can change a photograph, two places
+to change it. For now the tab is a viewer; the editor grows into it.
+
+| in the editor | |
+|---|---|
+| the wheel, `PageDown`, `PageUp` | the next or the previous photograph, in the order the manager shows the folder — the same tab, retargeted, not a tab per page |
+| `Ctrl` and the wheel, a drag | closer, and moved about; the same sums as the comparison |
+| a middle click, `Ctrl+F` | fills the screen and gives it back; the strip of tabs goes with it |
+| `Enter` | back to the manager, standing on this photograph: the folder opened if it has to be, the tree unfolded to it, the tile chosen and scrolled into view |
+| `Esc`, the cross on the tab | closes the tab and leaves the manager where it was |
+
+**The keys are commands, not keys.** `Escape`, `Enter` and the rest are
+entries in the registry like every other, so they can be rebound with
+everything else — and a command carries a **scope**: the manager, the
+editor, or everywhere. The same key means one thing in one place and
+another in the other (`Ctrl+F` is the filter over the grid and the whole
+screen in the editor; `Enter` opens the editor from the manager and leaves
+it from the editor), and that is not a conflict, because nobody is ever in
+both. A conflict is a key two commands *reachable from the same place*
+share, and the test says so.
+
+**Closing asks nothing yet.** The tab holds nothing that is not in the file.
+When it does, [`Editor::can_close`](crates/photosite-ui/src/editor.rs) is
+the one place that has to learn to say no — the cross, the key and paging
+away all ask it, so they will all ask the same way.
+
 ## Who is in the photograph
 
 Four small networks, all of them files in a folder, none of them ours:
@@ -1039,7 +1071,9 @@ the updater start this executable to do their work and then end it.
 **The editor**, which is the last of v1 and will be rebuilt rather than
 ported: crop and geometry, the adjustment sliders, the histogram, filters,
 annotation layers, before-and-after, and export with its own preset list.
-The preset store already has a second list waiting for it.
+The preset store already has a second list waiting for it. What is there so
+far is its tab and its keys — a photograph on its own, paged through the
+folder — see *One photograph on its own* above.
 
 Importing from a memory card is **not** being brought across at all — this
 is a manager for files that are already on a disk. Nor is uploading to

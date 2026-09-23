@@ -76,9 +76,26 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
             let first = ((viewport.min.y - gap) / pitch).floor().max(0.0) as usize;
             let last = ((viewport.max.y / pitch).ceil() as usize).min(rows);
 
+            // Coming back from the editor: the tile it was opened from is
+            // brought into view, wherever the grid was left. Worked out
+            // from the position and not from a drawn tile, because the one
+            // wanted is as likely as not outside the rows being drawn.
+            if let Some(index) = app.scroll_grid_to.take() {
+                let rect = egui::Rect::from_min_size(
+                    area.min
+                        + Vec2::new(
+                            gap + (index % cols) as f32 * (tile_w + gap),
+                            gap + (index / cols) as f32 * pitch,
+                        ),
+                    Vec2::new(tile_w, tile_h),
+                );
+                ui.scroll_to_rect(rect, Some(egui::Align::Center));
+            }
+
             let mut wanted_quick: Vec<(usize, PathBuf)> = Vec::new();
             let mut wanted_sharp: Vec<(usize, PathBuf)> = Vec::new();
             let mut clicked: Option<(usize, egui::Modifiers)> = None;
+            let mut opened: Option<usize> = None;
 
             for row in first..last {
                 for col in 0..cols {
@@ -101,6 +118,10 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
                     let response = ui.interact(rect, ui.id().with(index), Sense::click());
                     if response.clicked() {
                         clicked = Some((index, ui.input(|input| input.modifiers)));
+                    }
+
+                    if response.double_clicked() {
+                        opened = Some(index);
                     }
 
                     let name = path
@@ -213,6 +234,13 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
                 } else {
                     app.select_only(index);
                 }
+            }
+
+            // A double-click opens the tile in a tab of its own. It was
+            // chosen by the first click of the two, so the tab and the
+            // selection agree.
+            if let Some(index) = opened {
+                app.edit(index);
             }
         });
 }

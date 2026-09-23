@@ -21,18 +21,20 @@ pub enum Group {
     Photo,
     Sort,
     View,
+    Editor,
     Help,
 }
 
 impl Group {
     /// Every group there is. Listing the variants a second time in a test or
     /// a menu is how one of them ends up forgotten.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::File,
         Self::Go,
         Self::Photo,
         Self::Sort,
         Self::View,
+        Self::Editor,
         Self::Help,
     ];
 
@@ -44,6 +46,7 @@ impl Group {
             Group::Photo => "group-photo",
             Group::Sort => "group-sort",
             Group::View => "group-view",
+            Group::Editor => "group-editor",
             Group::Help => "group-help",
         }
     }
@@ -51,6 +54,29 @@ impl Group {
     /// The group's translated name.
     pub fn title(self) -> String {
         crate::i18n::t(self.title_key())
+    }
+}
+
+/// Where a command can be given.
+///
+/// The manager and the editor are two places with two sets of keys, and the
+/// same key may mean a different thing in each: `Ctrl+F` opens the filter
+/// over the grid and fills the screen with the photograph in the editor.
+/// A shortcut is a conflict only when both of its commands can be reached
+/// from the same place — which is what makes rebinding possible later
+/// without every editor key having to avoid every manager key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    Manager,
+    Editor,
+    /// Both — quitting, the settings, the diagnostics.
+    Everywhere,
+}
+
+impl Scope {
+    /// Can a command of this scope be reached from `place`?
+    pub fn reaches(self, place: Scope) -> bool {
+        self == Scope::Everywhere || place == Scope::Everywhere || self == place
     }
 }
 
@@ -71,6 +97,8 @@ pub struct Command {
     /// layer asks by name ("everything in View except `view.recursive`") and
     /// that rule needs rewriting with every command added after it.
     pub toolbar: bool,
+    /// Where it can be given. See [`Scope`].
+    pub scope: Scope,
 }
 
 pub const COMMANDS: &[Command] = &[
@@ -80,6 +108,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::File,
         default_shortcut: Some("Ctrl+O"),
         toolbar: true,
+        scope: Scope::Manager,
     },
     Command {
         id: "file.rescan",
@@ -87,6 +116,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::File,
         default_shortcut: Some("F5"),
         toolbar: true,
+        scope: Scope::Manager,
     },
     Command {
         id: "file.rename",
@@ -94,6 +124,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::File,
         default_shortcut: Some("F2"),
         toolbar: false,
+        scope: Scope::Manager,
     },
     Command {
         id: "file.duplicate",
@@ -101,6 +132,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::File,
         default_shortcut: Some("Ctrl+D"),
         toolbar: false,
+        scope: Scope::Manager,
     },
     Command {
         id: "file.delete",
@@ -108,6 +140,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::File,
         default_shortcut: Some("Delete"),
         toolbar: false,
+        scope: Scope::Manager,
     },
     // Copying and moving. `Ctrl+C` and `Ctrl+V` are the file manager's own
     // keys and mean the files themselves, not a list of their names.
@@ -117,6 +150,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::File,
         default_shortcut: Some("Ctrl+C"),
         toolbar: false,
+        scope: Scope::Manager,
     },
     Command {
         id: "file.cut",
@@ -124,6 +158,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::File,
         default_shortcut: Some("Ctrl+X"),
         toolbar: false,
+        scope: Scope::Manager,
     },
     Command {
         id: "file.paste",
@@ -131,6 +166,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::File,
         default_shortcut: Some("Ctrl+V"),
         toolbar: false,
+        scope: Scope::Manager,
     },
     // Somewhere else, chosen now. Alt rather than Ctrl because the clipboard
     // already has Ctrl+C, and these are the same idea without the two steps.
@@ -140,6 +176,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::File,
         default_shortcut: Some("Alt+C"),
         toolbar: false,
+        scope: Scope::Manager,
     },
     Command {
         id: "file.move_to",
@@ -147,6 +184,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::File,
         default_shortcut: Some("Alt+X"),
         toolbar: false,
+        scope: Scope::Manager,
     },
     // And to wherever the last one went. Sorting a folder into three piles
     // is three dialogs otherwise, and two of them say the same thing.
@@ -156,6 +194,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::File,
         default_shortcut: Some("Ctrl+Shift+C"),
         toolbar: false,
+        scope: Scope::Manager,
     },
     Command {
         id: "file.new_folder",
@@ -163,6 +202,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::File,
         default_shortcut: None,
         toolbar: false,
+        scope: Scope::Manager,
     },
     Command {
         id: "file.reveal",
@@ -170,6 +210,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::File,
         default_shortcut: None,
         toolbar: false,
+        scope: Scope::Manager,
     },
     Command {
         id: "file.quit",
@@ -177,6 +218,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::File,
         default_shortcut: Some("Ctrl+Q"),
         toolbar: false,
+        scope: Scope::Everywhere,
     },
     // Where we are, which is not the same group as what is in front of us.
     Command {
@@ -185,6 +227,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Go,
         default_shortcut: Some("Alt+Left"),
         toolbar: false,
+        scope: Scope::Manager,
     },
     Command {
         id: "go.forward",
@@ -192,6 +235,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Go,
         default_shortcut: Some("Alt+Right"),
         toolbar: false,
+        scope: Scope::Manager,
     },
     Command {
         id: "go.up",
@@ -199,6 +243,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Go,
         default_shortcut: Some("Alt+Up"),
         toolbar: false,
+        scope: Scope::Manager,
     },
     // What somebody says about a photograph. None of these is on the
     // toolbar: twelve buttons for the stars and the labels would crowd out
@@ -213,6 +258,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Photo,
         default_shortcut: Some("Backtick"),
         toolbar: false,
+        scope: Scope::Manager,
     },
     Command {
         id: "photo.rate_1",
@@ -220,6 +266,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Photo,
         default_shortcut: Some("1"),
         toolbar: false,
+        scope: Scope::Manager,
     },
     Command {
         id: "photo.rate_2",
@@ -227,6 +274,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Photo,
         default_shortcut: Some("2"),
         toolbar: false,
+        scope: Scope::Manager,
     },
     Command {
         id: "photo.rate_3",
@@ -234,6 +282,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Photo,
         default_shortcut: Some("3"),
         toolbar: false,
+        scope: Scope::Manager,
     },
     Command {
         id: "photo.rate_4",
@@ -241,6 +290,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Photo,
         default_shortcut: Some("4"),
         toolbar: false,
+        scope: Scope::Manager,
     },
     Command {
         id: "photo.rate_5",
@@ -248,6 +298,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Photo,
         default_shortcut: Some("5"),
         toolbar: false,
+        scope: Scope::Manager,
     },
     Command {
         id: "photo.label_none",
@@ -255,6 +306,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Photo,
         default_shortcut: Some("0"),
         toolbar: false,
+        scope: Scope::Manager,
     },
     Command {
         id: "photo.label_red",
@@ -262,6 +314,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Photo,
         default_shortcut: Some("6"),
         toolbar: false,
+        scope: Scope::Manager,
     },
     Command {
         id: "photo.label_yellow",
@@ -269,6 +322,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Photo,
         default_shortcut: Some("7"),
         toolbar: false,
+        scope: Scope::Manager,
     },
     Command {
         id: "photo.label_green",
@@ -276,6 +330,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Photo,
         default_shortcut: Some("8"),
         toolbar: false,
+        scope: Scope::Manager,
     },
     Command {
         id: "photo.label_blue",
@@ -283,6 +338,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Photo,
         default_shortcut: Some("9"),
         toolbar: false,
+        scope: Scope::Manager,
     },
     Command {
         id: "photo.label_purple",
@@ -290,6 +346,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Photo,
         default_shortcut: None,
         toolbar: false,
+        scope: Scope::Manager,
     },
     // Both toggle. Pressing P on a photograph already picked takes the pick
     // off — otherwise there is no way back to undecided without the mouse,
@@ -300,6 +357,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Photo,
         default_shortcut: Some("P"),
         toolbar: false,
+        scope: Scope::Manager,
     },
     Command {
         id: "photo.reject",
@@ -307,6 +365,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Photo,
         default_shortcut: Some("X"),
         toolbar: false,
+        scope: Scope::Manager,
     },
     Command {
         id: "photo.select_all",
@@ -314,6 +373,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Photo,
         default_shortcut: Some("Ctrl+A"),
         toolbar: false,
+        scope: Scope::Manager,
     },
     // Two to four photographs at once. It toggles: the same key that opens
     // the comparison closes it, so nobody has to hunt for the way out.
@@ -323,6 +383,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Photo,
         default_shortcut: Some("Ctrl+K"),
         toolbar: false,
+        scope: Scope::Manager,
     },
     // Tab does nothing outside a comparison. It is here rather than read
     // straight off the keyboard because every key this application answers
@@ -333,6 +394,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Photo,
         default_shortcut: Some("Tab"),
         toolbar: false,
+        scope: Scope::Manager,
     },
     Command {
         id: "photo.compare_previous",
@@ -340,6 +402,17 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Photo,
         default_shortcut: Some("Shift+Tab"),
         toolbar: false,
+        scope: Scope::Manager,
+    },
+    // One photograph on its own, in a tab of its own. A double-click on a
+    // tile does the same; the command is here so the key can be rebound.
+    Command {
+        id: "photo.edit",
+        title_key: "command-photo-edit",
+        group: Group::Photo,
+        default_shortcut: Some("Enter"),
+        toolbar: true,
+        scope: Scope::Manager,
     },
     // Sorting is a choice among six, not six buttons. The commands exist so
     // the choice can be bound to a key and named in one place; the toolbar
@@ -353,6 +426,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Photo,
         default_shortcut: Some("Ctrl+B"),
         toolbar: true,
+        scope: Scope::Manager,
     },
     // Asking a model on this machine what is in them. Ctrl+Shift+A, next
     // to Ctrl+A which selects what it will run over.
@@ -362,6 +436,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Photo,
         default_shortcut: Some("Ctrl+Shift+A"),
         toolbar: true,
+        scope: Scope::Manager,
     },
     // Who is in the photographs. It is a window rather than a dock: naming a
     // library is a sitting somebody does once and then rarely, and a pane
@@ -372,6 +447,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Photo,
         default_shortcut: Some("Ctrl+Shift+P"),
         toolbar: true,
+        scope: Scope::Manager,
     },
     Command {
         id: "sort.taken",
@@ -379,6 +455,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Sort,
         default_shortcut: None,
         toolbar: false,
+        scope: Scope::Manager,
     },
     Command {
         id: "sort.name",
@@ -386,6 +463,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Sort,
         default_shortcut: None,
         toolbar: false,
+        scope: Scope::Manager,
     },
     Command {
         id: "sort.rating",
@@ -393,6 +471,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Sort,
         default_shortcut: None,
         toolbar: false,
+        scope: Scope::Manager,
     },
     Command {
         id: "sort.modified",
@@ -400,6 +479,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Sort,
         default_shortcut: None,
         toolbar: false,
+        scope: Scope::Manager,
     },
     Command {
         id: "sort.size",
@@ -407,6 +487,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Sort,
         default_shortcut: None,
         toolbar: false,
+        scope: Scope::Manager,
     },
     Command {
         id: "sort.dimensions",
@@ -414,6 +495,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Sort,
         default_shortcut: None,
         toolbar: false,
+        scope: Scope::Manager,
     },
     Command {
         id: "sort.reverse",
@@ -421,6 +503,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Sort,
         default_shortcut: Some("Ctrl+Shift+R"),
         toolbar: false,
+        scope: Scope::Manager,
     },
     Command {
         id: "view.recursive",
@@ -428,6 +511,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::View,
         default_shortcut: Some("Ctrl+R"),
         toolbar: false,
+        scope: Scope::Manager,
     },
     Command {
         id: "view.filter",
@@ -435,6 +519,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::View,
         default_shortcut: Some("Ctrl+F"),
         toolbar: false,
+        scope: Scope::Manager,
     },
     Command {
         id: "view.clear_filter",
@@ -442,6 +527,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::View,
         default_shortcut: Some("Ctrl+Shift+F"),
         toolbar: false,
+        scope: Scope::Manager,
     },
     Command {
         id: "view.toggle_tree",
@@ -449,6 +535,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::View,
         default_shortcut: Some("Ctrl+1"),
         toolbar: true,
+        scope: Scope::Manager,
     },
     Command {
         id: "view.toggle_preview",
@@ -456,6 +543,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::View,
         default_shortcut: Some("Ctrl+2"),
         toolbar: true,
+        scope: Scope::Manager,
     },
     Command {
         id: "view.toggle_info",
@@ -463,6 +551,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::View,
         default_shortcut: Some("Ctrl+3"),
         toolbar: true,
+        scope: Scope::Manager,
     },
     Command {
         id: "view.reset_layout",
@@ -470,6 +559,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::View,
         default_shortcut: Some("Ctrl+0"),
         toolbar: false,
+        scope: Scope::Manager,
     },
     Command {
         id: "view.bigger_tiles",
@@ -477,6 +567,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::View,
         default_shortcut: Some("Ctrl+Plus"),
         toolbar: true,
+        scope: Scope::Manager,
     },
     Command {
         id: "view.smaller_tiles",
@@ -484,6 +575,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::View,
         default_shortcut: Some("Ctrl+Minus"),
         toolbar: true,
+        scope: Scope::Manager,
     },
     // A bare F, the way every photo application spells it.
     Command {
@@ -492,6 +584,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::View,
         default_shortcut: Some("Ctrl+L"),
         toolbar: true,
+        scope: Scope::Manager,
     },
     Command {
         id: "view.fullscreen",
@@ -499,6 +592,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::View,
         default_shortcut: Some("F"),
         toolbar: false,
+        scope: Scope::Everywhere,
     },
     Command {
         id: "view.next_theme",
@@ -506,6 +600,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::View,
         default_shortcut: Some("Ctrl+T"),
         toolbar: true,
+        scope: Scope::Everywhere,
     },
     Command {
         id: "view.settings",
@@ -513,6 +608,57 @@ pub const COMMANDS: &[Command] = &[
         group: Group::View,
         default_shortcut: Some("Ctrl+Comma"),
         toolbar: true,
+        scope: Scope::Everywhere,
+    },
+    // The editor's own keys. They are commands and not hard-wired keys so
+    // that they can be rebound alongside everything else — and they share
+    // keys with the manager freely, because nobody is ever in both at once.
+    //
+    // Closing asks nothing yet: the editor holds no edits. The check for
+    // unsaved work belongs at the one place a tab is closed, not here.
+    Command {
+        id: "editor.close",
+        title_key: "command-editor-close",
+        group: Group::Editor,
+        default_shortcut: Some("Escape"),
+        toolbar: false,
+        scope: Scope::Editor,
+    },
+    // Back to the manager standing on this photograph — the folder opened,
+    // the tree unfolded to it and the tile chosen.
+    Command {
+        id: "editor.back",
+        title_key: "command-editor-back",
+        group: Group::Editor,
+        default_shortcut: Some("Enter"),
+        toolbar: false,
+        scope: Scope::Editor,
+    },
+    Command {
+        id: "editor.fullscreen",
+        title_key: "command-editor-fullscreen",
+        group: Group::Editor,
+        default_shortcut: Some("Ctrl+F"),
+        toolbar: false,
+        scope: Scope::Editor,
+    },
+    // The next and the previous photograph of the folder, in the order the
+    // manager shows them. The wheel does the same.
+    Command {
+        id: "editor.next",
+        title_key: "command-editor-next",
+        group: Group::Editor,
+        default_shortcut: Some("PageDown"),
+        toolbar: false,
+        scope: Scope::Editor,
+    },
+    Command {
+        id: "editor.previous",
+        title_key: "command-editor-previous",
+        group: Group::Editor,
+        default_shortcut: Some("PageUp"),
+        toolbar: false,
+        scope: Scope::Editor,
     },
     Command {
         id: "help.diagnostics",
@@ -520,6 +666,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Help,
         default_shortcut: Some("Ctrl+Shift+D"),
         toolbar: true,
+        scope: Scope::Everywhere,
     },
 ];
 
@@ -621,30 +768,43 @@ impl Bindings {
         self.by_command.get(id)
     }
 
-    /// Which command this shortcut belongs to.
-    pub fn command_for(&self, shortcut: &Shortcut) -> Option<&'static Command> {
+    /// Which command this shortcut belongs to, from where somebody is.
+    ///
+    /// The place matters: `Enter` opens the editor from the manager and
+    /// leaves it from the editor, and both are right.
+    pub fn command_for(&self, shortcut: &Shortcut, place: Scope) -> Option<&'static Command> {
         self.by_command
             .iter()
-            .find(|(_, bound)| *bound == shortcut)
-            .and_then(|(id, _)| command(id))
+            .filter(|(_, bound)| *bound == shortcut)
+            .filter_map(|(id, _)| command(id))
+            .find(|command| command.scope.reaches(place))
     }
 
     pub fn rebind(&mut self, id: &'static str, shortcut: Shortcut) {
         self.by_command.insert(id, shortcut);
     }
 
-    /// Shortcuts bound to more than one command. Better found by a test than
-    /// by one of them quietly not working.
+    /// Shortcuts bound to more than one command that can be reached from the
+    /// same place. Better found by a test than by one of them quietly not
+    /// working. The same key in the manager and in the editor is not a
+    /// conflict: nobody is in both.
     pub fn conflicts(&self) -> Vec<Shortcut> {
-        let mut seen: HashMap<&Shortcut, usize> = HashMap::new();
-        for shortcut in self.by_command.values() {
-            *seen.entry(shortcut).or_default() += 1;
+        let mut found: Vec<Shortcut> = Vec::new();
+        let bound: Vec<(&Command, &Shortcut)> = self
+            .by_command
+            .iter()
+            .filter_map(|(id, shortcut)| command(id).map(|command| (command, shortcut)))
+            .collect();
+        for (at, (one, shortcut)) in bound.iter().enumerate() {
+            let clashes = bound[at + 1..]
+                .iter()
+                .any(|(other, theirs)| theirs == shortcut && one.scope.reaches(other.scope));
+            if clashes && !found.contains(shortcut) {
+                found.push((*shortcut).clone());
+            }
         }
 
-        seen.into_iter()
-            .filter(|(_, count)| *count > 1)
-            .map(|(shortcut, _)| shortcut.clone())
-            .collect()
+        found
     }
 }
 
@@ -717,8 +877,79 @@ mod tests {
         let bindings = Bindings::defaults();
         let shortcut: Shortcut = "Ctrl+O".parse().unwrap();
         assert_eq!(
-            bindings.command_for(&shortcut).unwrap().id,
+            bindings.command_for(&shortcut, Scope::Manager).unwrap().id,
             "file.open_folder"
         );
+    }
+
+    /// The same key, two places, two meanings — and neither is a conflict.
+    #[test]
+    fn a_key_means_one_thing_in_the_manager_and_another_in_the_editor() {
+        let bindings = Bindings::defaults();
+        for (text, manager, editor) in [
+            ("Ctrl+F", "view.filter", "editor.fullscreen"),
+            ("Enter", "photo.edit", "editor.back"),
+        ] {
+            let shortcut: Shortcut = text.parse().unwrap();
+            assert_eq!(
+                bindings.command_for(&shortcut, Scope::Manager).unwrap().id,
+                manager,
+                "{text} in the manager"
+            );
+            assert_eq!(
+                bindings.command_for(&shortcut, Scope::Editor).unwrap().id,
+                editor,
+                "{text} in the editor"
+            );
+        }
+    }
+
+    /// Quitting is quitting wherever somebody is.
+    #[test]
+    fn a_command_for_everywhere_is_reached_from_both() {
+        let bindings = Bindings::defaults();
+        let shortcut: Shortcut = "Ctrl+Q".parse().unwrap();
+        for place in [Scope::Manager, Scope::Editor] {
+            assert_eq!(
+                bindings.command_for(&shortcut, place).unwrap().id,
+                "file.quit"
+            );
+        }
+    }
+
+    /// A manager key is not reachable from the editor: the filter does not
+    /// open over a photograph.
+    #[test]
+    fn a_manager_key_does_nothing_in_the_editor() {
+        let bindings = Bindings::defaults();
+        let shortcut: Shortcut = "Ctrl+O".parse().unwrap();
+        assert!(bindings.command_for(&shortcut, Scope::Editor).is_none());
+    }
+
+    /// Binding an editor key to something reachable from everywhere is a
+    /// clash, and one from the manager alone is not.
+    #[test]
+    fn a_conflict_is_a_key_two_reachable_commands_share() {
+        let mut bindings = Bindings::defaults();
+        bindings.rebind("editor.close", "Ctrl+O".parse().unwrap());
+        assert!(
+            bindings.conflicts().is_empty(),
+            "{:?}",
+            bindings.conflicts()
+        );
+
+        bindings.rebind("editor.close", "Ctrl+Q".parse().unwrap());
+        assert_eq!(
+            bindings.conflicts(),
+            vec!["Ctrl+Q".parse::<Shortcut>().unwrap()]
+        );
+    }
+
+    #[test]
+    fn every_editor_command_is_reached_only_from_the_editor() {
+        for command in COMMANDS.iter().filter(|c| c.id.starts_with("editor.")) {
+            assert_eq!(command.scope, Scope::Editor, "{}", command.id);
+            assert_eq!(command.group, Group::Editor, "{}", command.id);
+        }
     }
 }

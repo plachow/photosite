@@ -18,6 +18,7 @@ mod clipboard;
 mod compare;
 mod describe;
 mod docks;
+mod editor;
 mod files;
 mod filter;
 mod grid;
@@ -31,7 +32,7 @@ mod theme;
 use anyhow::Result;
 use eframe::egui;
 use photosite_core::catalog::NewPhoto;
-use photosite_core::commands::{Bindings, Group, Shortcut};
+use photosite_core::commands::{Bindings, Group, Scope, Shortcut};
 use photosite_core::compare::Compare;
 use photosite_core::domain::{ColorLabel, Flag, Photo, PhotoId, Sort, SortField};
 use photosite_core::filter::{Facets, Filter};
@@ -92,6 +93,7 @@ fn main() -> Result<()> {
     let mut open_people = false;
     let mut open_batch = false;
     let mut open_describe = false;
+    let mut open_editor = false;
     let mut compare = 0usize;
     let mut search: Option<String> = None;
     let mut folder: Option<PathBuf> = None;
@@ -113,6 +115,7 @@ fn main() -> Result<()> {
             "--open-people" => open_people = true,
             "--open-batch" => open_batch = true,
             "--open-describe" => open_describe = true,
+            "--open-editor" => open_editor = true,
             // Opens straight into a comparison of the first few. Like
             // `--open-filter`, it exists so that a view which normally needs
             // a selection and a key can be seen from a command line.
@@ -208,6 +211,14 @@ fn main() -> Result<()> {
                 }
 
                 app.run_for_shot("photo.compare");
+            }
+
+            if open_editor {
+                if app.selected.is_none() && app.count() > 0 {
+                    app.select_only(0);
+                }
+
+                app.run_for_shot("photo.edit");
             }
             app.dress(&cc.egui_ctx);
             Ok(Box::new(app))
@@ -408,6 +419,12 @@ pub struct App {
     /// The folder the tree on the left should scroll to. Set on opening, and
     /// taken by the tree straight away.
     pub scroll_tree_to: Option<PathBuf>,
+    /// The tile the grid should scroll to, as a position. Set on coming
+    /// back from the editor, and taken by the grid straight away.
+    pub scroll_grid_to: Option<usize>,
+    /// The strip of tabs: the manager, then every photograph opened on its
+    /// own. See [`editor::Tabs`].
+    pub tabs: editor::Tabs,
 
     /// How the decoding threads can ask for a repaint. Without it the UI
     /// would have to check regularly whether anything had arrived, which
@@ -575,6 +592,8 @@ impl App {
             folder_dialog: None,
             clipboard: clipboard::Held::default(),
             scroll_tree_to: None,
+            scroll_grid_to: None,
+            tabs: editor::Tabs::default(),
             selftest: false,
             shot: None,
             frames: 0,
@@ -1332,7 +1351,7 @@ impl App {
         self.run(id, &ctx);
     }
 
-    fn run(&mut self, id: &str, ctx: &egui::Context) {
+    pub fn run(&mut self, id: &str, ctx: &egui::Context) {
         match id {
             "file.rescan" => {
                 if let Some(folder) = self.folder.clone() {
@@ -1360,8 +1379,19 @@ impl App {
             "view.as_list" => self.settings.gallery.as_list = !self.settings.gallery.as_list,
             "view.fullscreen" => {
                 self.fullscreen = !self.fullscreen;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
+                self.apply_fullscreen(ctx);
             }
+            "photo.edit" => self.edit_chosen(),
+            "editor.close" => {
+                self.close_tab(self.tabs.active(), ctx);
+            }
+            "editor.back" => self.editor_back(ctx),
+            "editor.fullscreen" => {
+                self.tabs.fullscreen = !self.tabs.fullscreen;
+                self.apply_fullscreen(ctx);
+            }
+            "editor.next" => self.page_editor(1),
+            "editor.previous" => self.page_editor(-1),
             "view.settings" => self.show_settings = !self.show_settings,
             "photo.batch" => batch::open(self),
             "photo.describe" => describe::open(self),
@@ -1570,8 +1600,132 @@ impl App {
     /// By path, because a comparison outlives a re-sort. It answers `None`
     /// for a photograph the filter has since hidden, and then the rating
     /// keys do nothing rather than landing on the wrong row.
-    fn position_of(&self, path: &Path) -> Option<usize> {
+    pub fn position_of(&self, path: &Path) -> Option<usize> {
         (0..self.count()).find(|at| self.photo(*at).map(|photo| photo.path.as_path()) == Some(path))
+    }
+
+    /// The photograph so many places on from this one, in the order the
+    /// gallery shows. `None` at either end, and for a photograph that is no
+    /// longer in the gallery at all.
+    pub fn neighbour_of(&self, path: &Path, by: isize) -> Option<PathBuf> {
+        let at = self.position_of(path)?;
+        let to = at.checked_add_signed(by)?;
+        self.photo(to).map(|photo| photo.path.clone())
+    }
+
+    /// Where the keys land: in the editor when a photograph is in front,
+    /// otherwise in the manager.
+    fn scope(&self) -> Scope {
+        if self.tabs.manager_is_active() {
+            Scope::Manager
+        } else {
+            Scope::Editor
+        }
+    }
+
+    /// Opens the tile at this position in a tab of its own.
+    pub fn edit(&mut self, at: usize) {
+        let Some(path) = self.photo(at).map(|photo| photo.path.clone()) else {
+            return;
+        };
+
+        self.tabs.open(path);
+    }
+
+    /// `Enter` in the manager: the tile the cursor is on, or a word about
+    /// there being none.
+    fn edit_chosen(&mut self) {
+        match self.selected {
+            Some(at) => self.edit(at),
+            None => self.status = t!("editor-nothing-chosen"),
+        }
+    }
+
+    /// Brings a tab to the front. The screen follows: the editor's
+    /// fullscreen is the editor's, and the manager is never shown in it.
+    pub fn activate_tab(&mut self, tab: usize, ctx: &egui::Context) {
+        self.tabs.activate(tab);
+        self.apply_fullscreen(ctx);
+    }
+
+    /// Closes a tab — from its cross or from the key. The one place the
+    /// question about unsaved work will be asked, once there is any.
+    pub fn close_tab(&mut self, tab: usize, ctx: &egui::Context) -> bool {
+        let may = self
+            .tabs
+            .editors()
+            .get(tab.wrapping_sub(1))
+            .is_some_and(editor::Editor::can_close);
+        if !may {
+            return false;
+        }
+
+        self.tabs.close(tab);
+        self.apply_fullscreen(ctx);
+        true
+    }
+
+    /// `Enter` in the editor: the tab closes and the manager stands on its
+    /// photograph — the folder opened if it has to be, the tree unfolded to
+    /// it, the tile chosen and scrolled into view.
+    fn editor_back(&mut self, ctx: &egui::Context) {
+        let tab = self.tabs.active();
+        let Some(path) = self.tabs.active_editor().map(|editor| editor.path.clone()) else {
+            return;
+        };
+
+        if !self.close_tab(tab, ctx) {
+            return;
+        }
+
+        self.tabs.activate(editor::Tabs::MANAGER);
+        self.apply_fullscreen(ctx);
+        self.show_in_manager(&path);
+    }
+
+    /// Puts the manager on a photograph, wherever it is. The folder is
+    /// opened only if the photograph is not already in the gallery —
+    /// which it is, however deep, when subfolders are included.
+    pub fn show_in_manager(&mut self, path: &Path) {
+        if self.position_of(path).is_none()
+            && let Some(folder) = path.parent().map(Path::to_path_buf)
+            && folder.is_dir()
+        {
+            self.open(folder);
+        }
+
+        match self.position_of(path) {
+            Some(at) => {
+                self.select_only(at);
+                self.scroll_grid_to = Some(at);
+            }
+            None => self.status = t!("editor-gone"),
+        }
+    }
+
+    /// Turns the page in the editor: the same tab, the next photograph
+    /// along in the gallery's order. Nothing happens at either end, and
+    /// nothing happens for a photograph the gallery has moved on without.
+    pub fn page_editor(&mut self, by: isize) {
+        let Some(path) = self.tabs.active_editor().map(|editor| editor.path.clone()) else {
+            return;
+        };
+
+        // The tab is retargeted, not a new one opened: paging through a
+        // folder must not leave a tab per photograph behind.
+        if let Some(next) = self.neighbour_of(&path, by)
+            && let Some(editor) = self.tabs.active_editor_mut()
+            && editor.can_close()
+        {
+            editor.show(next);
+        }
+    }
+
+    /// Tells the window whether to fill the screen: when the manager asked
+    /// for it, or when the editor did and is in front.
+    fn apply_fullscreen(&self, ctx: &egui::Context) {
+        let wanted = self.fullscreen || (!self.tabs.manager_is_active() && self.tabs.fullscreen);
+        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(wanted));
     }
 
     /// Opens the comparison on what is chosen, or closes the one that is
@@ -2128,7 +2282,7 @@ impl App {
         });
 
         for shortcut in pressed {
-            if let Some(command) = self.bindings.command_for(&shortcut) {
+            if let Some(command) = self.bindings.command_for(&shortcut, self.scope()) {
                 tracing::debug!(command = command.id, "shortcut");
                 // Taken out of the input as well as acted on. Otherwise the
                 // toolkit has its own use for the key afterwards — Tab moves
@@ -2280,23 +2434,38 @@ impl eframe::App for App {
         let panel = theme::color(palette.panel);
         let window = theme::color(palette.window);
 
-        egui::Panel::top("toolbar")
-            .frame(egui::Frame::NONE.fill(panel).inner_margin(6.0))
-            .show(ui, |ui| self.toolbar(ui, &palette, &ctx));
+        // The strip of tabs first, unless the editor is filling the screen:
+        // then the photograph has the whole of it.
+        if self.tabs.manager_is_active() || !self.tabs.fullscreen {
+            egui::Panel::top("tabs")
+                .frame(egui::Frame::NONE.fill(panel).inner_margin(4.0))
+                .show(ui, |ui| editor::strip(self, ui, &palette, &ctx));
+        }
 
-        egui::Panel::top("where")
-            .frame(egui::Frame::NONE.fill(panel).inner_margin(4.0))
-            .show(ui, |ui| self.where_we_are(ui, &palette, &ctx));
+        // Read after the strip: a click on it has just changed the answer.
+        if !self.tabs.manager_is_active() {
+            egui::CentralPanel::no_frame()
+                .frame(egui::Frame::NONE.fill(window))
+                .show(ui, |ui| editor::show(self, ui, &palette, &ctx));
+        } else {
+            egui::Panel::top("toolbar")
+                .frame(egui::Frame::NONE.fill(panel).inner_margin(6.0))
+                .show(ui, |ui| self.toolbar(ui, &palette, &ctx));
 
-        egui::CentralPanel::no_frame()
-            .frame(egui::Frame::NONE.fill(window))
-            .show(ui, |ui| {
-                if self.compare.is_some() {
-                    compare::show(self, ui, &palette);
-                } else {
-                    docks::show(self, ui, &palette);
-                }
-            });
+            egui::Panel::top("where")
+                .frame(egui::Frame::NONE.fill(panel).inner_margin(4.0))
+                .show(ui, |ui| self.where_we_are(ui, &palette, &ctx));
+
+            egui::CentralPanel::no_frame()
+                .frame(egui::Frame::NONE.fill(window))
+                .show(ui, |ui| {
+                    if self.compare.is_some() {
+                        compare::show(self, ui, &palette);
+                    } else {
+                        docks::show(self, ui, &palette);
+                    }
+                });
+        }
 
         self.diagnostics_window(&ctx);
         self.settings_window(&ctx);
@@ -3983,6 +4152,132 @@ mod culling {
             names(&app),
             before,
             "the tile moved out from under the key that rated it"
+        );
+    }
+}
+
+/// The editor tabs over a real gallery: opening, paging, and the way back.
+///
+/// Headless, like the culling tests above: nothing here decodes a pixel.
+/// What is checked is that the tab follows the order of the gallery, and
+/// that going back lands the manager on the right tile.
+#[cfg(test)]
+mod editing {
+    use super::*;
+
+    fn shown(app: &App) -> Option<String> {
+        app.tabs.active_editor().and_then(|editor| {
+            editor
+                .path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+        })
+    }
+
+    #[test]
+    fn a_tile_opens_in_a_tab_of_its_own_and_the_keys_follow() {
+        let (mut app, _data, _photos) = culling::three();
+        assert_eq!(app.scope(), Scope::Manager);
+        app.edit(1);
+        assert_eq!(shown(&app), Some("b.jpg".to_owned()));
+        assert!(!app.tabs.manager_is_active());
+        assert_eq!(app.scope(), Scope::Editor);
+        assert_eq!(
+            app.bindings
+                .command_for(&"Ctrl+F".parse().unwrap(), app.scope())
+                .map(|command| command.id),
+            Some("editor.fullscreen")
+        );
+    }
+
+    #[test]
+    fn enter_opens_the_tile_the_cursor_is_on() {
+        let (mut app, _data, _photos) = culling::three();
+        let ctx = egui::Context::default();
+        app.run("photo.edit", &ctx);
+        assert!(app.tabs.manager_is_active(), "nothing was chosen");
+
+        app.select_only(2);
+        app.run("photo.edit", &ctx);
+        assert_eq!(shown(&app), Some("c.jpg".to_owned()));
+    }
+
+    #[test]
+    fn paging_follows_the_order_of_the_gallery_and_stops_at_the_ends() {
+        let (mut app, _data, _photos) = culling::three();
+        app.edit(0);
+        app.page_editor(1);
+        assert_eq!(shown(&app), Some("b.jpg".to_owned()));
+        app.page_editor(1);
+        assert_eq!(shown(&app), Some("c.jpg".to_owned()));
+        app.page_editor(1);
+        assert_eq!(shown(&app), Some("c.jpg".to_owned()), "the end is the end");
+        app.page_editor(-1);
+        assert_eq!(shown(&app), Some("b.jpg".to_owned()));
+        // The same tab throughout, not one per photograph.
+        assert_eq!(app.tabs.count(), 2);
+    }
+
+    #[test]
+    fn going_back_lands_the_manager_on_the_photograph() {
+        let (mut app, _data, _photos) = culling::three();
+        let ctx = egui::Context::default();
+        app.select_only(0);
+        app.edit(0);
+        app.page_editor(1);
+        app.page_editor(1);
+        app.run("editor.back", &ctx);
+        assert!(app.tabs.manager_is_active());
+        assert_eq!(app.tabs.count(), 1);
+        assert_eq!(app.selected, Some(2));
+        assert_eq!(app.selection.iter().copied().collect::<Vec<_>>(), [2]);
+        assert_eq!(app.scroll_grid_to, Some(2));
+    }
+
+    #[test]
+    fn closing_leaves_the_selection_where_it_was() {
+        let (mut app, _data, _photos) = culling::three();
+        let ctx = egui::Context::default();
+        app.select_only(1);
+        app.edit(1);
+        app.page_editor(1);
+        app.run("editor.close", &ctx);
+        assert!(app.tabs.manager_is_active());
+        assert_eq!(app.selected, Some(1));
+        assert_eq!(app.scroll_grid_to, None);
+    }
+
+    #[test]
+    fn going_back_from_another_folder_opens_that_folder() {
+        let (mut app, _data, photos) = culling::three();
+        let ctx = egui::Context::default();
+        let elsewhere = photos.path().join("elsewhere");
+        std::fs::create_dir(&elsewhere).unwrap();
+        let there = elsewhere.join("d.jpg");
+        std::fs::write(&there, b"xxxx").unwrap();
+
+        app.tabs.open(there.clone());
+        app.run("editor.back", &ctx);
+        assert_eq!(app.folder.as_deref(), Some(elsewhere.as_path()));
+        assert_eq!(
+            app.photo_at_cursor().map(|photo| photo.path.clone()),
+            Some(there)
+        );
+        assert_eq!(app.scroll_tree_to.as_deref(), Some(elsewhere.as_path()));
+    }
+
+    #[test]
+    fn the_editor_fullscreen_is_left_with_the_editor() {
+        let (mut app, _data, _photos) = culling::three();
+        let ctx = egui::Context::default();
+        app.edit(0);
+        app.run("editor.fullscreen", &ctx);
+        assert!(app.tabs.fullscreen);
+        app.run("editor.close", &ctx);
+        assert!(!app.tabs.fullscreen);
+        assert!(
+            !app.fullscreen,
+            "the window's own fullscreen was never asked for"
         );
     }
 }

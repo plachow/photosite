@@ -728,3 +728,18 @@ diagnostics-places = place list
 diagnostics-faces = faces
 diagnostics-faces-of = { $named } of { $faces } named
 diagnostics-people = people
+
+## The editor
+
+group-editor = Editor
+command-photo-edit = Open
+command-editor-close = Close
+command-editor-back = Back to the manager on this photograph
+command-editor-fullscreen = Fill the screen
+command-editor-next = Next photograph
+command-editor-previous = Previous photograph
+tab-manager = Manager
+editor-position = { $at } / { $count }
+editor-hint = Wheel or PgUp / PgDn turns the page · Ctrl and the wheel looks closer · middle click or Ctrl+F fills the screen · Enter goes back to the tile · Esc closes
+editor-gone = This photograph is no longer in the folder being shown
+editor-nothing-chosen = Pick a tile to open it

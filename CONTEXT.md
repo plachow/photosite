@@ -59,13 +59,20 @@ window*, *plugin*.
 **Record** (`PhotoRecord`) — one immutable row of the catalogue: the file's
 identity, its indexed metadata, and the organisation applied to it.
 
-**Tab** (`MainViewModel.EditorTabs`) — the strip above the window: one Manager
-tab plus one tab per open editor. A tab owns its photo's editor session, undo
-history included, so switching to Manager or to another tab never prompts to
-save; only closing a tab (its ✕, or Esc inside the editor) ends the session
-and asks about unsaved edits. Paging to the next photo inside the editor
-retargets the current tab rather than opening new ones. Rejected synonyms:
+**Tab** (v1: `MainViewModel.EditorTabs`; v2: `editor::Tabs`) — the strip
+above the window: one Manager tab plus one tab per open editor. A tab owns
+its photo's editor session, undo history included, so switching to Manager
+or to another tab never prompts to save; only closing a tab (its ✕, or Esc
+inside the editor) ends the session and asks about unsaved edits. Paging to
+the next photo inside the editor retargets the current tab rather than
+opening new ones. A photo opened twice has one tab. Rejected synonyms:
 *document*, *workspace*.
+
+**Scope** (v2: `commands::Scope`) — where a command can be given: the
+Manager, the Editor, or everywhere. The same shortcut may mean one thing in
+the Manager and another in the Editor (Enter opens the editor from the
+Manager and leaves it from the Editor); a conflict is a key shared by two
+commands reachable from the same place. Rejected synonyms: *context*, *mode*.
 
 ## Organisation
 

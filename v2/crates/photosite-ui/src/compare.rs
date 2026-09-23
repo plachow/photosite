@@ -277,7 +277,7 @@ fn caption(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, palette: &Palette
 ///
 /// `None` when nothing happened, so that a cell nobody is pointing at cannot
 /// quietly hand back the view unchanged and undo the cell that was.
-fn steered(
+pub(crate) fn steered(
     ui: &mut egui::Ui,
     response: &egui::Response,
     rect: egui::Rect,
@@ -315,13 +315,18 @@ fn per_point(frame: &compare::Frame) -> (f32, f32) {
 
 /// A drag of so many points. The photograph follows the hand, so the view
 /// goes the other way.
-fn pulled(view: compare::View, frame: &compare::Frame, by: Vec2) -> compare::View {
+pub(crate) fn pulled(view: compare::View, frame: &compare::Frame, by: Vec2) -> compare::View {
     let per_point = per_point(frame);
     view.pan_by((-by.x * per_point.0, -by.y * per_point.1))
 }
 
 /// A turn of the wheel at a point in the cell, measured from its top left.
-fn wheeled(view: compare::View, frame: &compare::Frame, at: Vec2, wheel: f32) -> compare::View {
+pub(crate) fn wheeled(
+    view: compare::View,
+    frame: &compare::Frame,
+    at: Vec2,
+    wheel: f32,
+) -> compare::View {
     let per_point = per_point(frame);
     // Where the pointer is in the photograph, so that what is under it stays
     // under it.
@@ -339,7 +344,7 @@ fn wheeled(view: compare::View, frame: &compare::Frame, at: Vec2, wheel: f32) ->
 /// make a hundred per cent mean a hundred per cent of the downscale. Falling
 /// back on the texture matters for a folder whose headers are still being
 /// read, and on a square when there is neither.
-fn shown(app: &App, path: &Path) -> (f32, f32) {
+pub(crate) fn shown(app: &App, path: &Path) -> (f32, f32) {
     if let Some((width, height)) = app.photo_named(path).and_then(|photo| photo.shown()) {
         return (width as f32, height as f32);
     }

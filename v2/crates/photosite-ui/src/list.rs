@@ -31,7 +31,18 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
 
             let first = (viewport.min.y / ROW).floor().max(0.0) as usize;
             let last = ((viewport.max.y / ROW).ceil() as usize).min(count);
+
+            // Coming back from the editor: the row it was opened from is
+            // brought into view, drawn or not.
+            if let Some(index) = app.scroll_grid_to.take() {
+                let rect = egui::Rect::from_min_size(
+                    area.min + Vec2::new(0.0, index as f32 * ROW),
+                    Vec2::new(width, ROW),
+                );
+                ui.scroll_to_rect(rect, Some(egui::Align::Center));
+            }
             let mut clicked: Option<(usize, egui::Modifiers)> = None;
+            let mut opened: Option<usize> = None;
 
             // The columns, from the right. The name takes whatever is left,
             // because it is the one that can be any length at all and the
@@ -46,6 +57,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
                 let response = ui.interact(rect, ui.id().with(index), Sense::click());
                 if response.clicked() {
                     clicked = Some((index, ui.input(|input| input.modifiers)));
+                }
+
+                if response.double_clicked() {
+                    opened = Some(index);
                 }
 
                 let chosen = app.is_selected(index);
@@ -72,6 +87,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
                 } else {
                     app.select_only(index);
                 }
+            }
+
+            if let Some(index) = opened {
+                app.edit(index);
             }
         });
 }
