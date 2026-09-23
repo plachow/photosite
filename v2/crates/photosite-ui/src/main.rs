@@ -124,9 +124,9 @@ fn main() -> Result<()> {
             // runs on purpose, so this is the only way to open on one.
             "--search" => search = args.next(),
             // A folder opens the gallery on it. A photograph opens the
-            // folder it is in, standing on that photograph — which is what
-            // "open with" from a file manager means, and the only sensible
-            // reading of it until there is an editor to open it in.
+            // folder it is in, standing on that photograph, and the
+            // photograph itself in a tab — which is what "open with" from a
+            // file manager means: look at this one.
             other => {
                 let path = PathBuf::from(other);
                 if path.is_file() {
@@ -203,6 +203,9 @@ fn main() -> Result<()> {
                 })
             {
                 app.select_only(at);
+                // Handed a photograph, not a folder: it goes straight into
+                // the editor, with the manager standing on it behind.
+                app.edit(at);
             }
 
             if compare > 0 {

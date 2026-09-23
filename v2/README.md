@@ -724,8 +724,11 @@ into a view, and a view turning into rectangles.
 ## One photograph on its own
 
 A double-click on a tile — or `Enter` on the one the cursor is on — opens
-the photograph in a tab of its own. The strip along the top holds the
-manager first, which cannot be closed, and after it one tab per photograph.
+the photograph in a tab of its own. So does handing the application a
+photograph rather than a folder, which is what "open with" from a file
+manager does: the folder opens behind it, standing on that tile. The strip
+along the top holds the manager first, which cannot be closed, and after it
+one tab per photograph.
 A photograph opened twice has one tab: two tabs of one file would be two
 views of one truth, and once the editor can change a photograph, two places
 to change it. For now the tab is a viewer; the editor grows into it.
