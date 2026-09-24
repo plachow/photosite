@@ -95,7 +95,11 @@ pub fn apply(ctx: &egui::Context, palette: &Palette, dark: bool, scale: f32) {
     } else {
         egui::ThemePreference::Light
     });
-    ctx.set_pixels_per_point(scale.clamp(0.5, 3.0));
+    // A factor over what the system asks for, not a replacement of it.
+    // `set_pixels_per_point` was here and it silently threw away the
+    // display's own scale: on a 3840x2400 notebook at 225% everything came
+    // out at a hundred percent, which is to say unreadable.
+    ctx.set_zoom_factor(scale.clamp(0.5, 3.0));
 }
 
 /// Height of the caption strip; zero when captions are not shown.

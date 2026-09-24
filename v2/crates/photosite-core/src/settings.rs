@@ -204,7 +204,8 @@ pub struct Appearance {
     pub theme_light: String,
     /// The interface language. An unknown one falls back to `en-US`.
     pub language: String,
-    /// The scale of the whole interface.
+    /// The scale of the whole interface, over what the display already
+    /// asks for: 1.0 on a screen set to 225% is 225%, not 100%.
     pub ui_scale: f64,
 }
 
