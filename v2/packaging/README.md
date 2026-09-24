@@ -122,14 +122,26 @@ which is older than any version this will ever produce.
 
 ## Updating itself
 
-Not yet, and the shape of what is missing is small.
+An installed PhotoSite asks, five seconds after the window opens and off
+the main thread, whether the releases page holds a newer version. When it
+does, the package is downloaded into Velopack's `packages` folder while
+somebody goes on working; nothing on the screen changes until it is
+complete. Then the status row says *PhotoSite 2.0.1 is downloaded* beside a
+*Restart into it* button. Whoever does not click gets the new version the
+next time PhotoSite starts anyway, because `VelopackApp::run()` applies a
+downloaded package before anything else.
 
-The application already calls `VelopackApp::run()` before anything else — it
-has to, because that is what the installer and the updater invoke to make
-shortcuts and to swap the folder — and that call also *applies* an update
-that has already been downloaded, on the next start. What has no code yet is
-the half that asks: an `UpdateManager` over
-`sources::GithubSource`, a check that does not happen on the main thread, and
-somewhere in the window to say that a new version is there. It is a setting,
-a task and a line of UI, and it is deliberately not being written before
-there is a release to update *from*.
+Two settings, both under `[updates]`: `check` (on by default) and `feed`,
+the repository whose releases page is asked. The feed is a setting rather
+than a constant so that a fork can point its installations elsewhere.
+
+The code is `crates/photosite-ui/src/updates.rs`, and it is small on purpose:
+a thread, a channel, a state for the diagnostics window and one line of UI.
+A build run from source is not installed — no `Update.exe` beside it, no
+package manifest — and the thread says so in the log and ends. That is the
+ordinary case on a development machine and it is not an error. The
+diagnostics window has an *updates* row that says what happened: asked,
+current, downloading, downloaded, or why not.
+
+Unauthenticated, the GitHub API allows sixty requests an hour from one
+address. One check per start is well within that.

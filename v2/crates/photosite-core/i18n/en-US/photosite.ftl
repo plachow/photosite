@@ -475,6 +475,21 @@ setting-ai-overwrite = Overwrite a title and description already there
 setting-ai-request-size = Size sent to the model (px)
 setting-ai-timeout = Wait for an answer (s)
 
+setting-updates-check = Look for a newer version at start
+setting-updates-feed = Where the releases are
+
+## Updates
+
+updates-ready = PhotoSite { $version } is downloaded
+updates-restart = Restart into it
+diagnostics-updates = updates
+updates-not-installed = not installed, so not asked
+updates-off = not asked
+updates-asking = asking
+updates-current = this is the newest
+updates-downloading = downloading { $version }
+updates-failed = failed: { $error }
+
 command-photo-people = People…
 
 people-title = People

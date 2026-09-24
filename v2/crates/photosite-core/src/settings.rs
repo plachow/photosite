@@ -37,6 +37,7 @@ pub struct Settings {
     pub appearance: Appearance,
     pub faces: Faces,
     pub ai: Ai,
+    pub updates: Updates,
 }
 
 /// The window state. That the application opens where somebody left it is
@@ -298,6 +299,33 @@ impl Default for Ai {
             overwrite: false,
             request_size: 1024,
             timeout_seconds: 300,
+        }
+    }
+}
+
+/// Keeping itself current.
+///
+/// An installed PhotoSite asks, once per start and off the main thread,
+/// whether the feed holds a newer release, and downloads it in the
+/// background when it does. Nothing is applied while somebody is working:
+/// the new version is offered on the status row, and whoever ignores it gets
+/// it on the next start. A build run from source is never installed and so
+/// never asks.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Updates {
+    pub check: bool,
+    /// Where the releases are. A GitHub repository, whose releases page is
+    /// the feed. A setting rather than a constant so that a fork, or a
+    /// mirror behind a firewall, can point an installation elsewhere.
+    pub feed: String,
+}
+
+impl Default for Updates {
+    fn default() -> Self {
+        Self {
+            check: true,
+            feed: "https://github.com/plachow/photosite".to_owned(),
         }
     }
 }
@@ -826,6 +854,16 @@ pub const TUNABLES: &[Tunable] = &[
         path: "ai.timeout_seconds",
         label_key: "setting-ai-timeout",
         kind: Kind::Int { min: 10, max: 3600 },
+    },
+    Tunable {
+        path: "updates.check",
+        label_key: "setting-updates-check",
+        kind: Kind::Bool,
+    },
+    Tunable {
+        path: "updates.feed",
+        label_key: "setting-updates-feed",
+        kind: Kind::Text,
     },
 ];
 

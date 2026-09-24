@@ -28,6 +28,7 @@ mod people;
 mod picker;
 mod startup;
 mod theme;
+mod updates;
 
 use anyhow::Result;
 use eframe::egui;
@@ -292,6 +293,8 @@ pub struct App {
     pub settings: Settings,
     bindings: Bindings,
     tasks: jobs::Tasks,
+    /// Whether a newer release is on its way. See [`updates`].
+    updates: updates::Updates,
     images: jobs::Wishlist<Key, Pixels>,
 
     /// The catalogue.
@@ -526,11 +529,16 @@ impl App {
         let theme = palettes::resolve(&settings.appearance, None);
         let settings_layout = settings.window.layout.clone();
         let settings_hidden = settings.window.docks_hidden.clone();
+        // Asked before the settings move into the application, and off
+        // this thread. Not installed — every `cargo run` — is answered in a
+        // line of the log and nothing else.
+        let updates = updates::Updates::start(&settings, waker.clone());
         let mut app = Self {
             paths,
             settings,
             bindings: Bindings::defaults(),
             tasks: jobs::Tasks::new(),
+            updates,
             images,
             catalog,
             roots: roots(),
@@ -2422,6 +2430,7 @@ impl eframe::App for App {
         self.collect_describing();
         self.collect_writing();
         self.collect_disturbance();
+        self.updates.poll();
         self.take_picked_folder();
         self.shortcuts(&ctx);
 
@@ -2890,13 +2899,35 @@ impl App {
                 },
             );
 
+            let mut restart = false;
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // A downloaded release is offered here and nowhere louder.
+                // It waits: whoever does not click gets it on the next
+                // start anyway.
+                if let Some(ready) = self.updates.ready.as_ref() {
+                    restart = ui.button(t!("updates-restart")).clicked();
+                    ui.label(
+                        egui::RichText::new(t!("updates-ready", version = ready.version.as_str()))
+                            .color(theme::color(palette.accent)),
+                    );
+                    ui.separator();
+                }
+
                 ui.add(
                     egui::Label::new(egui::RichText::new(&said).color(theme::color(palette.dim)))
                         .truncate(),
                 );
             });
             self.status = said;
+
+            if restart {
+                // The process ends inside `restart`, so `Drop` never runs:
+                // what it would have saved is saved here.
+                if let Err(error) = self.settings.save(&self.paths) {
+                    tracing::error!(error = %format!("{error:#}"), "the settings could not be saved");
+                }
+                self.updates.restart();
+            }
 
             if let Some(folder) = pick {
                 self.open(folder);
@@ -2924,6 +2955,7 @@ impl App {
         rows.push((t!("diagnostics-selected"), self.selection.len().to_string()));
         rows.push((t!("diagnostics-blank"), self.blank.to_string()));
         rows.push((t!("diagnostics-unsharp"), self.unsharp.to_string()));
+        rows.push((t!("diagnostics-updates"), self.updates.state.describe()));
 
         // What the two downloaded things add up to. This is the first
         // question a support conversation opens with, and "the models are
