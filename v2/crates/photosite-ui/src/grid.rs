@@ -70,6 +70,11 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
             let first = ((viewport.min.y - gap) / pitch).floor().max(0.0) as usize;
             let last = ((viewport.max.y / pitch).ceil() as usize).min(rows);
 
+            // What the keys need to know about the layout: how many tiles
+            // make a row, and how many rows make a page.
+            app.grid_cols = cols;
+            app.grid_page_rows = ((viewport.height() / pitch).floor() as usize).max(1);
+
             // Coming back from the editor: the tile it was opened from is
             // brought into view, wherever the grid was left. Worked out
             // from the position and not from a drawn tile, because the one
@@ -225,17 +230,8 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
                 app.touch(&(path, Want::Quick));
             }
 
-            // Plain, Ctrl and Shift, the way every file list has worked for
-            // thirty years. Getting this wrong is not a small thing: the
-            // rating keys land on whatever is selected.
             if let Some((index, modifiers)) = clicked {
-                if modifiers.command || modifiers.ctrl {
-                    app.select_also(index);
-                } else if modifiers.shift {
-                    app.select_through(index);
-                } else {
-                    app.select_only(index);
-                }
+                app.click_tile(index, modifiers.command || modifiers.ctrl, modifiers.shift);
             }
 
             // A double-click opens the tile in a tab of its own. It was

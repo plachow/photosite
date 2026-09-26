@@ -207,6 +207,16 @@ command-photo-label-purple = Purple label
 command-photo-pick = Pick
 command-photo-reject = Reject
 command-photo-select-all = Select all
+command-nav-left = Previous photograph
+command-nav-right = Next photograph
+command-nav-up = A row up
+command-nav-down = A row down
+command-nav-page-up = A page up
+command-nav-page-down = A page down
+command-nav-row-start = Start of the row
+command-nav-row-end = End of the row
+command-nav-first = First photograph
+command-nav-last = Last photograph
 
 # The label on its own, for a swatch or a chip. Shorter than the command,
 # which has to say what pressing it does.

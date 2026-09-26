@@ -375,6 +375,92 @@ pub const COMMANDS: &[Command] = &[
         toolbar: false,
         scope: Scope::Manager,
     },
+    // Moving through the gallery from the keyboard, Explorer's way: the
+    // arrows, Home and End along the row, Ctrl+Home and Ctrl+End to the
+    // ends of the folder, and the pages. Each of these held with Shift
+    // stretches the selection instead — the window reads Shift over any
+    // `nav.` command as that, so there is one binding per movement and not
+    // two to keep in step.
+    Command {
+        id: "nav.left",
+        title_key: "command-nav-left",
+        group: Group::Go,
+        default_shortcut: Some("Left"),
+        toolbar: false,
+        scope: Scope::Manager,
+    },
+    Command {
+        id: "nav.right",
+        title_key: "command-nav-right",
+        group: Group::Go,
+        default_shortcut: Some("Right"),
+        toolbar: false,
+        scope: Scope::Manager,
+    },
+    Command {
+        id: "nav.up",
+        title_key: "command-nav-up",
+        group: Group::Go,
+        default_shortcut: Some("Up"),
+        toolbar: false,
+        scope: Scope::Manager,
+    },
+    Command {
+        id: "nav.down",
+        title_key: "command-nav-down",
+        group: Group::Go,
+        default_shortcut: Some("Down"),
+        toolbar: false,
+        scope: Scope::Manager,
+    },
+    Command {
+        id: "nav.page_up",
+        title_key: "command-nav-page-up",
+        group: Group::Go,
+        default_shortcut: Some("PageUp"),
+        toolbar: false,
+        scope: Scope::Manager,
+    },
+    Command {
+        id: "nav.page_down",
+        title_key: "command-nav-page-down",
+        group: Group::Go,
+        default_shortcut: Some("PageDown"),
+        toolbar: false,
+        scope: Scope::Manager,
+    },
+    Command {
+        id: "nav.row_start",
+        title_key: "command-nav-row-start",
+        group: Group::Go,
+        default_shortcut: Some("Home"),
+        toolbar: false,
+        scope: Scope::Manager,
+    },
+    Command {
+        id: "nav.row_end",
+        title_key: "command-nav-row-end",
+        group: Group::Go,
+        default_shortcut: Some("End"),
+        toolbar: false,
+        scope: Scope::Manager,
+    },
+    Command {
+        id: "nav.first",
+        title_key: "command-nav-first",
+        group: Group::Go,
+        default_shortcut: Some("Ctrl+Home"),
+        toolbar: false,
+        scope: Scope::Manager,
+    },
+    Command {
+        id: "nav.last",
+        title_key: "command-nav-last",
+        group: Group::Go,
+        default_shortcut: Some("Ctrl+End"),
+        toolbar: false,
+        scope: Scope::Manager,
+    },
     // Two to four photographs at once. It toggles: the same key that opens
     // the comparison closes it, so nobody has to hunt for the way out.
     Command {

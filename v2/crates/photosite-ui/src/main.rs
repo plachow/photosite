@@ -340,9 +340,19 @@ pub struct App {
     /// still typing it.
     pub filter_from: String,
     pub filter_to: String,
-    /// The tile the preview and the details follow, and the end a shift-click
-    /// measures from. Always one of [`App::selection`] when there is one.
+    /// The tile the preview and the details follow, and the one the keys
+    /// move from. Always one of [`App::selection`] when there is one.
     pub selected: Option<usize>,
+    /// The tile a Shift-click or a Shift-arrow measures its range from: the
+    /// last one clicked or stepped to without Shift. Explorer's anchor,
+    /// which stays put while Shift is held, so that a range can be widened
+    /// and narrowed from one end.
+    pub anchor: Option<usize>,
+    /// How the gallery was last laid out: tiles across, and rows that fit
+    /// in the viewport. Set by the grid and the list every frame, read by
+    /// the keys, which have no other way of knowing what "up" means.
+    pub grid_cols: usize,
+    pub grid_page_rows: usize,
     /// Every tile the next rating lands on.
     ///
     /// Positions and not paths, because the grid works in positions and the
@@ -559,6 +569,9 @@ impl App {
             filter_from: String::new(),
             filter_to: String::new(),
             selected: None,
+            anchor: None,
+            grid_cols: 1,
+            grid_page_rows: 1,
             selection: BTreeSet::new(),
             indexing: None,
             textures: HashMap::new(),
@@ -899,6 +912,10 @@ impl App {
                     .position(|at| self.all[*at].path == path)
             })
             .or_else(|| self.selection.iter().next().copied());
+        // The anchor is a position, and the positions have just moved. The
+        // tile under the cursor is the one place a range can still honestly
+        // be measured from.
+        self.anchor = self.selected;
     }
 
     /// How many photographs are showing.
@@ -1548,6 +1565,10 @@ impl App {
             "photo.pick" => self.flag(Flag::Picked),
             "photo.reject" => self.flag(Flag::Rejected),
             "photo.select_all" => self.select_all(),
+            "nav.left" | "nav.right" | "nav.up" | "nav.down" | "nav.page_up" | "nav.page_down"
+            | "nav.row_start" | "nav.row_end" | "nav.first" | "nav.last" => {
+                self.navigate(id, false);
+            }
             "photo.compare" => self.compare_chosen(),
             "photo.compare_next" => self.move_comparison_focus(1),
             "photo.compare_previous" => self.move_comparison_focus(-1),
@@ -1825,15 +1846,30 @@ impl App {
         self.selection.contains(&at)
     }
 
+    /// A click on a tile, with whatever was held: plain, Ctrl, Shift and
+    /// Ctrl+Shift, the way Explorer has had them for thirty years. Getting
+    /// this wrong is not a small thing: the rating keys land on whatever is
+    /// selected.
+    pub fn click_tile(&mut self, at: usize, ctrl: bool, shift: bool) {
+        match (ctrl, shift) {
+            (true, true) => self.select_through_also(at),
+            (false, true) => self.select_through(at),
+            (true, false) => self.select_also(at),
+            (false, false) => self.select_only(at),
+        }
+    }
+
     /// A plain click: this one, and nothing else.
     pub fn select_only(&mut self, at: usize) {
         self.selection.clear();
         self.selection.insert(at);
         self.selected = Some(at);
+        self.anchor = Some(at);
     }
 
     /// Ctrl-click: add it or take it away, and leave the rest alone.
     pub fn select_also(&mut self, at: usize) {
+        self.anchor = Some(at);
         if !self.selection.remove(&at) {
             self.selection.insert(at);
             self.selected = Some(at);
@@ -1845,12 +1881,88 @@ impl App {
         }
     }
 
-    /// Shift-click: everything from the current tile to this one.
+    /// Shift-click: everything from the anchor to this one, and nothing
+    /// else. The anchor stays where it was, so a second Shift-click
+    /// measures from the same place and the range can be widened or
+    /// narrowed rather than only ever grown.
     pub fn select_through(&mut self, at: usize) {
-        let from = self.selected.unwrap_or(at);
-        let (first, last) = if from <= at { (from, at) } else { (at, from) };
-        self.selection = (first..=last).filter(|at| *at < self.count()).collect();
+        self.selection = self.range_to(at);
         self.selected = Some(at);
+    }
+
+    /// Ctrl+Shift-click: everything from the anchor to this one, on top of
+    /// what is already selected.
+    pub fn select_through_also(&mut self, at: usize) {
+        self.selection.extend(self.range_to(at));
+        self.selected = Some(at);
+    }
+
+    fn range_to(&self, at: usize) -> BTreeSet<usize> {
+        let from = self.anchor.or(self.selected).unwrap_or(at);
+        let (first, last) = if from <= at { (from, at) } else { (at, from) };
+        (first..=last).filter(|at| *at < self.count()).collect()
+    }
+
+    /// A key that moves through the gallery: the arrows, Home and End, the
+    /// pages. With Shift held the selection stretches from the anchor to
+    /// where the key landed; without it the landing tile is the selection.
+    /// Either way the gallery scrolls to keep it in view.
+    ///
+    /// "Up" and "down" are a row apart, and a row is however many tiles the
+    /// grid last fitted across — which the grid says, every frame, because
+    /// nothing else knows. Home and End are the ends of the row; with Ctrl
+    /// they are the ends of the folder, the way Explorer has them.
+    pub fn navigate(&mut self, id: &str, extend: bool) {
+        let count = self.count();
+        if count == 0 {
+            return;
+        }
+
+        let cols = self.grid_cols.max(1);
+        let page = self.grid_page_rows.max(1) * cols;
+        let last = count - 1;
+        let at = match self.selected {
+            Some(at) => at.min(last),
+            // Nothing chosen yet: the first key lands on the first tile,
+            // whichever key it is. Explorer does the same.
+            None => {
+                self.select_only(0);
+                self.scroll_grid_to = Some(0);
+                return;
+            }
+        };
+        let row_start = at - at % cols;
+        let target = match id {
+            "nav.left" => at.saturating_sub(1),
+            "nav.right" => (at + 1).min(last),
+            "nav.up" => at.saturating_sub(cols),
+            // A row that exists with no tile beneath this one lands on the
+            // last tile there is, rather than doing nothing.
+            "nav.down" => {
+                if at + cols <= last {
+                    at + cols
+                } else if row_start + cols <= last {
+                    last
+                } else {
+                    at
+                }
+            }
+            "nav.page_up" => at.saturating_sub(page),
+            "nav.page_down" => (at + page).min(last),
+            "nav.row_start" => row_start,
+            "nav.row_end" => (row_start + cols - 1).min(last),
+            "nav.first" => 0,
+            "nav.last" => last,
+            _ => return,
+        };
+
+        if extend {
+            self.select_through(target);
+        } else {
+            self.select_only(target);
+        }
+
+        self.scroll_grid_to = Some(target);
     }
 
     fn select_all(&mut self) {
@@ -2403,27 +2515,50 @@ impl App {
         });
 
         for shortcut in pressed {
-            if let Some(command) = self.bindings.command_for(&shortcut, self.scope()) {
-                tracing::debug!(command = command.id, "shortcut");
-                // Taken out of the input as well as acted on. Otherwise the
-                // toolkit has its own use for the key afterwards — Tab moves
-                // the focus to the search box while it is also moving the
-                // focus in the comparison, and both happen at once.
-                if let Some(key) = egui::Key::from_name(&shortcut.key) {
-                    ctx.input_mut(|input| {
-                        input.consume_key(
-                            egui::Modifiers {
-                                alt: shortcut.alt,
-                                ctrl: shortcut.ctrl,
-                                shift: shortcut.shift,
-                                mac_cmd: false,
-                                command: shortcut.ctrl,
-                            },
-                            key,
-                        )
-                    });
+            let scope = self.scope();
+            // Shift over a key that moves through the gallery stretches the
+            // selection instead of moving it, the way Explorer's arrows
+            // work. One binding per movement, then, and Shift is read here
+            // rather than as ten more bindings that would have to be kept
+            // in step with the ten they shadow.
+            let (command, extend) = match self.bindings.command_for(&shortcut, scope) {
+                Some(command) => (command, false),
+                None if shortcut.shift => {
+                    let unshifted = Shortcut {
+                        shift: false,
+                        ..shortcut.clone()
+                    };
+                    match self.bindings.command_for(&unshifted, scope) {
+                        Some(command) if command.id.starts_with("nav.") => (command, true),
+                        _ => continue,
+                    }
                 }
+                None => continue,
+            };
 
+            tracing::debug!(command = command.id, "shortcut");
+            // Taken out of the input as well as acted on. Otherwise the
+            // toolkit has its own use for the key afterwards — Tab moves
+            // the focus to the search box while it is also moving the
+            // focus in the comparison, and both happen at once.
+            if let Some(key) = egui::Key::from_name(&shortcut.key) {
+                ctx.input_mut(|input| {
+                    input.consume_key(
+                        egui::Modifiers {
+                            alt: shortcut.alt,
+                            ctrl: shortcut.ctrl,
+                            shift: shortcut.shift,
+                            mac_cmd: false,
+                            command: shortcut.ctrl,
+                        },
+                        key,
+                    )
+                });
+            }
+
+            if extend {
+                self.navigate(command.id, true);
+            } else {
                 self.run(command.id, ctx);
             }
         }
@@ -3686,6 +3821,66 @@ mod culling {
         app.select_only(2);
         app.select_through(0);
         assert_eq!(chosen_names(&app), ["a.jpg", "b.jpg", "c.jpg"]);
+    }
+
+    /// Explorer's anchor: a Shift-click measures from the last plain click,
+    /// and stays there, so the range can be narrowed again from the same
+    /// end. Ctrl+Shift adds the range to what is there.
+    #[test]
+    fn the_anchor_stays_put_while_shift_is_held() {
+        let (mut app, _data, _photos) = three();
+        app.select_only(0);
+        app.select_through(2);
+        app.select_through(1);
+        assert_eq!(chosen_names(&app), ["a.jpg", "b.jpg"]);
+
+        app.select_only(2);
+        app.click_tile(0, true, true);
+        assert_eq!(chosen_names(&app), ["a.jpg", "b.jpg", "c.jpg"]);
+    }
+
+    /// The keys move one tile, one row or one page, and Shift stretches
+    /// the selection instead of moving it. The grid tells the app how wide
+    /// a row is; here it is two tiles wide.
+    #[test]
+    fn the_keys_walk_the_gallery_the_way_explorer_does() {
+        let (mut app, _data, _photos) = three();
+        app.grid_cols = 2;
+        app.grid_page_rows = 1;
+
+        // Nothing chosen: the first key lands on the first tile.
+        app.navigate("nav.down", false);
+        assert_eq!(chosen_names(&app), ["a.jpg"]);
+
+        app.navigate("nav.right", false);
+        assert_eq!(chosen_names(&app), ["b.jpg"]);
+        app.navigate("nav.down", false);
+        assert_eq!(
+            chosen_names(&app),
+            ["c.jpg"],
+            "no tile beneath: the last one"
+        );
+        app.navigate("nav.up", false);
+        assert_eq!(chosen_names(&app), ["a.jpg"]);
+        app.navigate("nav.row_end", false);
+        assert_eq!(chosen_names(&app), ["b.jpg"]);
+        app.navigate("nav.last", false);
+        assert_eq!(chosen_names(&app), ["c.jpg"]);
+        app.navigate("nav.first", false);
+        assert_eq!(chosen_names(&app), ["a.jpg"]);
+        app.navigate("nav.page_down", false);
+        assert_eq!(chosen_names(&app), ["c.jpg"]);
+        app.navigate("nav.page_up", false);
+        assert_eq!(chosen_names(&app), ["a.jpg"]);
+        assert_eq!(app.scroll_grid_to, Some(0), "the gallery follows the key");
+
+        // Shift stretches from the anchor, which is where the last plain
+        // step left it.
+        app.navigate("nav.right", true);
+        app.navigate("nav.right", true);
+        assert_eq!(chosen_names(&app), ["a.jpg", "b.jpg", "c.jpg"]);
+        app.navigate("nav.left", true);
+        assert_eq!(chosen_names(&app), ["a.jpg", "b.jpg"]);
     }
 
     #[test]

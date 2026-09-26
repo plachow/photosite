@@ -34,6 +34,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
             let first = (viewport.min.y / ROW).floor().max(0.0) as usize;
             let last = ((viewport.max.y / ROW).ceil() as usize).min(count);
 
+            // A list is a grid one tile wide, as far as the keys are
+            // concerned.
+            app.grid_cols = 1;
+            app.grid_page_rows = ((viewport.height() / ROW).floor() as usize).max(1);
+
             // Coming back from the editor: the row it was opened from is
             // brought into view, drawn or not.
             if let Some(index) = app.scroll_grid_to.take() {
@@ -82,13 +87,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
             }
 
             if let Some((index, modifiers)) = clicked {
-                if modifiers.command || modifiers.ctrl {
-                    app.select_also(index);
-                } else if modifiers.shift {
-                    app.select_through(index);
-                } else {
-                    app.select_only(index);
-                }
+                app.click_tile(index, modifiers.command || modifiers.ctrl, modifiers.shift);
             }
 
             if let Some(index) = opened {
