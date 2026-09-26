@@ -87,8 +87,9 @@ fn post(
     body: &serde_json::Value,
     endpoint: &str,
 ) -> std::result::Result<String, Rejected> {
-    let answer: Answer = http::post(agent, url, &[], body)
-        .map_err(|Unreachable(said)| Rejected::Unreachable(format!("{}: {said}", unreachable(endpoint))))?;
+    let answer: Answer = http::post(agent, url, &[], body).map_err(|Unreachable(said)| {
+        Rejected::Unreachable(format!("{}: {said}", unreachable(endpoint)))
+    })?;
     if answer.status == 400 {
         return Err(Rejected::Refused);
     }

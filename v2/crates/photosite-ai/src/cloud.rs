@@ -32,7 +32,10 @@ pub(crate) fn models(server: &Server, timeout: Duration) -> Result<Vec<String>> 
     let agent = http::agent(timeout);
     let auth = bearer(server);
     let (url, headers) = match server.provider {
-        Provider::OpenAi => (url(server, "models")?, vec![("authorization", auth.as_str())]),
+        Provider::OpenAi => (
+            url(server, "models")?,
+            vec![("authorization", auth.as_str())],
+        ),
         Provider::Anthropic => (url(server, "models?limit=100")?, anthropic_headers(server)),
         Provider::Gemini => (
             url(server, "models?pageSize=100")?,
@@ -276,7 +279,11 @@ pub(crate) fn read_openai(reply: &str) -> Result<Insights> {
             .collect::<Vec<_>>()
             .join(""),
         _ => {
-            if message.get("refusal").and_then(serde_json::Value::as_str).is_some() {
+            if message
+                .get("refusal")
+                .and_then(serde_json::Value::as_str)
+                .is_some()
+            {
                 bail!("the model refused to describe the photograph");
             }
 
@@ -370,7 +377,9 @@ pub(crate) fn read_gemini(reply: &str) -> Result<Insights> {
         .and_then(|candidates| candidates.first())
         .context("the reply carried no candidate")?;
     if candidate.get("content").is_none()
-        && let Some(reason) = candidate.get("finishReason").and_then(serde_json::Value::as_str)
+        && let Some(reason) = candidate
+            .get("finishReason")
+            .and_then(serde_json::Value::as_str)
     {
         bail!("the model stopped without answering: {reason}");
     }
@@ -409,7 +418,12 @@ fn strip_fence(text: &str) -> String {
     };
 
     let inner = inner.strip_prefix("json").unwrap_or(inner);
-    inner.trim().strip_suffix("```").unwrap_or(inner).trim().to_owned()
+    inner
+        .trim()
+        .strip_suffix("```")
+        .unwrap_or(inner)
+        .trim()
+        .to_owned()
 }
 
 #[cfg(test)]
@@ -452,7 +466,10 @@ mod tests {
             "choices": [{ "message": { "role": "assistant", "content": ANSWER } }]
         })
         .to_string();
-        assert_eq!(read_openai(&reply).unwrap().title.as_deref(), Some("A hill"));
+        assert_eq!(
+            read_openai(&reply).unwrap().title.as_deref(),
+            Some("A hill")
+        );
 
         let fenced = serde_json::json!({
             "choices": [{ "message": { "content": format!("```json\n{ANSWER}\n```") } }]
@@ -495,9 +512,13 @@ mod tests {
             ]
         })
         .to_string();
-        assert_eq!(read_anthropic(&reply).unwrap().title.as_deref(), Some("A hill"));
+        assert_eq!(
+            read_anthropic(&reply).unwrap().title.as_deref(),
+            Some("A hill")
+        );
 
-        let talked = serde_json::json!({ "content": [{ "type": "text", "text": ANSWER }] }).to_string();
+        let talked =
+            serde_json::json!({ "content": [{ "type": "text", "text": ANSWER }] }).to_string();
         assert_eq!(read_anthropic(&talked).unwrap().keywords, ["hill"]);
     }
 
@@ -507,7 +528,10 @@ mod tests {
         let schema = &body["generationConfig"]["response_schema"];
         assert!(schema.get("additionalProperties").is_none());
         assert!(schema["properties"]["description_en"].is_object());
-        assert_eq!(body["contents"][0]["parts"][1]["inline_data"]["data"], "AAAA");
+        assert_eq!(
+            body["contents"][0]["parts"][1]["inline_data"]["data"],
+            "AAAA"
+        );
     }
 
     #[test]
@@ -516,9 +540,13 @@ mod tests {
             "candidates": [{ "content": { "parts": [{ "text": ANSWER }] }, "finishReason": "STOP" }]
         })
         .to_string();
-        assert_eq!(read_gemini(&reply).unwrap().title.as_deref(), Some("A hill"));
+        assert_eq!(
+            read_gemini(&reply).unwrap().title.as_deref(),
+            Some("A hill")
+        );
 
-        let blocked = serde_json::json!({ "candidates": [{ "finishReason": "SAFETY" }] }).to_string();
+        let blocked =
+            serde_json::json!({ "candidates": [{ "finishReason": "SAFETY" }] }).to_string();
         let error = read_gemini(&blocked).unwrap_err().to_string();
         assert!(error.contains("SAFETY"), "{error}");
     }

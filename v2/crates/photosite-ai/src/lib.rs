@@ -317,7 +317,11 @@ mod tests {
 
     #[test]
     fn overwriting_means_overwriting() {
-        assert!(!should_skip(Mode::Overwrite, Some("A title"), Some("Words")));
+        assert!(!should_skip(
+            Mode::Overwrite,
+            Some("A title"),
+            Some("Words")
+        ));
     }
 
     /// The settings hold the provider by name, and the names must be the
@@ -420,7 +424,10 @@ mod tests {
             })
             .unwrap();
         catalog.set_title(&[id], Some("Typed by hand")).unwrap();
-        let photo = catalog.by_path(std::path::Path::new("/a/b.jpg")).unwrap().unwrap();
+        let photo = catalog
+            .by_path(std::path::Path::new("/a/b.jpg"))
+            .unwrap()
+            .unwrap();
 
         let insights = Insights {
             title: Some("From the model".to_owned()),
@@ -429,7 +436,10 @@ mod tests {
             description_en: Some("Words in English.".to_owned()),
         };
         apply(&mut catalog, &photo, &insights, Mode::FillEmpty, 5).unwrap();
-        let after = catalog.by_path(std::path::Path::new("/a/b.jpg")).unwrap().unwrap();
+        let after = catalog
+            .by_path(std::path::Path::new("/a/b.jpg"))
+            .unwrap()
+            .unwrap();
         assert_eq!(after.organisation.title.as_deref(), Some("Typed by hand"));
         assert_eq!(after.organisation.description.as_deref(), Some("Words."));
         assert_eq!(after.description_en.as_deref(), Some("Words in English."));
@@ -437,7 +447,10 @@ mod tests {
         assert_eq!(catalog.outbox().unwrap().0, 1, "queued for the file");
 
         apply(&mut catalog, &photo, &insights, Mode::Overwrite, 6).unwrap();
-        let after = catalog.by_path(std::path::Path::new("/a/b.jpg")).unwrap().unwrap();
+        let after = catalog
+            .by_path(std::path::Path::new("/a/b.jpg"))
+            .unwrap()
+            .unwrap();
         assert_eq!(after.organisation.title.as_deref(), Some("From the model"));
     }
 }
