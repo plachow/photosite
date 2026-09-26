@@ -416,6 +416,8 @@ pub struct App {
     pub edit_description: String,
     pub edit_keywords: String,
     pub edit_place: String,
+    /// A name being typed to say somebody is on the photograph.
+    pub edit_person: String,
     /// The folder dialog, at most one — and what it is being asked for. The
     /// same dialog serves opening a folder and choosing where files go; only
     /// what happens to the answer differs.
@@ -600,6 +602,7 @@ impl App {
             edit_description: String::new(),
             edit_keywords: String::new(),
             edit_place: String::new(),
+            edit_person: String::new(),
             folder_dialog: None,
             clipboard: clipboard::Held::default(),
             scroll_tree_to: None,
@@ -2054,6 +2057,56 @@ impl App {
         self.edit_description = photo.organisation.description.clone().unwrap_or_default();
         self.edit_keywords = photo.organisation.keywords.join(", ");
         self.edit_place = photo.place.map(|place| place.typed()).unwrap_or_default();
+        self.edit_person.clear();
+    }
+
+    /// Says by hand that the person whose name was typed is on the chosen
+    /// photographs — turned away, behind the camera, or simply not found by
+    /// the detector. Ported from v1's "Assign person".
+    ///
+    /// The name goes into the keywords and the file exactly as a named face
+    /// would, so nothing downstream can tell the two apart; the People
+    /// window is where the faces themselves are named.
+    pub fn tag_person_from_panel(&mut self) {
+        let name = self.edit_person.trim().to_owned();
+        let chosen = self.chosen();
+        if name.is_empty() || chosen.is_empty() {
+            return;
+        }
+
+        let now = now();
+        self.write_catalog(move |catalog| {
+            let person = catalog.person_named(&name)?;
+            for photo in &chosen {
+                catalog.tag_person(*photo, person, now)?;
+            }
+
+            Ok(())
+        });
+        self.edit_person.clear();
+        // `tag_person` queues the file itself; what is left is to show it.
+        self.relist();
+        self.start_writing();
+    }
+
+    /// Takes a person off the chosen photographs: the hand-written tag, and
+    /// any face of theirs on them, which returns to the unnamed pool.
+    pub fn untag_person_from_panel(&mut self, person: i64) {
+        let chosen = self.chosen();
+        if chosen.is_empty() {
+            return;
+        }
+
+        let now = now();
+        self.write_catalog(move |catalog| {
+            for photo in &chosen {
+                catalog.untag_person(*photo, person, now)?;
+            }
+
+            Ok(())
+        });
+        self.relist();
+        self.start_writing();
     }
 
     /// Writes the title as it now stands. Called when the field is left, not

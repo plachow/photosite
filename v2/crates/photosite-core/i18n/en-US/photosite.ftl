@@ -567,6 +567,9 @@ filter-someone-blinking = Someone blinking
 
 info-people = People
 info-expression = Expression
+info-people-add = Add a person and press Enter
+info-people-add-many = Add a person to all of them
+info-people-remove = Take { $name } off this photograph
 info-expression-smiling = { $count }/{ $of } smiling
 info-expression-eyes = { $count }/{ $of } eyes open
 

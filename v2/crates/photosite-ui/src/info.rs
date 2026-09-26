@@ -143,6 +143,64 @@ fn said(app: &mut App, ui: &mut egui::Ui, palette: &Palette, photo: &Photo, many
             .color(theme::color(palette.dim)),
         );
     });
+
+    people(app, ui, palette, photo, many);
+}
+
+/// Who is on it — the named faces and the people said to be there by hand —
+/// with a way to take one off and a box to add one.
+///
+/// The names are chips rather than a comma-separated line because each one
+/// is a thing to click: taking a person off a photograph is one ✕, not a
+/// trip to the People window. Adding one is typing a name and pressing
+/// Enter; a name nobody has used yet becomes a new person, the same as in
+/// the People window. On a selection only the box is offered — the chips of
+/// one photograph would say nothing true about forty.
+fn people(app: &mut App, ui: &mut egui::Ui, palette: &Palette, photo: &Photo, many: bool) {
+    ui.horizontal(|ui| {
+        ui.add_space(8.0);
+        ui.label(egui::RichText::new(t!("info-people")).color(theme::color(palette.dim)));
+    });
+
+    let mut take_off: Option<i64> = None;
+    let mut add = false;
+    ui.horizontal_wrapped(|ui| {
+        ui.add_space(8.0);
+        if !many {
+            for tag in &photo.people {
+                ui.label(egui::RichText::new(&tag.name).color(theme::color(palette.text)));
+                if ui
+                    .small_button("\u{2715}")
+                    .on_hover_text(t!("info-people-remove", name = tag.name.clone()))
+                    .clicked()
+                {
+                    take_off = Some(tag.id);
+                }
+
+                ui.add_space(4.0);
+            }
+        }
+
+        let box_ = ui.add(
+            egui::TextEdit::singleline(&mut app.edit_person)
+                .hint_text(if many {
+                    t!("info-people-add-many")
+                } else {
+                    t!("info-people-add")
+                })
+                .desired_width(140.0),
+        );
+        add = box_.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+    });
+    ui.add_space(2.0);
+
+    if let Some(person) = take_off {
+        app.untag_person_from_panel(person);
+    }
+
+    if add {
+        app.tag_person_from_panel();
+    }
 }
 
 /// Where it was taken, how much of that to believe, and a way to go and look.
@@ -443,20 +501,9 @@ fn read(photo: &Photo) -> Vec<(String, String)> {
         rows.push((t!("info-exposure"), parts.join("  \u{b7}  ")));
     }
 
-    // Who is on it, and how their faces scored. Both are catalogue rows
-    // rather than anything read out of the file, so they cost nothing here.
-    if !photo.people.is_empty() {
-        rows.push((
-            t!("info-people"),
-            photo
-                .people
-                .iter()
-                .map(|tag| tag.name.clone())
-                .collect::<Vec<_>>()
-                .join(", "),
-        ));
-    }
-
+    // How its faces scored — a catalogue row rather than anything read out
+    // of the file, so it costs nothing here. Who is on it is drawn above,
+    // among the things that can be changed.
     let expressions = photo.expressions;
     if expressions.scored > 0 {
         // Counts and not a verdict: "1/2 smiling" says which frame of a
