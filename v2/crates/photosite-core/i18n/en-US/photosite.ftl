@@ -93,6 +93,7 @@ setting-tile-padding = Tile padding
 setting-prefetch-rows = Rows loaded ahead
 setting-wheel-speed = Mouse wheel speed in the gallery
 setting-show-captions = Show file names
+setting-show-position-badge = Mark tiles whose position is doubtful
 setting-recursive = Include subfolders
 setting-last-folder = Last folder
 

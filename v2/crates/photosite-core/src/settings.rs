@@ -96,6 +96,11 @@ pub struct Gallery {
     /// screenful, not by the line, and the toolkit's notch is a line.
     pub wheel_speed: f64,
     pub show_captions: bool,
+    /// Mark a tile whose position the file itself doubts. Off by default:
+    /// a phone that geotags everything grades most of its library as
+    /// approximate, and a pin on most tiles is a pin that says nothing.
+    /// The verdict itself stays on the details pane and in the filter.
+    pub show_position_badge: bool,
     /// The folder as a list of rows rather than a wall of tiles.
     pub as_list: bool,
     pub recursive: bool,
@@ -130,6 +135,7 @@ impl Default for Gallery {
             prefetch_rows: 3,
             wheel_speed: 3.0,
             show_captions: true,
+            show_position_badge: false,
             as_list: false,
             recursive: false,
             // Date taken, oldest first: the order the photographs happened
@@ -735,6 +741,11 @@ pub const TUNABLES: &[Tunable] = &[
     Tunable {
         path: "gallery.show_captions",
         label_key: "setting-show-captions",
+        kind: Kind::Bool,
+    },
+    Tunable {
+        path: "gallery.show_position_badge",
+        label_key: "setting-show-position-badge",
         kind: Kind::Bool,
     },
     Tunable {

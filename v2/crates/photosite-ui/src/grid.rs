@@ -159,7 +159,15 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
 
                     if let Some(photo) = app.photo(index) {
                         let organisation = photo.organisation.clone();
-                        let verdict = photo.verdict;
+                        // The pin is a setting, and off by default: a phone
+                        // that geotags everything grades most of its
+                        // library as approximate, and a pin on most tiles
+                        // says nothing.
+                        let verdict = if gallery.show_position_badge {
+                            photo.verdict
+                        } else {
+                            photosite_core::Verdict::Nowhere
+                        };
                         let people = photo.people.clone();
                         let expressions = photo.expressions;
                         theme::badges(

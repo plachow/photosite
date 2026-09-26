@@ -234,7 +234,12 @@ fn draw(
 fn caption(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, palette: &Palette, path: &Path) {
     if let Some(photo) = app.photo_named(path) {
         let organisation = photo.organisation.clone();
-        let verdict = photo.verdict;
+        // The same switch as the gallery's: one pin, one setting.
+        let verdict = if app.settings.gallery.show_position_badge {
+            photo.verdict
+        } else {
+            photosite_core::Verdict::Nowhere
+        };
         let people = photo.people.clone();
         let expressions = photo.expressions;
         theme::badges(
