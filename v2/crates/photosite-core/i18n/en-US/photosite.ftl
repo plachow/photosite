@@ -113,40 +113,40 @@ setting-ui-scale = Interface scale
 ## Photo details
 
 info-pick-tile = Click a tile to see its details
-info-name = name
-info-folder = folder
-info-size = size on disk
+info-name = Name
+info-folder = Folder
+info-size = Size on disk
 info-size-mb = { NUMBER($mb, maximumFractionDigits: 1) } MB
-info-orientation = orientation
+info-orientation = Orientation
 info-embedded = EXIF thumbnail
 info-embedded-at = { $bytes } B
 info-embedded-none = none
 info-preview-px = { $width }×{ $height }
-info-preview = preview decoded
+info-preview = Preview decoded
 info-preview-waiting = decoding…
 
 ## Diagnostics
 
 diagnostics-title = Diagnostics
-diagnostics-version = version
-diagnostics-platform = platform
-diagnostics-mode = mode
+diagnostics-version = Version
+diagnostics-platform = Platform
+diagnostics-mode = Mode
 diagnostics-mode-portable = portable
 diagnostics-mode-system = system
-diagnostics-data = data
-diagnostics-config = settings
-diagnostics-cache = cache
-diagnostics-logs = log
-diagnostics-catalog = catalogue
-diagnostics-schema = schema
-diagnostics-workers = worker threads
-diagnostics-photos = photographs in folder
-diagnostics-textures = textures in memory
-diagnostics-decoding = decoding now
-diagnostics-tasks = running tasks
-diagnostics-blank = blank tiles
-diagnostics-unsharp = tiles not yet sharp
-diagnostics-language = language
+diagnostics-data = Data
+diagnostics-config = Settings
+diagnostics-cache = Cache
+diagnostics-logs = Log
+diagnostics-catalog = Catalogue
+diagnostics-schema = Schema
+diagnostics-workers = Worker threads
+diagnostics-photos = Photographs in folder
+diagnostics-textures = Textures in memory
+diagnostics-decoding = Decoding now
+diagnostics-tasks = Running tasks
+diagnostics-blank = Blank tiles
+diagnostics-unsharp = Tiles not yet sharp
+diagnostics-language = Language
 
 ## Self-check
 
@@ -163,16 +163,16 @@ cli-scan-done =
     wrote { $added }, unchanged { $skipped }, unreadable { $failed } in { NUMBER($seconds, maximumFractionDigits: 1) } s ({ NUMBER($rate, maximumFractionDigits: 0) } files/s)
 cli-catalog-total = { $count } photographs in the catalogue
 cli-list-total = { $count } photographs
-cli-info-path = path
-cli-info-size = size
-cli-info-modified = modified
-cli-info-orientation = orientation
+cli-info-path = Path
+cli-info-size = Size
+cli-info-modified = Modified
+cli-info-orientation = Orientation
 cli-info-embedded = EXIF thumbnail
 cli-info-embedded-at = { $bytes } B at offset { $offset }
 cli-info-embedded-none = none
-cli-info-quick = quick preview
+cli-info-quick = Quick preview
 cli-info-quick-none = cannot be produced
-cli-info-tile = tile
+cli-info-tile = Tile
 cli-info-size-px = { $width }×{ $height } in { NUMBER($ms, maximumFractionDigits: 1) } ms
 
 ## Errors
@@ -249,12 +249,12 @@ gallery-selected =
 
 ## What somebody said about a photograph
 
-info-rating = rating
-info-label = label
-info-flag = verdict
-info-title = title
-info-description = description
-info-keywords = keywords
+info-rating = Rating
+info-label = Label
+info-flag = Verdict
+info-title = Title
+info-description = Description
+info-keywords = Keywords
 info-keywords-hint = Separate them with commas
 info-nothing-said = nothing yet
 info-many-selected =
@@ -270,20 +270,20 @@ info-many-hint = The stars, the label and the verdict go on all of them. The
 task-reading-folder = Reading the folder
 task-reading-headers = headers
 
-diagnostics-selected = selected
+diagnostics-selected = Selected
 
-info-taken = taken
+info-taken = Taken
 info-taken-none = not yet known
-info-dimensions = dimensions
+info-dimensions = Dimensions
 info-dimensions-px = { $width } × { $height }
 
-cli-info-taken = taken at
+cli-info-taken = Taken at
 cli-info-taken-none = no date in the file
-cli-info-frame = frame
+cli-info-frame = Frame
 cli-info-frame-none = no size in the header
 
-cli-info-camera = camera
-cli-info-lens = lens
+cli-info-camera = Camera
+cli-info-lens = Lens
 cli-info-none = not recorded
 
 ## The filter
@@ -305,8 +305,8 @@ filter-lenses =
         [one] { $count } lens
        *[other] { $count } lenses
     }
-filter-date = date
-filter-no-rejects = no rejects
+filter-date = Date
+filter-no-rejects = No rejects
 filter-hide-rejected = Hide the rejects
 filter-search = Search
 filter-search-hint = File name, title, description, keywords
@@ -331,18 +331,18 @@ shape-landscape = Landscape
 shape-portrait = Portrait
 shape-square = Square
 
-diagnostics-showing = showing
+diagnostics-showing = Showing
 command-view-filter = Filter…
 command-view-clear-filter = Show everything
 
 filter-any = Any
-filter-from = from
-filter-to = to
+filter-from = From
+filter-to = To
 filter-taken-range = this folder spans { $from } to { $to }
 
 task-writing-metadata = Writing into the photographs
-diagnostics-unwritten = waiting to be written
-diagnostics-unwritable = could not be written
+diagnostics-unwritten = Waiting to be written
+diagnostics-unwritable = Could not be written
 
 cli-scan-seeded =
     { $count ->
@@ -482,7 +482,7 @@ setting-updates-feed = Where the releases are
 
 updates-ready = PhotoSite { $version } is downloaded
 updates-restart = Restart into it
-diagnostics-updates = updates
+diagnostics-updates = Updates
 updates-not-installed = not installed, so not asked
 updates-off = not asked
 updates-asking = asking
@@ -561,8 +561,8 @@ filter-someone-not-smiling = Someone not smiling
 filter-all-eyes-open = Everyone's eyes open
 filter-someone-blinking = Someone blinking
 
-info-people = people
-info-expression = expression
+info-people = People
+info-expression = Expression
 info-expression-smiling = { $count }/{ $of } smiling
 info-expression-eyes = { $count }/{ $of } eyes open
 
@@ -737,12 +737,12 @@ ai-failed =
 ai-all-failing = The first few all failed; check the address and the model.
 task-describe = Describing
 
-diagnostics-models = face models
+diagnostics-models = Face models
 diagnostics-missing = missing: { $missing }
-diagnostics-places = place list
-diagnostics-faces = faces
+diagnostics-places = Place list
+diagnostics-faces = Faces
 diagnostics-faces-of = { $named } of { $faces } named
-diagnostics-people = people
+diagnostics-people = People
 
 ## The editor
 
