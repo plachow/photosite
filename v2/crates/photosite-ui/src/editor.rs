@@ -325,10 +325,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, palette: &Palette, ctx: &egui::Con
     // The wheel with Ctrl looks closer, the plain wheel turns the page, and
     // the drag moves what is looked at. All three are read from the same
     // response, and the page only turns when the pointer is over the
-    // photograph — a wheel over the row beneath it means nothing.
-    let (control, wheel, pointer) = ui.input(|input| {
+    // photograph — a wheel over the row beneath it means nothing. The
+    // toolkit hands a wheel turned with Ctrl over as a zoom factor and
+    // never as a scroll, so the two are read apart.
+    let (zoom, wheel, pointer) = ui.input(|input| {
         (
-            input.modifiers.command || input.modifiers.ctrl,
+            input.zoom_delta(),
             input.smooth_scroll_delta.y,
             input.pointer.latest_pos(),
         )
@@ -339,25 +341,23 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, palette: &Palette, ctx: &egui::Con
     let dragged = response.drag_delta();
     if dragged != Vec2::ZERO {
         view = looking::pulled(view, &frame, dragged);
+    } else if response.hovered() && zoom != 1.0 {
+        if let Some(pointer) = pointer {
+            view = looking::zoomed(view, &frame, pointer - area.min, zoom);
+        }
     } else if response.hovered() && wheel != 0.0 {
-        if control {
-            if let Some(pointer) = pointer {
-                view = looking::wheeled(view, &frame, pointer - area.min, wheel);
-            }
-        } else {
-            // Turning back the other way starts over: half a notch down and
-            // half a notch up is nothing, not a page.
-            if accumulated.signum() != wheel.signum() {
-                accumulated = 0.0;
-            }
+        // Turning back the other way starts over: half a notch down and
+        // half a notch up is nothing, not a page.
+        if accumulated.signum() != wheel.signum() {
+            accumulated = 0.0;
+        }
 
-            accumulated += wheel;
-            if accumulated.abs() >= NOTCH {
-                // A wheel turned towards oneself is the next page, the way
-                // it scrolls a list down.
-                turned = Some(if accumulated < 0.0 { 1 } else { -1 });
-                accumulated = 0.0;
-            }
+        accumulated += wheel;
+        if accumulated.abs() >= NOTCH {
+            // A wheel turned towards oneself is the next page, the way
+            // it scrolls a list down.
+            turned = Some(if accumulated < 0.0 { 1 } else { -1 });
+            accumulated = 0.0;
         }
     }
 

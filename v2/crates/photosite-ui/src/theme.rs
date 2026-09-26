@@ -171,6 +171,63 @@ pub fn star(painter: &egui::Painter, centre: egui::Pos2, radius: f32, fill: Colo
     painter.add(egui::Shape::mesh(mesh));
 }
 
+/// A scrollbar that is always there, the way a file manager's is.
+///
+/// The toolkit's own fades out when the wheel stops and floats over the
+/// content when it comes back, which is right for a web page and wrong
+/// beside a splitter: a bar that appears where a hand is already reaching
+/// for the splitter is a bar that gets grabbed instead. This one has its
+/// own strip of room, its own track, and never goes away.
+pub fn solid_scrollbar(ui: &mut egui::Ui) {
+    ui.spacing_mut().scroll = egui::style::ScrollStyle {
+        bar_width: 8.0,
+        bar_inner_margin: 2.0,
+        bar_outer_margin: 2.0,
+        dormant_background_opacity: 1.0,
+        active_background_opacity: 1.0,
+        interact_background_opacity: 1.0,
+        dormant_handle_opacity: 1.0,
+        active_handle_opacity: 1.0,
+        interact_handle_opacity: 1.0,
+        ..egui::style::ScrollStyle::solid()
+    };
+}
+
+/// A folder, as Explorer draws one: a yellow body with a tab on the top
+/// left, and a lighter front when it is open.
+pub fn folder(painter: &egui::Painter, rect: Rect, open: bool) {
+    let back = Color32::from_rgb(0xDC, 0xA8, 0x2E);
+    let front = if open {
+        Color32::from_rgb(0xF7, 0xD4, 0x6A)
+    } else {
+        Color32::from_rgb(0xF2, 0xC5, 0x4E)
+    };
+    let tab = Rect::from_min_size(
+        rect.min,
+        Vec2::new(rect.width() * 0.45, rect.height() * 0.3),
+    );
+    painter.rect_filled(
+        tab,
+        CornerRadius {
+            nw: 2,
+            ne: 2,
+            sw: 0,
+            se: 0,
+        },
+        back,
+    );
+    let body = Rect::from_min_max(
+        egui::pos2(rect.min.x, rect.min.y + rect.height() * 0.2),
+        rect.max,
+    );
+    painter.rect_filled(body, CornerRadius::same(1), back);
+    let face = Rect::from_min_max(
+        egui::pos2(rect.min.x + 1.0, rect.min.y + rect.height() * 0.4),
+        egui::pos2(rect.max.x - 1.0, rect.max.y - 1.0),
+    );
+    painter.rect_filled(face, CornerRadius::same(1), front);
+}
+
 /// The colour a number of stars is drawn in: gold for five, and darker and
 /// greyer for each star fewer, down to a grey with a tint of yellow left in
 /// it for one. So the tile says how many at a glance, before the number in

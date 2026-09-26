@@ -44,29 +44,21 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
     let count = app.count();
 
     // Ctrl and the wheel resizes the tiles, the way it does in every file
-    // manager and every browser. It is taken **before** the scroll area sees
-    // it, or the grid scrolls and resizes at the same time.
-    let zooming = ui.input_mut(|input| {
-        if !input.modifiers.command && !input.modifiers.ctrl {
-            return 0.0;
-        }
-
-        let wheel = input.smooth_scroll_delta.y;
-        if wheel != 0.0 {
-            input.smooth_scroll_delta.y = 0.0;
-        }
-
-        wheel
-    });
-    if zooming != 0.0 && ui.rect_contains_pointer(ui.max_rect()) {
-        // A notch is a fifth larger, which is the same step the menu takes.
-        app.resize_tiles(f64::from(1.2f32.powf(zooming / 50.0)));
+    // manager and every browser. The toolkit never shows that wheel as a
+    // scroll: with Ctrl held it becomes a zoom factor, so the scroll area
+    // cannot see it and nothing has to be taken away from it. Reading the
+    // scroll delta here instead is why the tiles once did not resize at all.
+    let zooming = ui.input(|input| input.zoom_delta());
+    if zooming != 1.0 && ui.rect_contains_pointer(ui.max_rect()) {
+        app.resize_tiles(f64::from(zooming));
     }
 
     speed_wheel(ui, gallery.wheel_speed);
+    theme::solid_scrollbar(ui);
 
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
         .show_viewport(ui, |ui, viewport| {
             let width = ui.available_width();
             let cols = (((width - gap) / (tile_w + gap)).floor() as usize).max(1);
@@ -355,6 +347,10 @@ fn frames(app: &mut App, ui: &mut egui::Ui, index: usize, into: egui::Rect) {
 }
 
 pub fn tree(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
+    // Explorer's spacing: a step of a box per level, and no guide lines.
+    ui.spacing_mut().indent = 16.0;
+    ui.visuals_mut().indent_has_left_vline = false;
+    theme::solid_scrollbar(ui);
     egui::ScrollArea::both()
         .auto_shrink([false, false])
         .show(ui, |ui| {
@@ -383,6 +379,11 @@ pub fn tree(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
         });
 }
 
+/// One folder of the tree, drawn the way Explorer draws one: a boxed plus
+/// or minus, a yellow folder, the name, and the open folder's whole row
+/// lit. Everything is painted rather than written — the default font has
+/// no glyph for any of it, and a folder that comes out as an empty box is
+/// not a folder.
 fn node(
     ui: &mut egui::Ui,
     node: &mut Node,
@@ -391,50 +392,96 @@ fn node(
     scroll_to: Option<&Path>,
     pick: &mut Option<PathBuf>,
 ) {
+    const ROW: f32 = 18.0;
     let is_current = current == Some(node.path.as_path());
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 2.0;
+        ui.spacing_mut().item_spacing.x = 3.0;
 
-        // The triangle is drawn, not written: egui's default font has no
-        // ▸ or ▾ and they would come out as empty boxes.
-        let (rect, response) = ui.allocate_exact_size(Vec2::new(14.0, 16.0), Sense::click());
-        let center = rect.center();
-        let tint = theme::color(if response.hovered() {
-            palette.text
-        } else {
-            palette.dim
-        });
-        let points = if node.expanded {
-            vec![
-                egui::pos2(center.x - 4.0, center.y - 2.0),
-                egui::pos2(center.x + 4.0, center.y - 2.0),
-                egui::pos2(center.x, center.y + 3.0),
-            ]
-        } else {
-            vec![
-                egui::pos2(center.x - 2.0, center.y - 4.0),
-                egui::pos2(center.x + 3.0, center.y),
-                egui::pos2(center.x - 2.0, center.y + 4.0),
-            ]
-        };
-        ui.painter().add(egui::Shape::convex_polygon(
-            points,
-            tint,
-            egui::Stroke::NONE,
-        ));
-        if response.clicked() {
+        // The expander. A folder whose children have not been looked at is
+        // given one, because most folders have folders in them and asking
+        // the disk about every one just to draw the tree is what makes a
+        // tree over a network drive take a minute to open. A folder known
+        // to be empty gets the space and no box.
+        let (rect, response) = ui.allocate_exact_size(Vec2::new(ROW, ROW), Sense::click());
+        let childless = node.children.as_ref().is_some_and(Vec::is_empty);
+        if !childless {
+            let tint = theme::color(if response.hovered() {
+                palette.text
+            } else {
+                palette.dim
+            });
+            let square = egui::Rect::from_center_size(rect.center(), Vec2::splat(9.0));
+            ui.painter().rect(
+                square,
+                0,
+                theme::color(palette.window),
+                egui::Stroke::new(1.0, tint),
+                egui::StrokeKind::Inside,
+            );
+            let centre = square.center();
+            ui.painter().line_segment(
+                [
+                    egui::pos2(centre.x - 2.5, centre.y),
+                    egui::pos2(centre.x + 2.5, centre.y),
+                ],
+                egui::Stroke::new(1.0, tint),
+            );
+            if !node.expanded {
+                ui.painter().line_segment(
+                    [
+                        egui::pos2(centre.x, centre.y - 2.5),
+                        egui::pos2(centre.x, centre.y + 2.5),
+                    ],
+                    egui::Stroke::new(1.0, tint),
+                );
+            }
+        }
+
+        if response.clicked() && !childless {
             node.expanded = !node.expanded;
             if node.expanded {
                 node.load_children();
             }
         }
 
-        let label = egui::RichText::new(&node.name).color(theme::color(if is_current {
-            palette.accent
-        } else {
-            palette.text
-        }));
-        let response = ui.add(egui::Button::new(label).frame(false));
+        // The folder and its name are one thing to click, and the open one
+        // is lit across the row rather than merely coloured: a coloured
+        // word among words is easy to lose, a lit row is not.
+        let galley = ui.painter().layout_no_wrap(
+            node.name.clone(),
+            egui::FontId::proportional(13.0),
+            theme::color(palette.text),
+        );
+        let width = ROW + 4.0 + galley.size().x + 6.0;
+        let (row, response) = ui.allocate_exact_size(Vec2::new(width, ROW), Sense::click());
+        if is_current {
+            ui.painter()
+                .rect_filled(row, 2, theme::color(palette.accent).gamma_multiply(0.35));
+        } else if response.hovered() {
+            ui.painter().rect_filled(
+                row,
+                2,
+                theme::color(palette.bevel_light).gamma_multiply(0.6),
+            );
+        }
+
+        theme::folder(
+            ui.painter(),
+            egui::Rect::from_min_size(
+                egui::pos2(row.min.x + 1.0, row.center().y - 6.0),
+                Vec2::new(16.0, 12.0),
+            ),
+            node.expanded,
+        );
+        ui.painter().galley(
+            egui::pos2(
+                row.min.x + ROW + 4.0,
+                row.center().y - galley.size().y * 0.5,
+            ),
+            galley,
+            theme::color(palette.text),
+        );
+
         // An expanded tree is not enough on its own: the open folder may sit
         // far below the edge of the pane, and then it is no use.
         if scroll_to == Some(node.path.as_path()) {

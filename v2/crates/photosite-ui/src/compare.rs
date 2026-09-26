@@ -293,12 +293,19 @@ pub(crate) fn steered(
         return None;
     }
 
-    let wheel = ui.input(|input| input.smooth_scroll_delta.y);
+    // A wheel turned with Ctrl reaches us as a zoom factor and a plain one
+    // as a scroll; both look closer here, since a comparison has no page to
+    // turn.
+    let (zoom, wheel) = ui.input(|input| (input.zoom_delta(), input.smooth_scroll_delta.y));
+    let pointer = ui.input(|input| input.pointer.latest_pos())?;
+    if zoom != 1.0 {
+        return Some(zoomed(view, frame, pointer - rect.min, zoom));
+    }
+
     if wheel == 0.0 {
         return None;
     }
 
-    let pointer = ui.input(|input| input.pointer.latest_pos())?;
     Some(wheeled(view, frame, pointer - rect.min, wheel))
 }
 
@@ -327,6 +334,16 @@ pub(crate) fn wheeled(
     at: Vec2,
     wheel: f32,
 ) -> compare::View {
+    zoomed(view, frame, at, NOTCH.powf(wheel))
+}
+
+/// A zoom by a factor at a point in the cell, measured from its top left.
+pub(crate) fn zoomed(
+    view: compare::View,
+    frame: &compare::Frame,
+    at: Vec2,
+    factor: f32,
+) -> compare::View {
     let per_point = per_point(frame);
     // Where the pointer is in the photograph, so that what is under it stays
     // under it.
@@ -335,7 +352,7 @@ pub(crate) fn wheeled(
         frame.source[0] + inside.x * per_point.0,
         frame.source[1] + inside.y * per_point.1,
     );
-    view.zoom_about(NOTCH.powf(wheel), point)
+    view.zoom_about(factor, point)
 }
 
 /// The pixel size of a photograph as it appears, from the catalogue.

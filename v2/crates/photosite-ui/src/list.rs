@@ -22,8 +22,10 @@ const TEXT: f32 = 13.0;
 pub fn show(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
     let count = app.count();
     crate::grid::speed_wheel(ui, app.settings.gallery.wheel_speed);
+    theme::solid_scrollbar(ui);
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
         .show_viewport(ui, |ui, viewport| {
             let width = ui.available_width();
             let (area, _) =
