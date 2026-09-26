@@ -171,6 +171,36 @@ pub fn star(painter: &egui::Painter, centre: egui::Pos2, radius: f32, fill: Colo
     painter.add(egui::Shape::mesh(mesh));
 }
 
+/// The colour a number of stars is drawn in: gold for five, and darker and
+/// greyer for each star fewer, down to a grey with a tint of yellow left in
+/// it for one. So the tile says how many at a glance, before the number in
+/// the star can be read.
+pub fn rating_color(stars: u8) -> Color32 {
+    match stars {
+        5 => Color32::from_rgb(0xF2, 0xC5, 0x4E),
+        4 => Color32::from_rgb(0xD4, 0xA8, 0x3C),
+        3 => Color32::from_rgb(0xB0, 0x8A, 0x2E),
+        2 => Color32::from_rgb(0x8C, 0x7A, 0x45),
+        _ => Color32::from_rgb(0x7A, 0x75, 0x62),
+    }
+}
+
+/// One star with the number of stars written in it.
+///
+/// `radius` is the star's own; the digit is sized to sit inside the star's
+/// body rather than its points, and is dark on every colour the star can be,
+/// because all of them are light enough for that.
+pub fn rating_badge(painter: &egui::Painter, centre: egui::Pos2, radius: f32, stars: u8) {
+    star(painter, centre, radius, rating_color(stars));
+    painter.text(
+        centre + Vec2::new(0.0, radius * 0.08),
+        egui::Align2::CENTER_CENTER,
+        stars.to_string(),
+        FontId::proportional(radius * 1.05),
+        Color32::from_black_alpha(210),
+    );
+}
+
 /// The colour of a verdict about a position.
 ///
 /// Its own colours and not the palette's, for the same reason the label
@@ -300,31 +330,18 @@ pub fn badges(
         return;
     }
 
+    // One star with the number in it, rather than a row of five. Five stars
+    // across a tile are a fifth of its width and say "rated" long before
+    // they say how much; one star in a colour that darkens as the stars go
+    // says both at a glance and takes the room of a label swatch.
     if organisation.rating > 0 {
-        let width = size * 2.0 * Organisation::MAX_RATING as f32 + pad;
+        let side = size * 2.2;
         let plate = Rect::from_min_size(
-            egui::pos2(well.min.x + pad, well.max.y - pad - size * 2.2),
-            Vec2::new(width, size * 2.2),
+            egui::pos2(well.min.x + pad, well.max.y - pad - side),
+            Vec2::splat(side),
         );
         painter.rect_filled(plate, CornerRadius::same(2), Color32::from_black_alpha(120));
-
-        for index in 0..Organisation::MAX_RATING {
-            let centre = egui::pos2(
-                plate.min.x + pad * 0.5 + size + index as f32 * size * 2.0,
-                plate.center().y,
-            );
-            let lit = index < organisation.rating;
-            star(
-                painter,
-                centre,
-                size * 0.9,
-                if lit {
-                    Color32::from_rgb(0xF2, 0xC5, 0x4E)
-                } else {
-                    Color32::from_white_alpha(60)
-                },
-            );
-        }
+        rating_badge(painter, plate.center(), size * 0.95, organisation.rating);
     }
 
     // The label goes in the corner as its own colour, never the palette's —

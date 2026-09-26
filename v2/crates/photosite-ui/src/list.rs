@@ -12,7 +12,6 @@
 use crate::{App, theme};
 use eframe::egui;
 use egui::{Sense, Vec2};
-use photosite_core::domain::Organisation;
 use photosite_core::t;
 use photosite_core::theme::Palette;
 
@@ -22,6 +21,7 @@ const TEXT: f32 = 13.0;
 
 pub fn show(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
     let count = app.count();
+    crate::grid::speed_wheel(ui, app.settings.gallery.wheel_speed);
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show_viewport(ui, |ui, viewport| {
@@ -206,16 +206,12 @@ fn marks(
 
     let middle = rect.center().y;
     let organisation = &photo.organisation;
-    for star in 0..Organisation::MAX_RATING {
-        if star >= organisation.rating {
-            break;
-        }
-
-        theme::star(
+    if organisation.rating > 0 {
+        theme::rating_badge(
             ui.painter(),
-            egui::pos2(rect.min.x + at + 5.0 + star as f32 * 11.0, middle),
-            4.5,
-            egui::Color32::from_rgb(0xF2, 0xC5, 0x4E),
+            egui::pos2(rect.min.x + at + 10.0, middle),
+            7.0,
+            organisation.rating,
         );
     }
 
