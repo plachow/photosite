@@ -1406,6 +1406,28 @@ impl App {
             }
             "editor.next" => self.page_editor(1),
             "editor.previous" => self.page_editor(-1),
+            // One pixel per point, about the middle of what is on screen —
+            // and the whole of it again. The editor remembers the size of
+            // its cell from the last frame, which is what the zoom is
+            // measured against.
+            "editor.actual" => {
+                if let Some(editor) = self.tabs.active_editor_mut() {
+                    let zoom = photosite_core::compare::one_to_one(editor.cell, editor.image);
+                    editor.view = photosite_core::compare::settled(
+                        photosite_core::compare::View {
+                            zoom,
+                            ..editor.view
+                        },
+                        editor.cell,
+                        editor.image,
+                    );
+                }
+            }
+            "editor.fit" => {
+                if let Some(editor) = self.tabs.active_editor_mut() {
+                    editor.view = photosite_core::compare::View::FITTED;
+                }
+            }
             "view.settings" => self.show_settings = !self.show_settings,
             "photo.batch" => batch::open(self),
             "photo.describe" => describe::open(self),
@@ -2340,6 +2362,23 @@ impl App {
                         alt: modifiers.alt,
                         key: key.name().to_owned(),
                     }),
+                    // A key the toolkit has no name for — `*` above all,
+                    // which the numeric keypad sends and egui knows only as
+                    // typed text. Letters and digits come through as keys
+                    // already and are not taken twice.
+                    egui::Event::Text(text)
+                        if text.chars().count() == 1
+                            && !text
+                                .chars()
+                                .all(|c| c.is_alphanumeric() || c.is_whitespace()) =>
+                    {
+                        Some(Shortcut {
+                            ctrl: false,
+                            shift: false,
+                            alt: false,
+                            key: text.clone(),
+                        })
+                    }
                     _ => None,
                 })
                 .collect()

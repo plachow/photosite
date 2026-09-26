@@ -660,6 +660,27 @@ pub const COMMANDS: &[Command] = &[
         toolbar: false,
         scope: Scope::Editor,
     },
+    // One pixel per point, and the whole photograph again: `*` and `0` on
+    // the numeric keypad, as every viewer since ACDSee has had them. The
+    // toolkit has no key called `*` — it arrives as typed text — and does
+    // not tell the keypad's 0 from the row's, so both 0s fit. That is no
+    // clash: the manager's 0 clears a label, and nobody is in both at once.
+    Command {
+        id: "editor.actual",
+        title_key: "command-editor-actual",
+        group: Group::Editor,
+        default_shortcut: Some("*"),
+        toolbar: false,
+        scope: Scope::Editor,
+    },
+    Command {
+        id: "editor.fit",
+        title_key: "command-editor-fit",
+        group: Group::Editor,
+        default_shortcut: Some("0"),
+        toolbar: false,
+        scope: Scope::Editor,
+    },
     Command {
         id: "help.diagnostics",
         title_key: "command-help-diagnostics",

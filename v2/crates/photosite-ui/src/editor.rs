@@ -37,6 +37,12 @@ pub struct Editor {
     pub view: compare::View,
     /// Wheel movement not yet turned into a page. See [`NOTCH`].
     wheel: f32,
+    /// The space the photograph was last drawn in, and the photograph's own
+    /// size, in points. Kept from the last frame so that a key can ask for
+    /// "one pixel per point" without a hand on the canvas: the zoom is a
+    /// factor over the fitted size, and the fitted size depends on both.
+    pub cell: (f32, f32),
+    pub image: (f32, f32),
 }
 
 impl Editor {
@@ -45,6 +51,8 @@ impl Editor {
             path,
             view: compare::View::FITTED,
             wheel: 0.0,
+            cell: (1.0, 1.0),
+            image: (1.0, 1.0),
         }
     }
 
@@ -356,6 +364,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, palette: &Palette, ctx: &egui::Con
     if let Some(current) = app.tabs.active_editor_mut() {
         current.view = compare::settled(view, cell, image);
         current.wheel = accumulated;
+        current.cell = cell;
+        current.image = image;
     }
 
     // The middle button fills the screen and gives it back.
