@@ -209,7 +209,16 @@ fn pane(app: &mut App, ui: &mut egui::Ui, palette: &Palette, id: &str, rect: egu
     };
     ui.painter().rect_filled(rect, 0, theme::color(fill));
 
-    let mut child = child_ui(ui, id, rect.shrink(if id == "tree" { 6.0 } else { 0.0 }));
+    // The gallery keeps a strip of its own background on the right: its
+    // scrollbar sits at that edge, and the splitter to the next column sits
+    // right after it. Two thin grabbable bars side by side are one bar
+    // nobody can hit, and the strip is what tells them apart.
+    let inner = match id {
+        "tree" => rect.shrink(6.0),
+        "gallery" => egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x - 8.0, rect.max.y)),
+        _ => rect,
+    };
+    let mut child = child_ui(ui, id, inner);
     child.set_clip_rect(rect);
     match id {
         "tree" => grid::tree(app, &mut child, palette),
