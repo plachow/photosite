@@ -135,18 +135,13 @@ pub fn build(language: &str, english_too: bool, place: Option<&str>) -> String {
     prompt
 }
 
-/// The JSON body of one `api/chat` request.
+/// The shape the answer is held to.
 ///
-/// `format` is what holds the model to a shape. Without it the answer is
-/// prose about a photograph, which is charming and useless.
-pub fn request(
-    model: &str,
-    image: &[u8],
-    language: &str,
-    english_too: bool,
-    place: Option<&str>,
-    no_thinking: bool,
-) -> serde_json::Value {
+/// Every provider takes a JSON schema in some form, and this is the one
+/// they all get. `strict` adds what OpenAI's strict mode insists on and
+/// Gemini's schema subset refuses: that nothing beyond these properties is
+/// allowed.
+pub fn schema(english_too: bool, strict: bool) -> serde_json::Value {
     let mut properties = serde_json::json!({
         "title": { "type": "string" },
         "description": { "type": "string" },
@@ -158,22 +153,43 @@ pub fn request(
         required.push("description_en");
     }
 
+    let mut schema = serde_json::json!({
+        "type": "object",
+        "properties": properties,
+        "required": required,
+    });
+    if strict {
+        schema["additionalProperties"] = serde_json::Value::Bool(false);
+    }
+
+    schema
+}
+
+/// Low, because this is a description of what is in a photograph and not a
+/// piece of writing. Invention is the failure mode here.
+pub const TEMPERATURE: f64 = 0.2;
+
+/// The JSON body of one Ollama `api/chat` request.
+///
+/// `format` is what holds the model to a shape. Without it the answer is
+/// prose about a photograph, which is charming and useless.
+pub fn ollama_request(
+    model: &str,
+    image: &[u8],
+    text: &str,
+    english_too: bool,
+    no_thinking: bool,
+) -> serde_json::Value {
     let mut body = serde_json::json!({
         "model": model,
         "stream": false,
         "messages": [{
             "role": "user",
-            "content": build(language, english_too, place),
+            "content": text,
             "images": [crate::base64::encode(image)],
         }],
-        "format": {
-            "type": "object",
-            "properties": properties,
-            "required": required,
-        },
-        // Low, because this is a description of what is in a photograph and
-        // not a piece of writing. Invention is the failure mode here.
-        "options": { "temperature": 0.2 },
+        "format": schema(english_too, false),
+        "options": { "temperature": TEMPERATURE },
     });
 
     if no_thinking {
@@ -183,21 +199,20 @@ pub fn request(
     body
 }
 
-/// Reads the answer out of a chat response.
-///
-/// Two layers of JSON: the chat reply, whose `message.content` is itself the
-/// JSON the schema asked for. That is Ollama's shape, not ours.
-pub fn read(reply: &str) -> anyhow::Result<Insights> {
-    let outer: serde_json::Value =
-        serde_json::from_str(reply).map_err(|_| anyhow::anyhow!("the reply was not JSON"))?;
-    let content = outer
-        .get("message")
-        .and_then(|message| message.get("content"))
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("the reply carried no message"))?;
-
-    let inner: serde_json::Value = serde_json::from_str(content)
+/// Reads the model's answer: the JSON the schema asked for, as text.
+pub fn read_answer(content: &str) -> anyhow::Result<Insights> {
+    let inner: serde_json::Value = serde_json::from_str(content.trim())
         .map_err(|_| anyhow::anyhow!("the model's answer was not the JSON it was asked for"))?;
+    read_object(&inner)
+}
+
+/// The same, from an object already parsed — which is how a provider that
+/// answers through a tool call hands it over.
+pub fn read_object(inner: &serde_json::Value) -> anyhow::Result<Insights> {
+    anyhow::ensure!(
+        inner.is_object(),
+        "the model's answer was not the JSON object it was asked for"
+    );
 
     Ok(Insights {
         title: line(inner.get("title").and_then(serde_json::Value::as_str), 200),
@@ -438,7 +453,7 @@ mod tests {
 
     #[test]
     fn the_request_holds_the_photograph_and_the_shape_of_the_answer() {
-        let body = request("qwen", b"not really a jpeg", "English", false, None, true);
+        let body = ollama_request("qwen", b"not really a jpeg", "the prompt", false, true);
         assert_eq!(body["model"], "qwen");
         assert_eq!(body["stream"], false);
         assert_eq!(body["think"], false);
@@ -458,26 +473,22 @@ mod tests {
 
     #[test]
     fn asking_for_english_too_asks_for_it_in_the_schema() {
-        let body = request("qwen", b"x", "Czech", true, None, false);
+        let body = ollama_request("qwen", b"x", "the prompt", true, false);
         assert!(body.get("think").is_none(), "an older server rejects it");
         assert!(body["format"]["properties"]["description_en"].is_object());
     }
 
     #[test]
-    fn the_answer_is_read_out_of_the_two_layers_of_json() {
+    fn the_answer_is_read_and_tidied() {
         let reply = serde_json::json!({
-            "message": {
-                "content": serde_json::json!({
-                    "title": "  Sunrise over the bay  ",
-                    "description": "A wide bay at first light.\nGulls on the water.",
-                    "keywords": ["sea", "sunrise", "SEA", "#gulls", "a;b"],
-                    "description_en": "A wide bay at first light."
-                }).to_string()
-            }
+            "title": "  Sunrise over the bay  ",
+            "description": "A wide bay at first light.\nGulls on the water.",
+            "keywords": ["sea", "sunrise", "SEA", "#gulls", "a;b"],
+            "description_en": "A wide bay at first light."
         })
         .to_string();
 
-        let insights = read(&reply).unwrap();
+        let insights = read_answer(&reply).unwrap();
         assert_eq!(insights.title.as_deref(), Some("Sunrise over the bay"));
         assert!(insights.description.unwrap().contains('\n'), "lines kept");
         assert_eq!(insights.keywords, ["sea", "sunrise", "gulls", "a b"]);
@@ -486,18 +497,14 @@ mod tests {
 
     #[test]
     fn a_reply_that_is_not_what_was_asked_for_is_an_error_and_not_a_guess() {
-        assert!(read("this is not json").is_err());
-        assert!(read(r#"{"message":{}}"#).is_err());
-        assert!(read(r#"{"message":{"content":"sorry, I cannot"}}"#).is_err());
+        assert!(read_answer("this is not json").is_err());
+        assert!(read_answer("sorry, I cannot").is_err());
+        assert!(read_answer("[1, 2]").is_err());
     }
 
     #[test]
     fn a_missing_field_is_missing_rather_than_fatal() {
-        let reply = serde_json::json!({
-            "message": { "content": r#"{"title":"Only a title"}"# }
-        })
-        .to_string();
-        let insights = read(&reply).unwrap();
+        let insights = read_answer(r#"{"title":"Only a title"}"#).unwrap();
         assert_eq!(insights.title.as_deref(), Some("Only a title"));
         assert_eq!(insights.description, None);
         assert!(insights.keywords.is_empty());
@@ -508,11 +515,8 @@ mod tests {
     #[test]
     fn a_long_answer_is_cut_between_letters_and_not_inside_one() {
         let long: String = "ěščřžýáíé".repeat(1000);
-        let reply = serde_json::json!({
-            "message": { "content": serde_json::json!({ "description": long }).to_string() }
-        })
-        .to_string();
-        let insights = read(&reply).unwrap();
+        let reply = serde_json::json!({ "description": long }).to_string();
+        let insights = read_answer(&reply).unwrap();
         assert_eq!(insights.description.unwrap().chars().count(), 4000);
     }
 

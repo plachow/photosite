@@ -98,15 +98,25 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Asks a model on this machine to describe a folder's photographs.
+    /// Asks a vision model to describe a folder's photographs.
     Describe {
         folder: PathBuf,
         #[arg(long, short)]
         recursive: bool,
-        /// Where Ollama is.
-        #[arg(long, default_value = photosite_ai::DEFAULT_ENDPOINT)]
-        endpoint: String,
-        /// Which model. Without one, the first vision model the server has.
+        /// Who to ask: ollama (on this machine, the default), openai,
+        /// anthropic or gemini.
+        #[arg(long, default_value = "ollama")]
+        provider: String,
+        /// Where the provider is. Without one, Ollama on localhost or the
+        /// cloud provider's own address.
+        #[arg(long)]
+        endpoint: Option<String>,
+        /// The key a cloud provider is asked with. PHOTOSITE_AI_KEY in the
+        /// environment serves as well, and keeps it out of the shell history.
+        #[arg(long)]
+        api_key: Option<String>,
+        /// Which model. Without one, the first vision model Ollama has; a
+        /// cloud provider must be told.
         #[arg(long)]
         model: Option<String>,
         #[arg(long, default_value = "English")]
@@ -178,7 +188,9 @@ fn main() -> Result<()> {
         Command::Describe {
             folder,
             recursive,
+            provider,
             endpoint,
+            api_key,
             model,
             language,
             limit,
@@ -187,7 +199,13 @@ fn main() -> Result<()> {
             &paths,
             &folder,
             recursive,
-            &endpoint,
+            &photosite_ai::Server {
+                provider: photosite_ai::Provider::from_id(&provider),
+                endpoint: endpoint.unwrap_or_default(),
+                api_key: api_key
+                    .or_else(|| std::env::var(photosite_ai::KEY_VARIABLE).ok())
+                    .unwrap_or_default(),
+            },
             model.as_deref(),
             &language,
             limit,
@@ -448,28 +466,45 @@ fn convert(
     Ok(())
 }
 
-/// Describes a folder's photographs with a model on this machine.
+/// Describes a folder's photographs with a vision model.
 #[allow(clippy::too_many_arguments)]
 fn describe(
     paths: &Paths,
     folder: &Path,
     recursive: bool,
-    endpoint: &str,
+    server: &photosite_ai::Server,
     model: Option<&str>,
     language: &str,
     limit: Option<usize>,
     overwrite: bool,
 ) -> Result<()> {
+    anyhow::ensure!(
+        server.admitted(),
+        "{} needs an API key: --api-key, or {} in the environment",
+        server.provider.name(),
+        photosite_ai::KEY_VARIABLE
+    );
     let timeout = std::time::Duration::from_secs(600);
-    let offered = photosite_ai::models(endpoint, std::time::Duration::from_secs(10))?;
     let model = match model {
         Some(model) => model.to_owned(),
-        None => offered
-            .first()
-            .cloned()
-            .context("the server offers no models")?,
+        // Ollama's list puts the vision models first; a cloud provider's
+        // does not say which can see, so there it has to be named.
+        None if !server.provider.remote() => {
+            photosite_ai::models(server, std::time::Duration::from_secs(10))?
+                .first()
+                .cloned()
+                .context("the server offers no models")?
+        }
+        None => {
+            let offered = photosite_ai::models(server, std::time::Duration::from_secs(10))?;
+            anyhow::bail!(
+                "{} must be told which model with --model; it offers: {}",
+                server.provider.name(),
+                offered.join(", ")
+            );
+        }
     };
-    println!("{model}");
+    println!("{} · {model}", server.provider.name());
 
     let places = photosite_core::Gazetteer::load(&paths.places())?;
     match &places {
@@ -516,11 +551,11 @@ fn describe(
         match describe_one(
             &mut catalog,
             photo,
-            endpoint,
+            server,
             &model,
             language,
             english_too,
-            overwrite,
+            mode,
             places.as_ref(),
             timeout,
         ) {
@@ -556,11 +591,11 @@ fn describe(
 fn describe_one(
     catalog: &mut Catalog,
     photo: &photosite_core::Photo,
-    endpoint: &str,
+    server: &photosite_ai::Server,
     model: &str,
     language: &str,
     english_too: bool,
-    overwrite: bool,
+    mode: photosite_ai::Mode,
     places: Option<&photosite_core::Gazetteer>,
     timeout: std::time::Duration,
 ) -> Result<String> {
@@ -585,7 +620,7 @@ fn describe_one(
         .unwrap_or_default();
 
     let insights = photosite_ai::describe(
-        endpoint,
+        server,
         model,
         &jpeg,
         language,
@@ -596,27 +631,7 @@ fn describe_one(
         timeout,
     )?;
 
-    if let Some(title) = &insights.title
-        && (overwrite || photo.organisation.title.is_none())
-    {
-        catalog.set_title(&[photo.id], Some(title))?;
-    }
-
-    if let Some(description) = &insights.description
-        && (overwrite || photo.organisation.description.is_none())
-    {
-        catalog.set_description(&[photo.id], Some(description))?;
-    }
-
-    if let Some(english) = &insights.description_en {
-        catalog.set_description_en(photo.id, Some(english))?;
-    }
-
-    if !insights.keywords.is_empty() {
-        catalog.add_keywords(&[photo.id], &insights.keywords)?;
-    }
-
-    catalog.enqueue(&[photo.id], now())?;
+    photosite_ai::apply(catalog, photo, &insights, mode, now())?;
     Ok(format!(
         "{}  [{}]",
         insights.title.clone().unwrap_or_default(),

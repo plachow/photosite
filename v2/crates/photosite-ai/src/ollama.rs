@@ -1,74 +1,57 @@
-//! The conversation with the server.
+//! The conversation with Ollama.
 //!
-//! Everything that can be decided without one is in [`crate::prompt`]; what
-//! is left here is the socket, and the handful of things that go wrong on
-//! one.
+//! Everything that can be decided without a server is in [`crate::prompt`];
+//! what is left here is Ollama's own shape of request and reply.
 
-use crate::prompt;
+use crate::http::{self, Answer, Unreachable};
+use crate::prompt::{self, Insights};
 use anyhow::{Context, Result, bail};
-use photosite_core::gazetteer::Nearby;
 use std::time::Duration;
-
-pub use crate::prompt::Insights;
 
 /// Where Ollama listens out of the box.
 pub const DEFAULT_ENDPOINT: &str = "http://localhost:11434";
 
 /// The models a server has, vision-capable first.
-pub fn models(endpoint: &str, timeout: Duration) -> Result<Vec<String>> {
-    let url = address(endpoint, "api/tags")?;
-    let reply = agent(timeout)
-        .get(&url)
-        .call()
-        .with_context(|| unreachable(endpoint))?
-        .body_mut()
-        .read_to_string()
-        .context("the server's answer could not be read")?;
-    Ok(prompt::read_models(&reply))
+pub(crate) fn models(endpoint: &str, timeout: Duration) -> Result<Vec<String>> {
+    let url = http::address(endpoint, DEFAULT_ENDPOINT, "api/tags")?;
+    let answer = http::get(&http::agent(timeout), &url, &[])
+        .map_err(|error| anyhow::anyhow!("{}: {error}", unreachable(endpoint)))?;
+    anyhow::ensure!(
+        answer.ok(),
+        "{}: {}",
+        unreachable(endpoint),
+        answer.complaint()
+    );
+    Ok(prompt::read_models(&answer.body))
 }
 
 /// Describes one photograph.
-///
-/// `place` is a fact told to the model, never a question asked of it — see
-/// the crate documentation for why that matters more than it sounds.
-#[allow(clippy::too_many_arguments)]
-pub fn describe(
+pub(crate) fn describe(
     endpoint: &str,
     model: &str,
     jpeg: &[u8],
-    language: &str,
+    text: &str,
     english_too: bool,
-    place: Option<&Nearby>,
-    approximate: bool,
-    direction: &str,
     timeout: Duration,
 ) -> Result<Insights> {
-    anyhow::ensure!(!model.trim().is_empty(), "no model has been chosen");
-    let context = place.and_then(|place| prompt::place_context(place, approximate, direction));
-    let url = address(endpoint, "api/chat")?;
+    let url = http::address(endpoint, DEFAULT_ENDPOINT, "api/chat")?;
+    let agent = http::agent(timeout);
 
     // `think` is a newer switch and a model without a thinking mode rejects
     // it outright. The request works without it, only slower, so a refusal
     // is worth one retry rather than a failed photograph.
     let mut reply = post(
+        &agent,
         &url,
-        &prompt::request(model, jpeg, language, english_too, context.as_deref(), true),
-        timeout,
+        &prompt::ollama_request(model, jpeg, text, english_too, true),
         endpoint,
     );
     if let Err(Rejected::Refused) = &reply {
         tracing::debug!("the server would not take `think`; asking again without it");
         reply = post(
+            &agent,
             &url,
-            &prompt::request(
-                model,
-                jpeg,
-                language,
-                english_too,
-                context.as_deref(),
-                false,
-            ),
-            timeout,
+            &prompt::ollama_request(model, jpeg, text, english_too, false),
             endpoint,
         );
     }
@@ -80,7 +63,7 @@ pub fn describe(
         Err(Rejected::Unreachable(said)) => bail!("{said}"),
     };
 
-    Ok(prompt::with_place(prompt::read(&body)?, place, approximate))
+    read(&body)
 }
 
 /// Why a request did not come back with an answer.
@@ -99,69 +82,45 @@ enum Rejected {
 }
 
 fn post(
+    agent: &ureq::Agent,
     url: &str,
     body: &serde_json::Value,
-    timeout: Duration,
     endpoint: &str,
 ) -> std::result::Result<String, Rejected> {
-    let answer = agent(timeout)
-        .post(url)
-        .header("content-type", "application/json")
-        .send(body.to_string())
-        .map_err(|error| match &error {
-            ureq::Error::StatusCode(400) => Rejected::Refused,
-            ureq::Error::StatusCode(_) => Rejected::Said(format!(
-                "{unreachable}: {error}",
-                unreachable = unreachable(endpoint)
-            )),
-            _ => Rejected::Unreachable(unreachable_with(endpoint, &error)),
-        })?;
+    let answer: Answer = http::post(agent, url, &[], body)
+        .map_err(|Unreachable(said)| Rejected::Unreachable(format!("{}: {said}", unreachable(endpoint))))?;
+    if answer.status == 400 {
+        return Err(Rejected::Refused);
+    }
 
-    answer
-        .into_body()
-        .read_to_string()
-        .map_err(|error| Rejected::Unreachable(format!("the answer could not be read: {error}")))
+    if !answer.ok() {
+        return Err(Rejected::Said(format!(
+            "{}: {}",
+            unreachable(endpoint),
+            answer.complaint()
+        )));
+    }
+
+    Ok(answer.body)
 }
 
-fn agent(timeout: Duration) -> ureq::Agent {
-    // A vision model on a modest machine takes tens of seconds a photograph,
-    // so the timeout is minutes rather than the seconds an HTTP client would
-    // pick — but it is a timeout, because a run of a thousand photographs
-    // must not stop dead on a server that has wedged.
-    ureq::Agent::config_builder()
-        .timeout_global(Some(timeout))
-        .build()
-        .into()
+/// Reads the answer out of a chat response.
+///
+/// Two layers of JSON: the chat reply, whose `message.content` is itself the
+/// JSON the schema asked for. That is Ollama's shape, not ours.
+fn read(reply: &str) -> Result<Insights> {
+    let outer: serde_json::Value =
+        serde_json::from_str(reply).map_err(|_| anyhow::anyhow!("the reply was not JSON"))?;
+    let content = outer
+        .get("message")
+        .and_then(|message| message.get("content"))
+        .and_then(serde_json::Value::as_str)
+        .context("the reply carried no message")?;
+    prompt::read_answer(content)
 }
 
 fn unreachable(endpoint: &str) -> String {
     format!("Ollama at {endpoint} did not answer")
-}
-
-fn unreachable_with(endpoint: &str, error: &ureq::Error) -> String {
-    format!("{}: {error}", unreachable(endpoint))
-}
-
-/// The address of one endpoint.
-///
-/// A bare `localhost:11434` is what somebody types, and it is not a URL. It
-/// becomes one here rather than failing with something about a missing
-/// scheme.
-pub fn address(endpoint: &str, path: &str) -> Result<String> {
-    let mut base = endpoint.trim().trim_end_matches('/').to_owned();
-    if base.is_empty() {
-        base = DEFAULT_ENDPOINT.to_owned();
-    }
-
-    if !base.contains("://") {
-        base = format!("http://{base}");
-    }
-
-    anyhow::ensure!(
-        base.starts_with("http://") || base.starts_with("https://"),
-        "{endpoint:?} is not an address this can reach"
-    );
-    Ok(format!("{base}/{path}"))
 }
 
 #[cfg(test)]
@@ -169,41 +128,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn what_somebody_types_becomes_an_address() {
-        assert_eq!(
-            address("localhost:11434", "api/chat").unwrap(),
-            "http://localhost:11434/api/chat"
-        );
-        assert_eq!(
-            address("http://box:1234/", "api/tags").unwrap(),
-            "http://box:1234/api/tags"
-        );
-        assert_eq!(
-            address("  ", "api/tags").unwrap(),
-            "http://localhost:11434/api/tags"
-        );
+    fn the_answer_is_read_out_of_the_chat_reply() {
+        let reply = r#"{"message":{"role":"assistant","content":"{\"title\":\"A hill\",\"description\":\"Green.\",\"keywords\":[\"hill\"]}"}}"#;
+        let insights = read(reply).unwrap();
+        assert_eq!(insights.title.as_deref(), Some("A hill"));
+        assert_eq!(insights.keywords, ["hill"]);
     }
 
     #[test]
-    fn an_address_this_cannot_reach_says_so_rather_than_failing_later() {
-        assert!(address("ftp://box", "api/tags").is_err());
-    }
-
-    #[test]
-    fn a_run_with_no_model_chosen_says_which_thing_is_missing() {
-        let error = describe(
-            DEFAULT_ENDPOINT,
-            "  ",
-            b"x",
-            "English",
-            false,
-            None,
-            false,
-            "east",
-            Duration::from_secs(1),
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(error.contains("model"), "{error}");
+    fn a_reply_with_no_message_is_said_so() {
+        assert!(read(r#"{"done":true}"#).is_err());
+        assert!(read("not json").is_err());
     }
 }

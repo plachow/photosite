@@ -24,7 +24,7 @@ crates/
   photosite-meta     what a photograph says about itself: XMP and EXIF, read and written
   photosite-faces    finding faces and telling them apart, on this machine
   photosite-batch    running a planned conversion
-  photosite-ai       asking a model on this machine what is in a photograph
+  photosite-ai       asking a vision model, here or with a key elsewhere, what is in a photograph
   photosite-ui       egui — the only crate that knows about the GPU
   photosite-cli      headless: runs the whole pipeline without a window
 ```
@@ -943,6 +943,19 @@ as a typed title does, so they end up in the files too. Keywords are
 titles and descriptions are filled, which is what makes an interrupted
 overnight run restartable — everything already described is skipped.
 
+The local model is the default and the feature was built round it. With a
+key somebody brought, the same window asks **OpenAI** (or anything that
+speaks its dialect — OpenRouter, Groq, Mistral, a local LM Studio),
+**Anthropic** or **Google Gemini** instead: the same prompt, the same
+schema, the same place context, and the answer read out of each
+provider's own envelope. The choice is a *provider* said in words, not an
+address that happens not to be localhost, because it is a change of
+promise — the photographs leave the machine. The key lives in the settings
+file on this machine, or in `PHOTOSITE_AI_KEY` for the headless binary,
+and appears in no log and no error; a provider's complaint is quoted, the
+request that provoked it is not. A busy provider (429, 5xx) is asked
+again with a growing pause before a photograph is given up on.
+
 The reply is held to a **JSON schema**, so the answer is always
 machine-readable rather than prose that has to be picked apart with a
 regular expression and an apology. Everything that can be decided without a
@@ -981,11 +994,13 @@ and a few hundred places rather than a hundred and fifty thousand. Put
 context, and the window says so plainly rather than leaving somebody to
 work it out from a hundred vague descriptions.
 
-**Nothing leaves the machine**, and the gazetteer is why that is still true
-of the place names: a coordinate sent to a geocoding service is a
-photograph's location handed to somebody. The HTTP client carries no TLS at
-all — the address is localhost, and shipping a TLS stack to reach a local
-socket is the trade this application does not make.
+**With Ollama, nothing leaves the machine**, and the gazetteer is why that
+is still true of the place names: a coordinate sent to a geocoding service
+is a photograph's location handed to somebody. For a long while the HTTP
+client carried no TLS at all — the address was localhost, and shipping a
+TLS stack to reach a local socket was a trade this application did not
+make. The cloud providers changed that: `photosite-ai` carries rustls now,
+and so, through it, does the headless binary.
 
 Where the chosen language is not English, the same call also returns an
 **English description**, kept in the catalogue and never written into the

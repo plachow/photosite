@@ -261,16 +261,38 @@ impl Default for Faces {
     }
 }
 
-/// Asking a vision model on this machine to describe a photograph.
+/// Who may be asked to describe a photograph. The first is a model on this
+/// machine; the rest are providers on the far side of a key somebody
+/// brought. `photosite-ai` knows what each name means.
+pub const AI_PROVIDER_IDS: &[&str] = &["ollama", "openai", "anthropic", "gemini"];
+
+/// Asking a vision model to describe a photograph.
 ///
 /// The address defaults to localhost and the whole feature is built around
 /// that: a photograph goes to the model as pixels, and a model on somebody
-/// else's computer is a different promise entirely.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// else's computer is a different promise entirely — which is why choosing
+/// one is a `provider` said out loud rather than an address that happens
+/// not to be localhost.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Ai {
+    /// One of [`AI_PROVIDER_IDS`].
+    pub provider: String,
+    /// Where Ollama is.
     pub endpoint: String,
+    /// The Ollama model.
     pub model: String,
+    /// The key a cloud provider is asked with. Kept here, in the settings
+    /// file on this machine, and sent to that provider and nowhere else;
+    /// `PHOTOSITE_AI_KEY` in the environment serves when this is empty.
+    pub api_key: String,
+    /// Where the cloud provider is; empty means its own address. Named so
+    /// that a server speaking the OpenAI dialect — OpenRouter, Groq, a
+    /// local LM Studio — can be asked instead.
+    pub cloud_endpoint: String,
+    /// The cloud model, kept apart from the Ollama one so that switching
+    /// between them does not mean retyping either.
+    pub cloud_model: String,
     /// What language to write in, as the model is asked for it. A name and
     /// not a code, because that is what a model understands.
     pub language: String,
@@ -291,11 +313,33 @@ pub struct Ai {
     pub timeout_seconds: i64,
 }
 
+// By hand, so that the key never reaches a log through a `{:?}`.
+impl std::fmt::Debug for Ai {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Ai")
+            .field("provider", &self.provider)
+            .field("endpoint", &self.endpoint)
+            .field("model", &self.model)
+            .field("api_key", &if self.api_key.is_empty() { "" } else { "…" })
+            .field("cloud_endpoint", &self.cloud_endpoint)
+            .field("cloud_model", &self.cloud_model)
+            .field("language", &self.language)
+            .field("overwrite", &self.overwrite)
+            .field("request_size", &self.request_size)
+            .field("timeout_seconds", &self.timeout_seconds)
+            .finish()
+    }
+}
+
 impl Default for Ai {
     fn default() -> Self {
         Self {
+            provider: "ollama".to_owned(),
             endpoint: "http://localhost:11434".to_owned(),
             model: String::new(),
+            api_key: String::new(),
+            cloud_endpoint: String::new(),
+            cloud_model: String::new(),
             language: "English".to_owned(),
             overwrite: false,
             request_size: 1024,
@@ -572,6 +616,8 @@ pub enum Kind {
         max: i64,
     },
     Text,
+    /// Text that is nobody else's business: drawn hidden, never logged.
+    Secret,
     /// A choice of several; the values are keys, not names.
     Choice(&'static [&'static str]),
     /// Not a preference — state the application remembers on its own.
@@ -824,6 +870,11 @@ pub const TUNABLES: &[Tunable] = &[
         kind: Kind::Bool,
     },
     Tunable {
+        path: "ai.provider",
+        label_key: "setting-ai-provider",
+        kind: Kind::Choice(AI_PROVIDER_IDS),
+    },
+    Tunable {
         path: "ai.endpoint",
         label_key: "setting-ai-endpoint",
         kind: Kind::Text,
@@ -831,6 +882,21 @@ pub const TUNABLES: &[Tunable] = &[
     Tunable {
         path: "ai.model",
         label_key: "setting-ai-model",
+        kind: Kind::Text,
+    },
+    Tunable {
+        path: "ai.api_key",
+        label_key: "setting-ai-api-key",
+        kind: Kind::Secret,
+    },
+    Tunable {
+        path: "ai.cloud_endpoint",
+        label_key: "setting-ai-cloud-endpoint",
+        kind: Kind::Text,
+    },
+    Tunable {
+        path: "ai.cloud_model",
+        label_key: "setting-ai-cloud-model",
         kind: Kind::Text,
     },
     Tunable {

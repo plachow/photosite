@@ -3096,13 +3096,17 @@ impl App {
                             changed = self.write(tunable.path, toml::Value::Integer(value));
                         }
                     }
-                    Kind::Text | Kind::Choice(_) => {
+                    Kind::Text | Kind::Choice(_) | Kind::Secret => {
                         let mut value = self
                             .settings
                             .get(tunable.path)
                             .and_then(|value| value.as_str().map(str::to_owned))
                             .unwrap_or_default();
-                        if ui.text_edit_singleline(&mut value).changed() {
+                        let hidden = tunable.kind == Kind::Secret;
+                        if ui
+                            .add(egui::TextEdit::singleline(&mut value).password(hidden))
+                            .changed()
+                        {
                             changed = self.write(tunable.path, toml::Value::String(value));
                         }
                     }

@@ -12,7 +12,7 @@
 
 use crate::{App, theme};
 use eframe::egui;
-use photosite_ai::Mode;
+use photosite_ai::{Mode, Provider, Server, model_field, model_of};
 use photosite_core::theme::Palette;
 use photosite_core::{Catalog, Gazetteer, i18n, t};
 use std::time::Duration;
@@ -41,17 +41,30 @@ pub fn open(app: &mut App) {
 
 /// Asks the server which models it has.
 fn ask_what_it_has(app: &mut App) {
-    let endpoint = app.settings.ai.endpoint.clone();
+    let server = Server::of(&app.settings.ai);
+    if !server.admitted() {
+        // No key, so nothing to ask with. Said here rather than as a
+        // failed request, because the failure would be a 401 dressed up.
+        app.describe.models.clear();
+        app.describe.trouble = Some(t!("ai-no-key"));
+        return;
+    }
+
     let timeout = Duration::from_secs(10);
-    match photosite_ai::models(&endpoint, timeout) {
+    match photosite_ai::models(&server, timeout) {
         Ok(models) => {
             app.describe.trouble = (models.is_empty()).then(|| t!("ai-no-models"));
             // Nothing chosen yet, and the server has something that can see:
-            // choosing it is better than an empty box and a shrug.
-            if app.settings.ai.model.trim().is_empty()
+            // choosing it is better than an empty box and a shrug. Only for
+            // Ollama, whose list puts the vision models first; a cloud
+            // provider's list is alphabetical and its first entry is as
+            // likely to be an embedding model as anything.
+            let model = model_field(&mut app.settings.ai);
+            if !server.provider.remote()
+                && model.trim().is_empty()
                 && let Some(first) = models.first()
             {
-                app.settings.ai.model = first.clone();
+                *model = first.clone();
             }
 
             app.describe.models = models;
@@ -82,11 +95,64 @@ pub fn window(app: &mut App, ctx: &egui::Context, palette: &Palette) {
         .open(&mut open)
         .default_width(520.0)
         .show(ctx, |ui| {
+            // Who is asked. Switching is a change of promise — the local
+            // model keeps the photographs at home, the others do not — so
+            // it sits first and is said in words.
+            ui.horizontal_wrapped(|ui| {
+                ui.label(t!("ai-provider"));
+                let chosen = Provider::from_id(&app.settings.ai.provider);
+                for provider in Provider::ALL {
+                    if ui
+                        .selectable_label(provider == chosen, i18n::t(provider.title_key()))
+                        .clicked()
+                        && provider != chosen
+                    {
+                        app.settings.ai.provider = provider.id().to_owned();
+                        app.describe.models.clear();
+                        app.describe.trouble = None;
+                        refresh = true;
+                    }
+                }
+            });
+
+            let provider = Provider::from_id(&app.settings.ai.provider);
+            if provider.remote() {
+                ui.horizontal(|ui| {
+                    ui.label(t!("ai-api-key"));
+                    if ui
+                        .add(
+                            egui::TextEdit::singleline(&mut app.settings.ai.api_key)
+                                .password(true)
+                                .desired_width(220.0),
+                        )
+                        .lost_focus()
+                    {
+                        refresh = true;
+                    }
+
+                    ui.label(
+                        egui::RichText::new(t!("ai-api-key-hint"))
+                            .small()
+                            .color(theme::color(palette.dim)),
+                    );
+                });
+            }
+
             ui.horizontal(|ui| {
-                ui.label(t!("ai-endpoint"));
+                ui.label(if provider.remote() {
+                    t!("ai-cloud-endpoint")
+                } else {
+                    t!("ai-endpoint")
+                });
+                let endpoint = if provider.remote() {
+                    &mut app.settings.ai.cloud_endpoint
+                } else {
+                    &mut app.settings.ai.endpoint
+                };
                 if ui
                     .add(
-                        egui::TextEdit::singleline(&mut app.settings.ai.endpoint)
+                        egui::TextEdit::singleline(endpoint)
+                            .hint_text(provider.default_endpoint())
                             .desired_width(220.0),
                     )
                     .lost_focus()
@@ -101,16 +167,23 @@ pub fn window(app: &mut App, ctx: &egui::Context, palette: &Palette) {
 
             ui.horizontal_wrapped(|ui| {
                 ui.label(t!("ai-model"));
-                if app.describe.models.is_empty() {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut app.settings.ai.model).desired_width(220.0),
-                    );
-                } else {
-                    for name in &app.describe.models {
-                        let on = &app.settings.ai.model == name;
-                        if ui.selectable_label(on, name).clicked() {
-                            app.settings.ai.model = name.clone();
-                        }
+                let model = model_field(&mut app.settings.ai);
+                // A cloud provider lists everything it has, embeddings and
+                // all, by the dozen; there the box is where a name is
+                // typed and the chips narrow to what has been typed so far.
+                if app.describe.models.is_empty() || provider.remote() {
+                    ui.add(egui::TextEdit::singleline(model).desired_width(220.0));
+                }
+
+                let typed = model.trim().to_ascii_lowercase();
+                for name in &app.describe.models {
+                    let on = model == name;
+                    if provider.remote() && !on && !name.to_ascii_lowercase().contains(&typed) {
+                        continue;
+                    }
+
+                    if ui.selectable_label(on, name).clicked() {
+                        *model = name.clone();
                     }
                 }
             });
@@ -171,7 +244,9 @@ pub fn window(app: &mut App, ctx: &egui::Context, palette: &Palette) {
                 }
                 None => {
                     ui.horizontal(|ui| {
-                        let ready = waiting > 0 && !app.settings.ai.model.trim().is_empty();
+                        let ready = waiting > 0
+                            && !model_of(&app.settings.ai).trim().is_empty()
+                            && Server::of(&app.settings.ai).admitted();
                         if ui
                             .add_enabled(ready, egui::Button::new(t!("ai-run")))
                             .clicked()
@@ -372,8 +447,8 @@ fn one(
         .unwrap_or_default();
 
     let insights = photosite_ai::describe(
-        &settings.endpoint,
-        &settings.model,
+        &Server::of(settings),
+        model_of(settings),
         &jpeg,
         &settings.language,
         english_too,
@@ -383,36 +458,7 @@ fn one(
         timeout,
     )?;
 
-    let overwrite = mode == Mode::Overwrite;
-    if let Some(title) = &insights.title
-        && (overwrite || photo.organisation.title.as_deref().unwrap_or("").is_empty())
-    {
-        catalog.set_title(&[photo.id], Some(title))?;
-    }
-
-    if let Some(description) = &insights.description
-        && (overwrite
-            || photo
-                .organisation
-                .description
-                .as_deref()
-                .unwrap_or("")
-                .is_empty())
-    {
-        catalog.set_description(&[photo.id], Some(description))?;
-    }
-
-    // The English copy is not conditional on the mode: it is not something
-    // anybody typed, so there is nothing of theirs to overwrite.
-    if let Some(english) = &insights.description_en {
-        catalog.set_description_en(photo.id, Some(english))?;
-    }
-
-    if !insights.keywords.is_empty() {
-        catalog.add_keywords(&[photo.id], &insights.keywords)?;
-    }
-
-    catalog.enqueue(&[photo.id], crate::now())?;
+    photosite_ai::apply(catalog, photo, &insights, mode, crate::now())?;
     Ok(insights
         .title
         .clone()

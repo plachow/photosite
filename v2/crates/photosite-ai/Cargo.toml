@@ -1,6 +1,6 @@
 [package]
 name = "photosite-ai"
-description = "Asking a vision model on this machine to describe a photograph."
+description = "Asking a vision model, on this machine or at a provider with a key, to describe a photograph."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,7 +14,10 @@ photosite-core.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-ureq.workspace = true
+# With TLS, because three of the four providers live on the far side of it —
+# and with the operating system's own certificate store, because a machine
+# behind a re-signing proxy trusts it there and nowhere else.
+ureq = { workspace = true, features = ["rustls", "platform-verifier"] }
 serde_json.workspace = true
 
 [dev-dependencies]

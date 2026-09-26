@@ -74,17 +74,15 @@ windows-sys = { version = "0.61", features = [
 # The icon and the version, compiled into the executable. Only ever a build
 # dependency, and only on Windows.
 winresource = "0.1"
-# Talking to Ollama. **No TLS feature, deliberately**: the address is
-# localhost out of the box and the whole feature is built round a model on
-# this machine. Shipping a TLS stack so that a local socket can be spoken to
-# is the trade this application does not make — the same reasoning as
-# exiftool, at a smaller scale.
-#
-# This asks for none, and gets none in `photosite-cli`. In `photosite-ui` it
-# gets one anyway: velopack wants `ureq` with rustls, features unify across a
-# binary, and there is no arguing with that. The line above is still the right
-# request — it is what keeps the headless binary lean, and it is what would
-# take the TLS back out of the window binary on the day the updater goes.
+# Talking to the model. The address is localhost out of the box and the whole
+# feature was built round a model on this machine, and for a long while this
+# line asked for no TLS at all: shipping a TLS stack so that a local socket
+# can be spoken to was a trade this application did not make. Then somebody
+# brought a key. Three of the four providers `photosite-ai` can ask live on
+# the far side of TLS, so that crate turns rustls on for itself; this line
+# still asks for nothing, which is what a future crate that only ever speaks
+# to localhost would want. `photosite-ui` carried the stack already for the
+# updater; `photosite-cli` carries it now for the same feature.
 ureq = { version = "3", default-features = false }
 # JSON, both ways. The model is asked for a fixed schema and answers with
 # JSON inside JSON; hand-writing a parser for that would be inventing a
