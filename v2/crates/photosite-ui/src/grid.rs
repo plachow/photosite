@@ -63,6 +63,8 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
         app.resize_tiles(f64::from(1.2f32.powf(zooming / 50.0)));
     }
 
+    speed_wheel(ui, gallery.wheel_speed);
+
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show_viewport(ui, |ui, viewport| {
@@ -455,4 +457,23 @@ fn node(
             }
         });
     }
+}
+
+/// Makes a notch of the wheel move the gallery by more than a line.
+///
+/// The toolkit scrolls a notch by what a text box wants, and a wall of
+/// tiles is not a text box: at that pace a folder of two thousand
+/// photographs takes a full minute of wheel to cross. The delta is
+/// multiplied before the scroll area reads it, and only while the pointer
+/// is over the gallery, so the tree and the details pane keep their own
+/// pace. Ctrl and the wheel is taken by the tile zoom before this runs.
+pub fn speed_wheel(ui: &mut egui::Ui, speed: f64) {
+    let speed = speed.clamp(0.5, 10.0) as f32;
+    if (speed - 1.0).abs() < f32::EPSILON || !ui.rect_contains_pointer(ui.max_rect()) {
+        return;
+    }
+
+    ui.input_mut(|input| {
+        input.smooth_scroll_delta.y *= speed;
+    });
 }

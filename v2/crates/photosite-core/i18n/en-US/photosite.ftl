@@ -91,6 +91,7 @@ setting-tile-aspect = Tile image ratio
 setting-caption-height = Caption strip height
 setting-tile-padding = Tile padding
 setting-prefetch-rows = Rows loaded ahead
+setting-wheel-speed = Mouse wheel speed in the gallery
 setting-show-captions = Show file names
 setting-recursive = Include subfolders
 setting-last-folder = Last folder

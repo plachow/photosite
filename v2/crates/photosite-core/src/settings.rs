@@ -91,6 +91,10 @@ pub struct Gallery {
     pub tile_padding: f64,
     /// How many rows above and below the viewport are loaded ahead.
     pub prefetch_rows: i64,
+    /// How far one notch of the wheel moves the gallery, against what the
+    /// toolkit would do on its own. A wall of tiles is scrolled by the
+    /// screenful, not by the line, and the toolkit's notch is a line.
+    pub wheel_speed: f64,
     pub show_captions: bool,
     /// The folder as a list of rows rather than a wall of tiles.
     pub as_list: bool,
@@ -124,6 +128,7 @@ impl Default for Gallery {
             caption_height: 22.0,
             tile_padding: 7.0,
             prefetch_rows: 3,
+            wheel_speed: 3.0,
             show_captions: true,
             as_list: false,
             recursive: false,
@@ -675,6 +680,14 @@ pub const TUNABLES: &[Tunable] = &[
         kind: Kind::Float {
             min: 2.0,
             max: 16.0,
+        },
+    },
+    Tunable {
+        path: "gallery.wheel_speed",
+        label_key: "setting-wheel-speed",
+        kind: Kind::Float {
+            min: 0.5,
+            max: 10.0,
         },
     },
     Tunable {
