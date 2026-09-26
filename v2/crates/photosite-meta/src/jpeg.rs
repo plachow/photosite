@@ -11,6 +11,8 @@ use anyhow::{Context, Result};
 /// The header that marks an APP1 segment as XMP rather than as EXIF.
 const XMP_HEADER: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
 const APP1: u8 = 0xE1;
+/// Where Photoshop keeps its resources, the IPTC record among them.
+const APP13: u8 = 0xED;
 /// Start of scan. Everything from here to the end of the file is the
 /// photograph.
 const SOS: u8 = 0xDA;
@@ -118,17 +120,32 @@ pub fn compressed_image(raw: &[u8]) -> Option<&[u8]> {
 
 /// The XMP packet a photograph already carries, if it carries one.
 pub fn xmp(raw: &[u8]) -> Option<String> {
-    let segments = segments(raw)?;
-    let found = segments.iter().find(|segment| {
-        segment.marker == APP1
-            && raw.get(segment.body().start..segment.body().start + XMP_HEADER.len())
-                == Some(XMP_HEADER)
-    })?;
+    let body = body_of(raw, APP1, XMP_HEADER)?;
+    Some(String::from_utf8_lossy(body).into_owned())
+}
 
-    let body = found.body();
-    let from = body.start + XMP_HEADER.len();
-    let packet = raw.get(from..body.end)?;
-    Some(String::from_utf8_lossy(packet).into_owned())
+/// The Photoshop block a photograph carries, header included, if it carries
+/// one. The IPTC record is in there — see [`crate::iptc`].
+pub fn app13(raw: &[u8]) -> Option<&[u8]> {
+    let segments = segments(raw)?;
+    let found = segment_with(raw, &segments, APP13, crate::iptc::HEADER)?;
+    raw.get(segments[found].body())
+}
+
+/// The body of the first segment with this marker and opening bytes, the
+/// opening bytes taken off.
+fn body_of<'a>(raw: &'a [u8], marker: u8, header: &[u8]) -> Option<&'a [u8]> {
+    let segments = segments(raw)?;
+    let found = segment_with(raw, &segments, marker, header)?;
+    let body = segments[found].body();
+    raw.get(body.start + header.len()..body.end)
+}
+
+fn segment_with(raw: &[u8], segments: &[Segment], marker: u8, header: &[u8]) -> Option<usize> {
+    segments.iter().position(|found| {
+        found.marker == marker
+            && raw.get(found.body().start..found.body().start + header.len()) == Some(header)
+    })
 }
 
 /// The largest a JPEG segment can be, its own length field included.
@@ -141,8 +158,6 @@ const SEGMENT_LIMIT: usize = u16::MAX as usize;
 /// leading application segments, and everything else is copied across in the
 /// order it was in.
 pub fn with_xmp(raw: &[u8], packet: &str) -> Result<Vec<u8>> {
-    let segments = segments(raw).context("this is not a JPEG we can read")?;
-
     let body_len = XMP_HEADER.len() + packet.len() + 2;
     anyhow::ensure!(
         body_len <= SEGMENT_LIMIT,
@@ -151,43 +166,81 @@ pub fn with_xmp(raw: &[u8], packet: &str) -> Result<Vec<u8>> {
         SEGMENT_LIMIT - XMP_HEADER.len() - 2
     );
 
-    let mut segment = Vec::with_capacity(body_len + 2);
-    segment.extend_from_slice(&[0xFF, APP1]);
-    segment.extend_from_slice(&(body_len as u16).to_be_bytes());
-    segment.extend_from_slice(XMP_HEADER);
-    segment.extend_from_slice(packet.as_bytes());
+    let mut body = Vec::with_capacity(body_len);
+    body.extend_from_slice(XMP_HEADER);
+    body.extend_from_slice(packet.as_bytes());
+    with_segment(raw, APP1, XMP_HEADER, Some(&body))
+}
 
-    let existing = segments.iter().position(|found| {
-        found.marker == APP1
-            && raw.get(found.body().start..found.body().start + XMP_HEADER.len())
-                == Some(XMP_HEADER)
+/// Puts the Photoshop block into the file, replacing the one already there;
+/// `None` takes it out.
+///
+/// The body is the whole of it, header included, as [`crate::iptc`] builds
+/// it.
+pub fn with_app13(raw: &[u8], body: Option<&[u8]>) -> Result<Vec<u8>> {
+    if let Some(body) = body {
+        anyhow::ensure!(
+            body.len() + 2 <= SEGMENT_LIMIT,
+            "the IPTC block is {} bytes and a JPEG segment holds at most {}",
+            body.len(),
+            SEGMENT_LIMIT - 2
+        );
+    }
+
+    with_segment(raw, APP13, crate::iptc::HEADER, body)
+}
+
+/// The one way a segment gets into a file, or out of it.
+///
+/// The segment recognised by `marker` and `header` is replaced by one holding
+/// `body` — or removed, when there is no body — and a new one goes in right
+/// after the last of the leading application segments, which is where every
+/// writer puts it and where every reader looks first. Everything else is
+/// copied across in the order it was in.
+fn with_segment(raw: &[u8], marker: u8, header: &[u8], body: Option<&[u8]>) -> Result<Vec<u8>> {
+    let segments = segments(raw).context("this is not a JPEG we can read")?;
+
+    let segment = body.map(|body| {
+        let mut segment = Vec::with_capacity(body.len() + 4);
+        segment.extend_from_slice(&[0xFF, marker]);
+        segment.extend_from_slice(&((body.len() + 2) as u16).to_be_bytes());
+        segment.extend_from_slice(body);
+        segment
     });
 
-    // Where a new one goes: after the last APPn, which is where every writer
-    // puts it and where every reader looks first.
+    let existing = segment_with(raw, &segments, marker, header);
     let after = segments
         .iter()
         .rposition(|found| matches!(found.marker, 0xE0..=0xEF))
         .map(|at| at + 1)
         .unwrap_or(0);
 
-    let mut out = Vec::with_capacity(raw.len() + segment.len());
+    let mut out = Vec::with_capacity(raw.len() + segment.as_ref().map_or(0, Vec::len));
     out.extend_from_slice(&raw[..2]);
     for (index, found) in segments.iter().enumerate() {
         if Some(index) == existing {
-            out.extend_from_slice(&segment);
+            if let Some(segment) = &segment {
+                out.extend_from_slice(segment);
+            }
+
             continue;
         }
 
-        if existing.is_none() && index == after {
-            out.extend_from_slice(&segment);
+        if existing.is_none()
+            && index == after
+            && let Some(segment) = &segment
+        {
+            out.extend_from_slice(segment);
         }
 
         out.extend_from_slice(&raw[found.at..found.at + found.len]);
     }
 
-    if existing.is_none() && after >= segments.len() {
-        out.extend_from_slice(&segment);
+    if existing.is_none()
+        && after >= segments.len()
+        && let Some(segment) = &segment
+    {
+        out.extend_from_slice(segment);
     }
 
     // The guarantee, checked rather than trusted. A photograph is not

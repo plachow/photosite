@@ -59,6 +59,33 @@ pub struct Exif {
     /// camera knew that. What to make of it is not decided here — see
     /// [`Gps`].
     pub gps: Option<Gps>,
+    /// What somebody said about the photograph, in EXIF rather than XMP.
+    ///
+    /// Windows Explorer, and every program that speaks to it, keeps the
+    /// title, the comment and the stars in IFD0 (`XPTitle`, `XPComment`,
+    /// `Rating`); the older world keeps a description in `ImageDescription`.
+    /// A library that was catalogued there arrives with these and nothing
+    /// in XMP. The packet wins wherever both say something.
+    pub said: Said,
+}
+
+/// The words and the stars a file carries in its EXIF block.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Said {
+    /// `XPTitle`.
+    pub title: Option<String>,
+    /// `ImageDescription`, or failing that `XPComment`.
+    pub description: Option<String>,
+    /// IFD0 `Rating`, 0..5.
+    pub rating: Option<u8>,
+}
+
+impl Said {
+    pub const NONE: Self = Self {
+        title: None,
+        description: None,
+        rating: None,
+    };
 }
 
 /// The exposure, as the camera recorded it.
@@ -160,6 +187,7 @@ impl Exif {
         exposure: Exposure::NONE,
         offset_seconds: None,
         gps: None,
+        said: Said::NONE,
     };
 }
 
@@ -275,6 +303,7 @@ fn from_tiff(raw: &[u8]) -> Option<Exif> {
         exposure: reader.exposure(),
         offset_seconds: reader.offset_seconds(),
         gps: reader.gps(),
+        said: reader.said(),
     })
 }
 
@@ -357,6 +386,7 @@ fn parse(raw: &[u8]) -> Option<Exif> {
                 found.exposure = reader.exposure();
                 found.offset_seconds = reader.offset_seconds();
                 found.gps = reader.gps();
+                found.said = reader.said();
             }
         }
 
@@ -868,6 +898,78 @@ impl<'a> TiffReader<'a> {
         let text = std::str::from_utf8(bytes).ok()?;
         let text = text.trim_end_matches('\0').trim();
         (!text.is_empty()).then(|| text.to_owned())
+    }
+
+    /// The words and the stars in IFD0.
+    fn said(&self) -> Said {
+        let Some(ifd) = self.ifd0() else {
+            return Said::NONE;
+        };
+
+        Said {
+            title: self.windows_text(ifd, 0x9C9B),
+            // The description everybody has always written, then the one
+            // Windows writes; a file with both was most likely written by
+            // something that keeps them the same.
+            description: self
+                .prose(ifd, 0x010E)
+                .or_else(|| self.windows_text(ifd, 0x9C9C)),
+            rating: self
+                .short(ifd, 0x4746)
+                .filter(|stars| (1..=5).contains(stars))
+                .map(|stars| stars as u8),
+        }
+    }
+
+    /// An ASCII tag long enough to hold a paragraph.
+    ///
+    /// The spec says ASCII; the world writes UTF-8 into it and has for
+    /// years, so it is read as UTF-8 and anything that is not gets read
+    /// loosely rather than dropped.
+    fn prose(&self, ifd: usize, tag: u16) -> Option<String> {
+        let at = self.find(ifd, tag)?;
+        let bytes = self.sized(at, 2, 1, 8192)?;
+        let text = String::from_utf8_lossy(bytes);
+        let text = text.trim_end_matches('\0').trim();
+        (!text.is_empty()).then(|| text.to_owned())
+    }
+
+    /// One of Windows' `XP*` tags: bytes, which are UTF-16 little-endian
+    /// with a terminating null, whatever the byte order of the block.
+    fn windows_text(&self, ifd: usize, tag: u16) -> Option<String> {
+        let at = self.find(ifd, tag)?;
+        let bytes = self.sized(at, 1, 1, 8192)?;
+        let units: Vec<u16> = bytes
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| u16::from_le_bytes(*pair))
+            .take_while(|unit| *unit != 0)
+            .collect();
+        let text = String::from_utf16_lossy(&units);
+        let text = text.trim();
+        (!text.is_empty()).then(|| text.to_owned())
+    }
+
+    /// The bytes of an entry of the given type, one byte per item, wherever
+    /// they sit.
+    fn sized(&self, at: usize, kind: u16, each: usize, most: usize) -> Option<&'a [u8]> {
+        if self.u16(at.checked_add(2)?)? != kind {
+            return None;
+        }
+
+        let count = (self.u32(at.checked_add(4)?)? as usize).checked_mul(each)?;
+        if count == 0 || count > most {
+            return None;
+        }
+
+        let from = if count <= 4 {
+            at.checked_add(8)?
+        } else {
+            self.u32(at.checked_add(8)?)? as usize
+        };
+
+        self.bytes.get(from..from.checked_add(count)?)
     }
 
     /// [`Self::ascii`] with room for a name rather than a timestamp.

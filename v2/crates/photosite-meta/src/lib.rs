@@ -24,6 +24,7 @@
 //! beside it, because a sidecar cannot damage a photograph and we do not open
 //! a format we cannot prove we preserve.
 
+pub mod iptc;
 pub mod jpeg;
 pub mod xmp;
 
@@ -94,15 +95,16 @@ pub fn read(path: &Path) -> Xmp {
         return Xmp::default();
     };
 
-    if let Some(packet) = jpeg::xmp(&raw) {
-        return xmp::read(&packet);
-    }
-
-    // A JPEG can still have a sidecar, written by something else.
-    std::fs::read_to_string(sidecar_of(path))
-        .ok()
-        .map(|packet| xmp::read(&packet))
-        .unwrap_or_default()
+    let mut said = match jpeg::xmp(&raw) {
+        Some(packet) => xmp::read(&packet),
+        // A JPEG can still have a sidecar, written by something else.
+        None => std::fs::read_to_string(sidecar_of(path))
+            .ok()
+            .map(|packet| xmp::read(&packet))
+            .unwrap_or_default(),
+    };
+    fill_from_exif(&mut said, &raw, &photosite_image::exif::read(&raw).said);
+    said
 }
 
 /// The same, from a header already in hand.
@@ -110,16 +112,48 @@ pub fn read(path: &Path) -> Xmp {
 /// The scan reads the first stretch of every photograph to learn about it,
 /// and the packet is in there. Asking for the whole of every file to find it
 /// again would be most of a terabyte of reading across a large library.
-pub fn read_from_header(path: &Path, header: &[u8]) -> Xmp {
+///
+/// `exif` is what the same header said in its EXIF block, which the scan has
+/// already read. **The packet wins**, and EXIF fills in what it leaves
+/// unsaid: a library catalogued in Windows, or in Zoner before it wrote XMP,
+/// carries its titles, its comments and its stars there and nowhere else,
+/// and the IPTC record is where such a library keeps its keywords.
+pub fn read_from_header(path: &Path, header: &[u8], exif: &photosite_image::exif::Said) -> Xmp {
     match target_for(path) {
-        Target::Embedded => match jpeg::xmp(header) {
-            Some(packet) => xmp::read(&packet),
-            None => Xmp::default(),
-        },
+        Target::Embedded => {
+            let mut said = match jpeg::xmp(header) {
+                Some(packet) => xmp::read(&packet),
+                None => Xmp::default(),
+            };
+            fill_from_exif(&mut said, header, exif);
+            said
+        }
         Target::Sidecar(sidecar) => std::fs::read_to_string(&sidecar)
             .ok()
             .map(|packet| xmp::read(&packet))
             .unwrap_or_default(),
+    }
+}
+
+/// What the packet left unsaid, taken from the EXIF block and the IPTC
+/// record. Nothing the packet says is touched.
+fn fill_from_exif(said: &mut Xmp, raw: &[u8], exif: &photosite_image::exif::Said) {
+    if said.title.is_none() {
+        said.title = exif.title.clone();
+    }
+
+    if said.description.is_none() {
+        said.description = exif.description.clone();
+    }
+
+    if said.rating.is_none() {
+        said.rating = exif.rating;
+    }
+
+    if said.keywords.is_empty()
+        && let Some(block) = jpeg::app13(raw)
+    {
+        said.keywords = iptc::keywords(block);
     }
 }
 
@@ -152,7 +186,7 @@ pub fn scan(path: &Path) -> Option<(NewPhoto, Xmp)> {
     }
 
     let mut meta = photosite_image::exif::read(&header);
-    let said = read_from_header(path, &header);
+    let said = read_from_header(path, &header, &meta.said);
 
     // The frame's size, when the header did not reach far enough to hold it.
     // See `frame_in_file`: a large embedded preview pushes the frame header
@@ -386,12 +420,16 @@ fn little_exif_kind(path: &Path) -> Option<FileExtension> {
 /// Everything the file needs, worked out in memory before anything on disk is
 /// touched.
 fn embed(raw: &[u8], wanted: &Xmp) -> Result<Vec<u8>> {
-    // The stars for Windows Explorer, which reads EXIF and not XMP.
-    let mut out = with_rating(raw, wanted.rating, wanted.place)?;
+    // The stars and the words for Windows Explorer and for the older world,
+    // which read EXIF and IPTC and not XMP.
+    let mut out = with_exif(raw, wanted)?;
 
     let existing = jpeg::xmp(&out);
     let packet = xmp::merge(existing.as_deref(), wanted);
     out = jpeg::with_xmp(&out, &packet)?;
+
+    let block = iptc::with_keywords(jpeg::app13(&out), &wanted.keywords);
+    out = jpeg::with_app13(&out, block.as_deref())?;
 
     // The one that matters. Everything above rearranges segments; if any of
     // it moved a byte of the photograph, the file does not get written.
@@ -405,12 +443,22 @@ fn embed(raw: &[u8], wanted: &Xmp) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-/// EXIF `Rating` and `RatingPercent` in IFD0 — 0x4746 and 0x4749.
+/// What Windows and the older world read: the stars, the title and the
+/// description in IFD0.
 ///
-/// Neither is in little_exif's list of known tags, so they go in by number.
-/// **The file is read first**, without exception: the alternative writes an
-/// empty metadata set over everything the camera recorded.
-fn with_rating(raw: &[u8], rating: Option<u8>, place: Option<Place>) -> Result<Vec<u8>> {
+/// `Rating` and `RatingPercent` (0x4746, 0x4749) are what Explorer shows as
+/// stars; `XPTitle` and `XPComment` (0x9C9B, 0x9C9C) are what it shows as the
+/// title and the comment, UTF-16 with a null on the end, whatever the byte
+/// order of the block; `ImageDescription` (0x010E) is the description every
+/// EXIF reader since the first has known. The same list v1 had exiftool
+/// write, so a file that went through either reads the same everywhere.
+///
+/// None of the four is in little_exif's list of known tags, so they go in by
+/// number. **The file is read first**, without exception: the alternative
+/// writes an empty metadata set over everything the camera recorded.
+fn with_exif(raw: &[u8], wanted: &Xmp) -> Result<Vec<u8>> {
+    let rating = wanted.rating;
+    let place = wanted.place;
     let mut buffer = raw.to_vec();
     let mut metadata = match Metadata::new_from_vec(&buffer, FileExtension::JPEG) {
         Ok(metadata) => metadata,
@@ -438,6 +486,32 @@ fn with_rating(raw: &[u8], rating: Option<u8>, place: Option<Place>) -> Result<V
         None => {
             metadata.remove_tag_by_hex_group(0x4746, ExifTagGroup::GENERIC);
             metadata.remove_tag_by_hex_group(0x4749, ExifTagGroup::GENERIC);
+        }
+    }
+
+    match &wanted.title {
+        Some(title) => metadata.set_tag(ExifTag::UnknownINT8U(
+            utf16_bytes(title),
+            0x9C9B,
+            ExifTagGroup::GENERIC,
+        )),
+        None => {
+            metadata.remove_tag_by_hex_group(0x9C9B, ExifTagGroup::GENERIC);
+        }
+    }
+
+    match &wanted.description {
+        Some(description) => {
+            metadata.set_tag(ExifTag::ImageDescription(description.clone()));
+            metadata.set_tag(ExifTag::UnknownINT8U(
+                utf16_bytes(description),
+                0x9C9C,
+                ExifTagGroup::GENERIC,
+            ));
+        }
+        None => {
+            metadata.remove_tag_by_hex_group(0x010E, ExifTagGroup::GENERIC);
+            metadata.remove_tag_by_hex_group(0x9C9C, ExifTagGroup::GENERIC);
         }
     }
 
@@ -474,6 +548,15 @@ fn with_rating(raw: &[u8], rating: Option<u8>, place: Option<Place>) -> Result<V
         .write_to_vec(&mut buffer, FileExtension::JPEG)
         .context("the EXIF block could not be written")?;
     Ok(buffer)
+}
+
+/// Text as Windows' `XP*` tags hold it: UTF-16 little-endian, null on the
+/// end, always little-endian whatever the block around it.
+fn utf16_bytes(text: &str) -> Vec<u8> {
+    text.encode_utf16()
+        .chain(std::iter::once(0))
+        .flat_map(u16::to_le_bytes)
+        .collect()
 }
 
 /// Degrees, whole minutes and seconds, as the three rationals EXIF wants.
@@ -608,6 +691,80 @@ mod tests {
         assert_eq!(read.label.as_deref(), Some("Green"));
         assert_eq!(read.title.as_deref(), Some("Sunrise"));
         assert_eq!(read.keywords, ["Hawaii"]);
+    }
+
+    /// The words go into EXIF and IPTC as well as into the packet, which is
+    /// what a program that reads no XMP — and there are more of them than
+    /// anybody would like — sees.
+    #[test]
+    fn the_words_reach_exif_and_iptc_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.jpg");
+        std::fs::write(&path, jpeg_bytes()).unwrap();
+
+        let mut organisation = organisation();
+        organisation.description = Some("Dawn over Šumava".to_owned());
+        organisation.keywords = vec!["Hawaii".to_owned(), "Šumava".to_owned()];
+        write(&path, &organisation, None, None).unwrap();
+
+        let raw = std::fs::read(&path).unwrap();
+        let exif = photosite_image::exif::read(&raw).said;
+        assert_eq!(exif.title.as_deref(), Some("Sunrise"));
+        assert_eq!(exif.description.as_deref(), Some("Dawn over Šumava"));
+        assert_eq!(exif.rating, Some(4));
+        assert_eq!(
+            iptc::keywords(jpeg::app13(&raw).unwrap()),
+            ["Hawaii", "Šumava"]
+        );
+
+        // And taking the words back off takes them off everywhere.
+        write(&path, &Organisation::default(), None, None).unwrap();
+        let raw = std::fs::read(&path).unwrap();
+        assert_eq!(
+            photosite_image::exif::read(&raw).said,
+            photosite_image::exif::Said::NONE
+        );
+        assert!(jpeg::app13(&raw).is_none());
+        assert!(read(&path).is_empty());
+    }
+
+    /// A library catalogued in Windows, or in something older than XMP,
+    /// carries its words in EXIF and IPTC and nothing in a packet. They are
+    /// read all the same — and a packet that does say something wins.
+    #[test]
+    fn a_file_with_no_packet_is_read_from_exif_and_iptc() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.jpg");
+        let mut only_exif = Xmp::from(&organisation());
+        only_exif.description = Some("Said in EXIF".to_owned());
+        let raw = with_exif(&jpeg_bytes(), &only_exif).unwrap();
+        let block = iptc::with_keywords(None, &["from IPTC".to_owned()]).unwrap();
+        let raw = jpeg::with_app13(&raw, Some(&block)).unwrap();
+        std::fs::write(&path, &raw).unwrap();
+
+        let said = read(&path);
+        assert_eq!(said.title.as_deref(), Some("Sunrise"));
+        assert_eq!(said.description.as_deref(), Some("Said in EXIF"));
+        assert_eq!(said.rating, Some(4));
+        assert_eq!(said.keywords, ["from IPTC"]);
+
+        // The scan's header path agrees with the whole-file one.
+        let header = raw[..raw.len().min(photosite_image::exif::HEADER_BYTES)].to_vec();
+        let exif = photosite_image::exif::read(&header).said;
+        assert_eq!(read_from_header(&path, &header, &exif), said);
+
+        // Now a packet says otherwise, and the packet is believed.
+        let mut spoken = Xmp::from(&organisation());
+        spoken.title = Some("From the packet".to_owned());
+        spoken.keywords = vec!["packet".to_owned()];
+        let packet = xmp::merge(None, &spoken);
+        let raw = jpeg::with_xmp(&raw, &packet).unwrap();
+        std::fs::write(&path, &raw).unwrap();
+        let said = read(&path);
+        assert_eq!(said.title.as_deref(), Some("From the packet"));
+        assert_eq!(said.keywords, ["packet"]);
+        // What the packet left unsaid still comes from EXIF.
+        assert_eq!(said.description.as_deref(), Some("Said in EXIF"));
     }
 
     /// The face frames have to reach the file itself, not merely a packet
