@@ -681,6 +681,24 @@ pub const COMMANDS: &[Command] = &[
         toolbar: false,
         scope: Scope::Editor,
     },
+    // A step closer and a step back, about the middle of what is on
+    // screen. The keypad's + and - arrive as the same keys as the row's.
+    Command {
+        id: "editor.zoom_in",
+        title_key: "command-editor-zoom-in",
+        group: Group::Editor,
+        default_shortcut: Some("Plus"),
+        toolbar: false,
+        scope: Scope::Editor,
+    },
+    Command {
+        id: "editor.zoom_out",
+        title_key: "command-editor-zoom-out",
+        group: Group::Editor,
+        default_shortcut: Some("Minus"),
+        toolbar: false,
+        scope: Scope::Editor,
+    },
     Command {
         id: "help.diagnostics",
         title_key: "command-help-diagnostics",

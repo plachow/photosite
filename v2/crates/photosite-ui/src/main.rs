@@ -1428,6 +1428,24 @@ impl App {
                     editor.view = photosite_core::compare::View::FITTED;
                 }
             }
+            // A step closer or back about the middle of what is on screen —
+            // the same step the tile zoom takes, so a key and a wheel notch
+            // feel like the same thing.
+            "editor.zoom_in" | "editor.zoom_out" => {
+                if let Some(editor) = self.tabs.active_editor_mut() {
+                    let factor = if id == "editor.zoom_in" {
+                        1.2
+                    } else {
+                        1.0 / 1.2
+                    };
+                    let centre = editor.view.centre;
+                    editor.view = photosite_core::compare::settled(
+                        editor.view.zoom_about(factor, centre),
+                        editor.cell,
+                        editor.image,
+                    );
+                }
+            }
             "view.settings" => self.show_settings = !self.show_settings,
             "photo.batch" => batch::open(self),
             "photo.describe" => describe::open(self),
