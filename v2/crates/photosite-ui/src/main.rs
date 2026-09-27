@@ -157,10 +157,16 @@ fn main() -> Result<()> {
         language.as_deref().or(Some(&settings.appearance.language)),
     ));
 
+    // Not `with_maximized`, deliberately. eframe keeps the window hidden
+    // until the first frame is painted, so that nothing blank is shown; but
+    // on Windows, winit maximizes with `ShowWindow(SW_MAXIMIZE)`, which
+    // shows the window whatever the hidden flag says. A maximized start
+    // therefore flashed an empty window for as long as it took to get to
+    // the first frame. The window is created at its remembered size instead
+    // and asked to maximize from the first frame, see [`App::start`].
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size([settings.window.width as f32, settings.window.height as f32])
         .with_min_inner_size([900.0, 600.0])
-        .with_maximized(settings.window.maximized)
         .with_title("PhotoSite");
     if let (Some(x), Some(y)) = (settings.window.x, settings.window.y) {
         viewport = viewport.with_position([x as f32, y as f32]);
@@ -174,7 +180,7 @@ fn main() -> Result<()> {
         "PhotoSite",
         options,
         Box::new(move |cc| {
-            let mut app = App::new(paths, settings, folder);
+            let mut app = App::new(paths, settings);
             app.selftest = selftest;
             app.shot = shot;
             app.show_settings = open_settings;
@@ -198,32 +204,21 @@ fn main() -> Result<()> {
                 });
             }
 
-            if let Some(name) = on
-                && let Some(at) = (0..app.count()).find(|at| {
-                    app.photo(*at).and_then(|photo| photo.path.file_name()) == Some(&name)
-                })
-            {
-                app.select_only(at);
-                // Handed a photograph, not a folder: it goes straight into
-                // the editor, with the manager standing on it behind.
-                app.edit(at);
-            }
-
-            if compare > 0 {
-                for at in 0..compare.min(app.count()) {
-                    app.select_also(at);
-                }
-
-                app.run_for_shot("photo.compare");
-            }
-
-            if open_editor {
-                if app.selected.is_none() && app.count() > 0 {
-                    app.select_only(0);
-                }
-
-                app.run_for_shot("photo.edit");
-            }
+            // The folder is not opened here. Walking it and writing it to
+            // the catalogue takes the better part of a second on a big one,
+            // and this closure runs before anything has been painted: the
+            // window would stand empty for all of it. It waits for the
+            // first frame instead, see [`App::start`].
+            let folder = folder
+                .or_else(|| app.settings.gallery.last_folder.as_ref().map(PathBuf::from))
+                .filter(|folder| folder.is_dir());
+            app.startup = Some(Startup {
+                folder,
+                on,
+                compare,
+                open_editor,
+                maximize: app.settings.window.maximized,
+            });
             app.dress(&cc.egui_ctx);
             Ok(Box::new(app))
         }),
@@ -451,8 +446,33 @@ pub struct App {
 
     pub selftest: bool,
     pub shot: Option<PathBuf>,
+    /// What is still to be done once the window is on the screen. Taken by
+    /// [`App::start`] and `None` from then on.
+    startup: Option<Startup>,
     frames: u32,
     started: std::time::Instant,
+}
+
+/// The part of starting up that waits for the window: the folder to open
+/// and what to do in it, and whether the window should fill the screen.
+///
+/// The window is shown once the first frame has been painted. Everything
+/// here is deliberately kept out of that frame, so that what is shown first
+/// is the manager, not a blank window standing in for it.
+#[derive(Debug, Default)]
+pub struct Startup {
+    /// The folder to open: from the command line, or the one open last time.
+    pub folder: Option<PathBuf>,
+    /// A photograph in it to stand on and open in the editor, when the
+    /// application was handed a file rather than a folder.
+    pub on: Option<std::ffi::OsString>,
+    /// How many of the first photographs to open in a comparison; none
+    /// when zero.
+    pub compare: usize,
+    /// Whether to open the editor on the chosen photograph, or the first.
+    pub open_editor: bool,
+    /// Whether the window was maximized when it was last closed.
+    pub maximize: bool,
 }
 
 // TextureHandle does not implement Debug, so we write our own — and write it
@@ -470,7 +490,7 @@ impl std::fmt::Debug for App {
 }
 
 impl App {
-    fn new(paths: Paths, settings: Settings, folder: Option<PathBuf>) -> Self {
+    fn new(paths: Paths, settings: Settings) -> Self {
         let threads = match settings.loading.worker_threads {
             0 => jobs::worker_count(),
             count => count.clamp(1, 128) as usize,
@@ -545,7 +565,7 @@ impl App {
         // this thread. Not installed — every `cargo run` — is answered in a
         // line of the log and nothing else.
         let updates = updates::Updates::start(&settings, waker.clone());
-        let mut app = Self {
+        Self {
             paths,
             settings,
             bindings: Bindings::defaults(),
@@ -623,16 +643,85 @@ impl App {
             tabs: editor::Tabs::default(),
             selftest: false,
             shot: None,
+            startup: None,
             frames: 0,
             started: std::time::Instant::now(),
-        };
+        }
+    }
 
-        let start = folder.or_else(|| app.settings.gallery.last_folder.as_ref().map(PathBuf::from));
-        if let Some(folder) = start.filter(|folder| folder.is_dir()) {
-            app.open(folder);
+    /// Does what was put off until the window was on the screen: opens the
+    /// folder and stands, compares or edits in it as asked.
+    ///
+    /// Called from the frame after the window has been shown and, when it
+    /// was asked to fill the screen, has done so — a folder of thousands
+    /// takes the better part of a second to open, and a window that grows
+    /// while nothing is painted is a window with a blank corner.
+    pub fn start(&mut self, startup: Startup) {
+        if let Some(folder) = startup.folder {
+            self.open(folder);
         }
 
-        app
+        if let Some(name) = startup.on
+            && let Some(at) = (0..self.count())
+                .find(|at| self.photo(*at).and_then(|photo| photo.path.file_name()) == Some(&name))
+        {
+            self.select_only(at);
+            // Handed a photograph, not a folder: it goes straight into the
+            // editor, with the manager standing on it behind.
+            self.edit(at);
+        }
+
+        if startup.compare > 0 {
+            for at in 0..startup.compare.min(self.count()) {
+                self.select_also(at);
+            }
+
+            self.run_for_shot("photo.compare");
+        }
+
+        if startup.open_editor {
+            if self.selected.is_none() && self.count() > 0 {
+                self.select_only(0);
+            }
+
+            self.run_for_shot("photo.edit");
+        }
+    }
+
+    /// The first frames: asks the window to fill the screen when it did
+    /// last time, and once it has, runs [`Self::start`]. Nothing to do
+    /// after that.
+    ///
+    /// The first frame is painted into a hidden window and only then is
+    /// the window shown, so the maximize is asked for there and takes
+    /// effect as the window appears. Opening the folder waits one more
+    /// frame, for the window to have its final size — with a ceiling on the
+    /// wait, in case the answer never comes.
+    fn first_frames(&mut self, ctx: &egui::Context) {
+        let Some(startup) = self.startup.as_ref() else {
+            return;
+        };
+
+        if self.frames == 0 {
+            if startup.maximize {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+            }
+
+            ctx.request_repaint();
+            return;
+        }
+
+        let settled = !startup.maximize
+            || self.frames >= 5
+            || ctx.input(|input| input.viewport().maximized == Some(true));
+        if !settled {
+            ctx.request_repaint();
+            return;
+        }
+
+        if let Some(startup) = self.startup.take() {
+            self.start(startup);
+        }
     }
 
     /// Recomputes the theme and runs it through egui. Called at startup and
@@ -2668,6 +2757,7 @@ fn into_pixels(rgb: img::Rgb) -> Pixels {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        self.first_frames(&ctx);
         let delivered = self.collect(&ctx);
         self.collect_indexing();
         self.collect_faces();
@@ -2777,19 +2867,24 @@ impl eframe::App for App {
         }
 
         // The window state is gathered every frame and saved only on close.
-        ctx.input(|input| {
-            if let Some(rect) = input.viewport().inner_rect {
-                self.settings.window.width = rect.width() as f64;
-                self.settings.window.height = rect.height() as f64;
-            }
+        // Not while the window is still on its way to where it was left
+        // last time: it would write down the size and state of a window that
+        // is about to change, and forget the maximize it has yet to make.
+        if self.startup.is_none() {
+            ctx.input(|input| {
+                if let Some(rect) = input.viewport().inner_rect {
+                    self.settings.window.width = rect.width() as f64;
+                    self.settings.window.height = rect.height() as f64;
+                }
 
-            if let Some(outer) = input.viewport().outer_rect {
-                self.settings.window.x = Some(outer.min.x as f64);
-                self.settings.window.y = Some(outer.min.y as f64);
-            }
+                if let Some(outer) = input.viewport().outer_rect {
+                    self.settings.window.x = Some(outer.min.x as f64);
+                    self.settings.window.y = Some(outer.min.y as f64);
+                }
 
-            self.settings.window.maximized = input.viewport().maximized.unwrap_or(false);
-        });
+                self.settings.window.maximized = input.viewport().maximized.unwrap_or(false);
+            });
+        }
 
         self.frames += 1;
         if self.selftest {
@@ -3730,7 +3825,11 @@ mod culling {
         // By name, so the order in the test is the order in the list rather
         // than whatever the files happen to say.
         settings.gallery.sort_field = SortField::Name.id().to_owned();
-        let app = App::new(paths, settings, Some(photos.path().to_path_buf()));
+        let mut app = App::new(paths, settings);
+        app.start(Startup {
+            folder: Some(photos.path().to_path_buf()),
+            ..Default::default()
+        });
         (app, data, photos)
     }
 
