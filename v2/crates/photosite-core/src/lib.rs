@@ -18,6 +18,7 @@ pub mod gazetteer;
 pub mod history;
 pub mod i18n;
 pub mod jobs;
+pub mod orientation;
 pub mod paths;
 pub mod people;
 pub mod place;

@@ -24,8 +24,10 @@ mod filter;
 mod grid;
 mod info;
 mod list;
+mod menu;
 mod people;
 mod picker;
+mod shell;
 mod startup;
 mod theme;
 mod updates;
@@ -66,6 +68,19 @@ pub enum Want {
 }
 
 pub type Key = (PathBuf, Want);
+
+/// Something only the system can show, asked for from the tile's menu.
+///
+/// Both are modal: they run a message loop of their own and nothing is
+/// drawn until they close. So they wait until the menu that asked for them
+/// has gone from the screen, or it stays painted behind them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ShellAsk {
+    /// The menu Explorer would show for these.
+    Menu(Vec<PathBuf>),
+    /// The system's dialog for choosing a program to open this with.
+    ChooseApp(PathBuf),
+}
 
 /// A finished image waiting to be uploaded to the GPU.
 pub struct Pixels {
@@ -429,6 +444,19 @@ pub struct App {
     folder_dialog: Option<(picker::Picker, Wanted)>,
     /// What was last copied here, and whether it was a cut.
     clipboard: clipboard::Held,
+    /// The photographs the writer has just turned. Their pictures are
+    /// thrown away when they arrive here and drawn again the right way up:
+    /// until the file is written, a fresh decode would come out the old way.
+    turned: (
+        crossbeam_channel::Sender<PathBuf>,
+        crossbeam_channel::Receiver<PathBuf>,
+    ),
+    /// The programs that open the kind of file the menu is about, and which
+    /// kind that is. Asked for once per menu, never once per frame.
+    pub open_with: Option<(String, Vec<shell::Handler>)>,
+    /// Something of the system's to show, and how many frames are still to
+    /// be drawn first. See [`App::shell_when_clear`].
+    shell_waiting: Option<(ShellAsk, u8)>,
     /// The folder the tree on the left should scroll to. Set on opening, and
     /// taken by the tree straight away.
     pub scroll_tree_to: Option<PathBuf>,
@@ -638,6 +666,9 @@ impl App {
             edit_person: String::new(),
             folder_dialog: None,
             clipboard: clipboard::Held::default(),
+            turned: crossbeam_channel::unbounded(),
+            open_with: None,
+            shell_waiting: None,
             scroll_tree_to: None,
             scroll_grid_to: None,
             tabs: editor::Tabs::default(),
@@ -1267,7 +1298,7 @@ impl App {
 
         let outcome = files::transfer(self, &chosen, folder, mode);
         if outcome.is_ok() {
-            self.settings.gallery.last_destination = Some(folder.display().to_string());
+            self.settings.gallery.remember_destination(folder);
         }
 
         self.did(outcome, move |count| match mode {
@@ -1682,6 +1713,18 @@ impl App {
                 Some(folder) => self.send_to(Path::new(&folder), Mode::Copy),
                 None => self.status = t!("files-nowhere-yet"),
             },
+            "photo.rotate_left" => self.turn(-1),
+            "photo.rotate_right" => self.turn(1),
+            "file.open_with" => match self.photo_at_cursor() {
+                Some(photo) => self.ask_shell(ShellAsk::ChooseApp(photo.path.clone())),
+                None => self.status = t!("files-nothing-selected"),
+            },
+            "file.system_menu" => {
+                let paths = self.one_folder_of_chosen();
+                if !paths.is_empty() {
+                    self.ask_shell(ShellAsk::Menu(paths));
+                }
+            }
             other => tracing::warn!(command = other, "command with no handler"),
         }
     }
@@ -1735,6 +1778,225 @@ impl App {
         }
 
         self.reopen();
+    }
+
+    /// A quarter-turn, clockwise for a positive number, on everything chosen
+    /// that can be turned without re-encoding it.
+    ///
+    /// The catalogue turns at once and the file follows on the writer's
+    /// thread, the same way a star does. The tile turns once the file has:
+    /// its picture is decoded from the file, and until the file says so a
+    /// fresh one would come out the old way.
+    fn turn(&mut self, quarters: i32) {
+        let chosen: Vec<(PhotoId, bool)> = self
+            .acting_on()
+            .into_iter()
+            .filter_map(|at| self.photo(at))
+            .map(|photo| {
+                let embedded =
+                    photosite_meta::target_for(&photo.path) == photosite_meta::Target::Embedded;
+                (photo.id, embedded)
+            })
+            .collect();
+        if chosen.is_empty() {
+            self.status = t!("files-nothing-selected");
+            return;
+        }
+
+        let turnable: Vec<PhotoId> = chosen
+            .iter()
+            .filter(|(_, embedded)| *embedded)
+            .map(|(id, _)| *id)
+            .collect();
+        let skipped = chosen.len() - turnable.len();
+        if turnable.is_empty() {
+            self.status = t!("files-turn-only-jpeg");
+            return;
+        }
+
+        let Some(catalog) = self.catalog.as_mut() else {
+            tracing::error!("there is no catalogue; nothing can be turned");
+            return;
+        };
+
+        let turned = match catalog.turn(&turnable, quarters, now()) {
+            Ok(turned) => turned,
+            Err(error) => {
+                let error = format!("{error:#}");
+                tracing::error!(%error, "the turn could not be written");
+                self.status = error;
+                return;
+            }
+        };
+
+        for (id, orientation) in &turned {
+            if let Some(photo) = self.all.iter_mut().find(|photo| photo.id == *id) {
+                photo.orientation = *orientation;
+            }
+        }
+
+        // The face frames moved with it, and the details were worked out
+        // for the frame the other way round.
+        self.preview_faces_of = None;
+        self.info_of = None;
+        self.start_writing();
+
+        let count = turned.len() as i64;
+        self.status = if skipped == 0 {
+            t!("files-turned", count = count)
+        } else {
+            t!(
+                "files-turned-not-all",
+                count = count,
+                skipped = skipped as i64
+            )
+        };
+    }
+
+    /// How many of the photographs chosen can be turned.
+    pub fn turnable(&self) -> usize {
+        self.acting_on()
+            .into_iter()
+            .filter_map(|at| self.photo(at))
+            .filter(|photo| {
+                photosite_meta::target_for(&photo.path) == photosite_meta::Target::Embedded
+            })
+            .count()
+    }
+
+    /// Throws away the pictures of what the writer has just turned, so they
+    /// are decoded again from the file that now says which way up it is.
+    fn collect_turned(&mut self) {
+        let turned: Vec<PathBuf> = self.turned.1.try_iter().collect();
+        for path in turned {
+            let gone: Vec<Key> = self
+                .textures
+                .keys()
+                .filter(|(of, _)| *of == path)
+                .cloned()
+                .collect();
+            for key in gone {
+                self.textures.remove(&key);
+                self.order.retain(|kept| kept != &key);
+                self.images.forget(&key);
+            }
+        }
+    }
+
+    /// The key bound to a command, written the way a menu shows it.
+    pub fn shortcut_label(&self, id: &str) -> Option<String> {
+        self.bindings.shortcut(id).map(ToString::to_string)
+    }
+
+    /// The kind of file the menu is about: the one under the cursor.
+    pub fn menu_extension(&self) -> Option<String> {
+        self.photo_at_cursor()?
+            .path
+            .extension()
+            .map(|extension| extension.to_string_lossy().to_lowercase())
+    }
+
+    /// What is chosen, as far as one question to the system can cover it:
+    /// the photographs in the folder of the first. Says so when that is not
+    /// all of them.
+    fn one_folder_of_chosen(&mut self) -> Vec<PathBuf> {
+        let mut chosen = self.chosen_paths();
+        // The one under the cursor first, so the folder asked about is the
+        // folder of the photograph the menu was opened on.
+        if let Some(current) = self.photo_at_cursor().map(|photo| photo.path.clone())
+            && let Some(at) = chosen.iter().position(|path| *path == current)
+        {
+            let current = chosen.remove(at);
+            chosen.insert(0, current);
+        }
+
+        let paths = shell::one_folder(&chosen);
+        if chosen.is_empty() {
+            self.status = t!("files-nothing-selected");
+        } else if paths.len() < chosen.len() {
+            let folder = paths
+                .first()
+                .and_then(|path| path.parent())
+                .map(|folder| folder.display().to_string())
+                .unwrap_or_default();
+            self.status = t!(
+                "files-one-folder-only",
+                count = paths.len() as i64,
+                folder = folder
+            );
+        }
+
+        paths
+    }
+
+    /// Hands what is chosen to a program the system offered.
+    pub fn open_in(&mut self, handler: &shell::Handler, extension: &str) {
+        let paths = self.one_folder_of_chosen();
+        if paths.is_empty() {
+            return;
+        }
+
+        let outcome = shell::open_with(handler, extension, &paths);
+        if let Err(error) = outcome {
+            let error = format!("{error:#}");
+            tracing::warn!(%error, program = handler.name, "the program would not open them");
+            self.status = error;
+        }
+    }
+
+    /// Asks for something of the system's, once the menu is off the screen.
+    fn ask_shell(&mut self, ask: ShellAsk) {
+        // One frame drawn without the menu, then the next one asks.
+        self.shell_waiting = Some((ask, 1));
+    }
+
+    /// Shows what the menu asked the system for, when the frame that took
+    /// the menu away has been drawn. Called before anything else is drawn,
+    /// so the screen behind the system's menu is the one without ours.
+    fn shell_when_clear(&mut self, ctx: &egui::Context) {
+        let Some((_, frames)) = self.shell_waiting.as_mut() else {
+            return;
+        };
+
+        if *frames > 0 {
+            *frames -= 1;
+            ctx.request_repaint();
+            return;
+        }
+
+        let Some((ask, _)) = self.shell_waiting.take() else {
+            return;
+        };
+        match ask {
+            ShellAsk::Menu(paths) => match shell::system_menu(&paths) {
+                Ok(shell::Chosen::Nothing) => {}
+                Ok(shell::Chosen::Command(id)) => {
+                    // The menu spoke for these and no others, so the command
+                    // does too: a delete chosen on one folder's photographs
+                    // must not reach the other folder's.
+                    self.selection = self
+                        .visible
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, at)| paths.contains(&self.all[**at].path))
+                        .map(|(position, _)| position)
+                        .collect();
+                    self.run(id, ctx);
+                }
+                Err(error) => {
+                    let error = format!("{error:#}");
+                    tracing::warn!(%error, "the system menu could not be shown");
+                    self.status = error;
+                }
+            },
+            ShellAsk::ChooseApp(path) => {
+                if let Err(error) = shell::choose_app(&path) {
+                    let error = format!("{error:#}");
+                    tracing::warn!(%error, "the system would not offer a program");
+                    self.status = error;
+                }
+            }
+        }
     }
 
     /// The photographs the next rating lands on.
@@ -2106,6 +2368,7 @@ impl App {
 
         let path = self.paths.catalog();
         let waker = self.waker.clone();
+        let turned = self.turned.0.clone();
         let title = t!("task-writing-metadata");
         self.writing = Some(self.tasks.spawn(title, move |cancel, progress| {
             let mut catalog = Catalog::open(&path)?;
@@ -2144,14 +2407,16 @@ impl App {
                     }
 
                     let path = entry.photo.path.clone();
-                    match photosite_meta::write(
-                        &path,
-                        &entry.photo.organisation,
-                        entry.photo.place,
-                        regions_for(&entry),
-                    ) {
+                    match photosite_meta::write_entry(&entry) {
                         Ok(_) => match photosite_core::FileIdentity::read(&path) {
-                            Ok(identity) => catalog.written(entry.photo.id, &identity)?,
+                            Ok(identity) => {
+                                catalog.written(&entry, &identity)?;
+                                if entry.turned {
+                                    // The window may be gone already, and
+                                    // then there is nobody to tell.
+                                    let _ = turned.send(path.clone());
+                                }
+                            }
                             // Written but we cannot see it any more: the
                             // entry stays so the row is brought up to date
                             // on another go.
@@ -2682,28 +2947,6 @@ fn effective_budget(configured: i64, needed: usize) -> usize {
 /// the greater-than sign, which reads as an operator.
 const SEPARATOR_MARK: &str = "\u{203a}";
 
-/// The face frames of one pending write, in the form the file wants.
-///
-/// Nothing at all comes back in two cases, and both are deliberate: when the
-/// photograph has never been face-scanned, because another program's frames
-/// are not ours to clear; and when we do not know the photograph's pixel
-/// size, because an MWG region is a fraction of a frame and a frame of
-/// unknown size is not something to guess at.
-///
-/// The size is the **shown** one. A camera held on its side writes the frame
-/// as the sensor read it and records the turn separately; the faces were
-/// found on the picture the right way up, so that is the frame they are
-/// fractions of.
-fn regions_for(entry: &photosite_core::catalog::Pending) -> Option<photosite_meta::xmp::Regions> {
-    let faces = entry.regions.clone()?;
-    let (width, height) = entry.photo.shown()?;
-    Some(photosite_meta::xmp::Regions {
-        width,
-        height,
-        faces,
-    })
-}
-
 /// Seconds since the epoch.
 ///
 /// The queue needs a clock for its backoff, and this is the only place the
@@ -2758,6 +3001,8 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.first_frames(&ctx);
+        self.shell_when_clear(&ctx);
+        self.collect_turned();
         let delivered = self.collect(&ctx);
         self.collect_indexing();
         self.collect_faces();
@@ -4054,6 +4299,106 @@ mod culling {
                 .iter()
                 .all(|at| app.all[*at].organisation.rating == 5)
         );
+    }
+
+    /// The rows and the catalogue turn at once; the file follows on the
+    /// writer's thread. Anything but a JPEG is left as it is.
+    #[test]
+    fn turning_turns_the_jpegs_and_leaves_the_rest_alone() {
+        let (mut app, _data, photos) = app_over(&[("a.jpg", 30), ("b.nef", 20)]);
+        app.select_all();
+        assert_eq!(app.turnable(), 1);
+
+        app.run_for_test("photo.rotate_right");
+
+        fn row(app: &App, name: &str) -> u8 {
+            app.all
+                .iter()
+                .find(|photo| photo.path.file_name().unwrap() == name)
+                .unwrap()
+                .orientation
+        }
+        assert_eq!(row(&app, "a.jpg"), 6);
+        assert_eq!(row(&app, "b.nef"), 1, "a RAW was turned");
+        let stored = app
+            .catalog
+            .as_ref()
+            .unwrap()
+            .by_path(&photos.path().join("a.jpg"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            stored.orientation, 6,
+            "the catalogue did not turn with the row"
+        );
+
+        app.run_for_test("photo.rotate_left");
+        app.run_for_test("photo.rotate_left");
+        assert_eq!(row(&app, "a.jpg"), 8);
+    }
+
+    /// The whole way round, on a real JPEG: the turn reaches the file on the
+    /// writer's thread, the picture is decoded the new way up, and the
+    /// window is told so it can throw the old picture away.
+    #[test]
+    fn a_turn_reaches_the_file_and_the_window_hears_of_it() {
+        let (mut app, _data, photos) = app_over(&[]);
+        let path = photos.path().join("wide.jpg");
+        let pixels = img::Rgb::new(40, 20, vec![128; 40 * 20 * 3]).unwrap();
+        img::encode::write(&path, &pixels, img::encode::Format::Jpeg, 90).unwrap();
+        app.open(photos.path().to_path_buf());
+        app.select_all();
+
+        app.run_for_test("photo.rotate_right");
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let told = loop {
+            if let Ok(told) = app.turned.1.try_recv() {
+                break told;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the writer never said it had turned anything"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+
+        assert_eq!(told, path);
+        let raw = std::fs::read(&path).unwrap();
+        assert_eq!(img::exif::read(&raw).orientation, 6);
+        let shown = img::sized(&path, 100).unwrap();
+        assert_eq!(
+            (shown.width, shown.height),
+            (20, 40),
+            "the picture is still the old way up"
+        );
+    }
+
+    #[test]
+    fn nothing_to_turn_says_why() {
+        let (mut app, _data, _photos) = app_over(&[("b.nef", 20)]);
+        app.select_all();
+        app.run_for_test("photo.rotate_right");
+        assert_eq!(app.status, t!("files-turn-only-jpeg"));
+    }
+
+    #[test]
+    fn a_copy_puts_its_folder_at_the_top_of_the_recent_ones() {
+        let (mut app, _data, _photos) = three();
+        let piles = [tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap()];
+        app.select_only(0);
+        app.send_to(piles[0].path(), Mode::Copy);
+        app.select_only(1);
+        app.send_to(piles[1].path(), Mode::Move);
+
+        assert_eq!(
+            app.settings.gallery.recent_destinations,
+            [
+                piles[1].path().display().to_string(),
+                piles[0].path().display().to_string()
+            ]
+        );
+        assert!(piles[0].path().join("a.jpg").exists());
     }
 
     #[test]

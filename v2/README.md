@@ -6,7 +6,7 @@ A clean sheet. Rust, egui over wgpu, Windows / macOS / Linux from one source.
 cd v2
 cargo run --release -p photosite-ui              # the application
 cargo run --release -p photosite-cli -- doctor   # where everything lives
-cargo test --workspace                           # 553 tests, no window, no GPU
+cargo test --workspace                           # 639 tests, no window, no GPU
 ./packaging/pack.ps1                             # a Windows installer
 ```
 
@@ -630,7 +630,8 @@ they are the file manager's own keys and it would be strange for them to mean
 anything else here. `Ctrl+X` cuts, `Alt+C` and `Alt+X` copy or move into a
 folder chosen there and then, and `Ctrl+Shift+C` goes to wherever the last one
 went, because sorting a folder into three piles is otherwise three dialogs and
-two of them say the same thing.
+two of them say the same thing. The last eight folders are kept, and the
+menu on a tile offers them before it offers a dialog.
 
 **Nothing at a destination is ever written over.** A photograph landing on a
 name already in use takes a number instead — `holiday (2).jpg` — and where
@@ -671,6 +672,21 @@ Explorer and pressed `Ctrl+V` here means that file, not what they copied in
 PhotoSite ten minutes ago. And a cut is spent once pasted, or the next `Ctrl+V`
 would try to move the same photographs out of a folder they have left.
 
+**One photograph copied is its picture as well.** A clipboard holds one thing
+in several forms and whoever pastes takes the form they understand: Explorer
+takes the file, Paint and a letter take the picture. So there is one Copy and
+not a "copy file" beside a "copy image". The picture is decoded whole on a
+thread of its own and added as `CF_DIB` — bottom row first, because Word will
+not paste one the other way up — and only if nothing else has been copied in
+the meantime. No text goes beside it: a program offered text and a picture
+takes the text.
+
+**The toolkit is kept off the system clipboard on Windows.** egui puts text
+there by emptying it first, at the end of the frame — after the files have
+gone on — which leaves nothing for Explorer to paste. The paths go on as text
+in the same breath as the files instead, and the toolkit is only asked where
+the system's clipboard is not spoken to at all.
+
 Under test the system clipboard is left alone entirely: a test that wrote to it
 would take it out of the hands of whoever is running the tests, and one that
 read from it would pass or fail by what they last copied.
@@ -680,6 +696,47 @@ read from it would pass or fail by what they last copied.
 | copy here | `FileDrop`, `FileNameW`, `FileName` and drop effect 1 |
 | cut here | the same, drop effect 2, so Explorer moves rather than copies |
 | copy in Explorer, paste here | the file arrives in the open folder |
+
+## The menu on a tile
+
+A right-click on a tile or a row opens what can be done to the photographs
+selected: copy, copy to and move to (the recent folders, then a dialog), a
+quarter-turn either way, the programs that open them and Explorer's own menu.
+Every entry is a command from the registry, so the menu and the keys agree on
+names and shortcuts. **Explorer's rule** decides what it is about: a tile
+outside the selection becomes the selection, a tile inside it leaves the
+selection alone.
+
+*Open with* and *Show the system menu* are Windows' own answers, asked of the
+shell rather than rebuilt here — an editor installed last week is on the list
+without anybody telling us. The shell fills parts of its menu only as they
+open, through messages to whichever window owns it, so the menu is owned by a
+small hidden window of ours that hands those messages back; the application's
+own window belongs to winit. Delete, rename, copy and cut chosen there run our
+own commands, so the catalogue follows the file. Both are modal, so they wait
+one frame for our menu to leave the screen.
+
+### Turning
+
+**A turn is the EXIF orientation tag and nothing else.** The pixels are never
+re-encoded, which is the whole of "lossless": every reader turns them on the
+way to the screen. Eight orientations are four turns with or without a mirror,
+and a turn composes with a mirror rather than adding to it — the arithmetic
+and its tests live in `photosite_core::orientation`. The face frames turn with
+the photograph, since they are fractions of it the right way up.
+
+It goes through the same queue as a star, and only a JPEG is turned: a RAW
+would need its sidecar honoured by our own decoder first. **The orientation is
+written only when it was turned here** — a flag on the queue entry — because
+everywhere else it is merely what the file said, and writing back a tag we
+misread would turn somebody's photograph for them. The queue also counts its
+changes now, so a photograph turned again while the last turn was being
+written stays queued instead of being left a step behind.
+
+A turned file must look changed to anything that knows it by length and write
+time to the second, the tile cache included: turning changes one number and
+not the length, so a second turn within the same second would find the first
+one's tile. The write time is moved on when it has not.
 
 ## Comparison
 

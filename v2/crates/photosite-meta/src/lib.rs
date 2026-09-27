@@ -265,22 +265,104 @@ pub fn write(
     place: Option<Place>,
     regions: Option<xmp::Regions>,
 ) -> Result<Target> {
-    let target = target_for(path);
     let mut wanted = Xmp::from(organisation);
     wanted.place = place;
     wanted.regions = regions;
+    write_wanted(path, &wanted)
+}
+
+/// Writes one entry of the queue: what the catalogue says about the
+/// photograph, its named faces, and — only when it was turned here — which
+/// way up it is.
+///
+/// The one place the window and the headless command both write through, so
+/// that the two cannot come to disagree about what a queued photograph
+/// means.
+///
+/// **A turn is written only into a JPEG.** Elsewhere the orientation would
+/// go into a sidecar, where Lightroom would honour it and this application,
+/// which reads the orientation out of the file itself, would not; nothing
+/// turns anything but a JPEG, and a stray turn is left out rather than
+/// half-applied.
+pub fn write_entry(entry: &photosite_core::catalog::Pending) -> Result<Target> {
+    let photo = &entry.photo;
+    let mut wanted = Xmp::from(&photo.organisation);
+    wanted.place = photo.place;
+    // The frame the faces are fractions of is the one shown — a camera held
+    // on its side records the frame as the sensor read it and the turn
+    // apart, and the faces were found on the picture the right way up. A
+    // frame of unknown size is not something to guess at, so without one the
+    // faces are left out rather than written against the wrong image.
+    wanted.regions = entry
+        .regions
+        .clone()
+        .zip(photo.shown())
+        .map(|(faces, (width, height))| xmp::Regions {
+            width,
+            height,
+            faces,
+        });
+
+    let turning = entry.turned && target_for(&photo.path) == Target::Embedded;
+    if turning {
+        wanted.orientation = Some(photo.orientation);
+    }
+
+    let before = photosite_core::FileIdentity::read(&photo.path).ok();
+    let target = write_wanted(&photo.path, &wanted)?;
+    if turning && let Some(before) = before {
+        visibly_changed(&photo.path, &before);
+    }
+
+    Ok(target)
+}
+
+/// Makes sure a turned photograph does not look unchanged.
+///
+/// Whatever keeps a picture of a file — the tile cache here, Explorer's
+/// thumbnail cache — knows it by its length and its write time to the
+/// second. Turning changes one number in the EXIF block and leaves the
+/// length as it was, so a photograph turned twice within a second looked,
+/// to all of them, like the first turn, and its tile stayed on its side.
+/// The write time is moved on until it is later than it was.
+fn visibly_changed(path: &Path, before: &photosite_core::FileIdentity) {
+    let Ok(after) = photosite_core::FileIdentity::read(path) else {
+        return;
+    };
+
+    if after.file_size != before.file_size || after.modified_at > before.modified_at {
+        return;
+    }
+
+    let later = std::time::UNIX_EPOCH
+        + std::time::Duration::from_secs(before.modified_at.max(0) as u64 + 1);
+    let moved = std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .and_then(|file| file.set_modified(later));
+    if let Err(error) = moved {
+        tracing::warn!(
+            path = %path.display(),
+            %error,
+            "the turned photograph may keep its old picture in a cache"
+        );
+    }
+}
+
+fn write_wanted(path: &Path, wanted: &Xmp) -> Result<Target> {
+    let target = target_for(path);
 
     match &target {
         Target::Sidecar(sidecar) => {
             let existing = std::fs::read_to_string(sidecar).ok();
-            let packet = xmp::merge(existing.as_deref(), &wanted);
+            let packet = xmp::merge(existing.as_deref(), wanted);
             replace(sidecar, packet.as_bytes())
                 .with_context(|| format!("cannot write {}", sidecar.display()))?;
         }
         Target::Embedded => {
             let raw =
                 std::fs::read(path).with_context(|| format!("cannot read {}", path.display()))?;
-            let out = embed(&raw, &wanted)
+            let out = embed(&raw, wanted)
                 .with_context(|| format!("cannot write into {}", path.display()))?;
             replace(path, &out).with_context(|| format!("cannot write {}", path.display()))?;
         }
@@ -515,6 +597,13 @@ fn with_exif(raw: &[u8], wanted: &Xmp) -> Result<Vec<u8>> {
         }
     }
 
+    // Which way up, when it was turned here and only then. The pixels are
+    // not touched: every reader turns them by this tag on the way to the
+    // screen, which is what makes a turn lossless.
+    if let Some(orientation) = wanted.orientation {
+        metadata.set_tag(ExifTag::Orientation(vec![u16::from(orientation)]));
+    }
+
     // A position, when the catalogue holds one. **Never removed**: a photo
     // whose coordinates we happen not to know is not one whose coordinates
     // are wrong, and clearing what the camera recorded because the catalogue
@@ -660,6 +749,118 @@ mod tests {
         raw.extend_from_slice(b"THE PHOTOGRAPH ITSELF");
         raw.extend_from_slice(&[0xFF, 0xD9]);
         raw
+    }
+
+    /// The queue entry for a photograph at `path`, rated, and turned by
+    /// `quarters` if that is not zero — the way the window would leave it.
+    fn queued(path: &Path, quarters: i32) -> photosite_core::catalog::Pending {
+        let mut catalog = photosite_core::Catalog::in_memory().unwrap();
+        let identity = photosite_core::FileIdentity::read(path).unwrap();
+        let id = catalog
+            .upsert(&NewPhoto {
+                path: identity.path,
+                file_size: identity.file_size,
+                modified_at: identity.modified_at,
+                taken_at: None,
+                width: Some(16),
+                height: Some(16),
+                orientation: photosite_image::exif::read(&std::fs::read(path).unwrap()).orientation,
+                camera: None,
+                lens: None,
+                place: None,
+                verdict: photosite_core::Verdict::Nowhere,
+                reason: None,
+            })
+            .unwrap();
+        catalog.set_rating(&[id], 3).unwrap();
+        catalog.enqueue(&[id], 0).unwrap();
+        if quarters != 0 {
+            catalog.turn(&[id], quarters, 0).unwrap();
+        }
+
+        catalog.due(0, 1).unwrap().remove(0)
+    }
+
+    #[test]
+    fn a_turn_goes_into_the_exif_and_leaves_the_photograph_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.jpg");
+        std::fs::write(&path, jpeg_bytes()).unwrap();
+
+        write_entry(&queued(&path, 1)).unwrap();
+
+        let raw = std::fs::read(&path).unwrap();
+        assert_eq!(photosite_image::exif::read(&raw).orientation, 6);
+        assert_eq!(
+            jpeg::compressed_image(&raw).unwrap(),
+            jpeg::compressed_image(&jpeg_bytes()).unwrap(),
+            "turning re-encoded the photograph"
+        );
+        assert_eq!(read(&path).rating, Some(3), "the rest was not written");
+        assert!(
+            jpeg::xmp(&raw)
+                .unwrap()
+                .contains("<tiff:Orientation>6</tiff:Orientation>"),
+            "the packet still says the old orientation"
+        );
+    }
+
+    /// The orientation of a photograph that was not turned here is what the
+    /// file said, and a star does not write it back — a tag we misread would
+    /// otherwise turn somebody's photograph for them.
+    #[test]
+    fn a_rating_leaves_the_orientation_as_the_file_has_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.jpg");
+        std::fs::write(&path, jpeg_bytes()).unwrap();
+        write_entry(&queued(&path, -1)).unwrap();
+
+        let mut rated = queued(&path, 0);
+        rated.photo.orientation = 1;
+        write_entry(&rated).unwrap();
+
+        let raw = std::fs::read(&path).unwrap();
+        assert_eq!(photosite_image::exif::read(&raw).orientation, 8);
+    }
+
+    /// Turned twice within a second, the file must still not look the same
+    /// as after the first turn to anything that knows it by its length and
+    /// its write time — the tile cache here among them.
+    #[test]
+    fn a_second_turn_within_the_same_second_still_looks_like_a_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.jpg");
+        std::fs::write(&path, jpeg_bytes()).unwrap();
+
+        write_entry(&queued(&path, 1)).unwrap();
+        let first = photosite_core::FileIdentity::read(&path).unwrap();
+        write_entry(&queued(&path, 1)).unwrap();
+        let second = photosite_core::FileIdentity::read(&path).unwrap();
+
+        assert_eq!(
+            photosite_image::exif::read(&std::fs::read(&path).unwrap()).orientation,
+            3
+        );
+        assert!(
+            (second.file_size, second.modified_at) != (first.file_size, first.modified_at),
+            "{first:?} and {second:?} look like the same file"
+        );
+    }
+
+    /// Nothing but a JPEG is turned. A turn queued against anything else is
+    /// left out of the sidecar rather than written where only other programs
+    /// would honour it.
+    #[test]
+    fn a_turn_is_not_written_into_a_sidecar() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.nef");
+        std::fs::write(&path, b"not really a raw").unwrap();
+
+        write_entry(&queued(&path, 1)).unwrap();
+
+        let sidecar = std::fs::read_to_string(dir.path().join("a.xmp")).unwrap();
+        assert!(!sidecar.contains("Orientation"), "{sidecar}");
+        assert!(sidecar.contains("<xmp:Rating>3</xmp:Rating>"), "{sidecar}");
     }
 
     #[test]

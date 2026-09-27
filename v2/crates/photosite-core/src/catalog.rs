@@ -238,6 +238,27 @@ const MIGRATIONS: &[Migration] = &[
         ALTER TABLE photos ADD COLUMN description_en TEXT;
     ",
     },
+    Migration {
+        name: "0009-turning-and-generations",
+        // Two things the queue could not say before.
+        //
+        // `turn` is whether the orientation is ours to write. Everything else
+        // the queue writes is what somebody said, and the catalogue is the
+        // truth about it; the orientation is what the *file* said, read once
+        // at the scan, and writing it back on every star would put a misread
+        // tag into a photograph that had a good one. So it goes into the file
+        // only when it was turned here.
+        //
+        // `generation` counts the changes. A photograph changed again while
+        // its last change is being written must not have its entry taken
+        // off the queue when that write finishes — the file then says the
+        // older of the two. Turning a photograph twice in quick succession
+        // is exactly that, and it would leave the file on its side.
+        sql: "
+        ALTER TABLE metadata_outbox ADD COLUMN turn       INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE metadata_outbox ADD COLUMN generation INTEGER NOT NULL DEFAULT 0;
+    ",
+    },
 ];
 
 /// How many times a file is tried before it is left alone.
@@ -279,6 +300,12 @@ pub(crate) fn qualified_columns(alias: &str) -> String {
 /// label, flag, title, description — is deliberately absent from the update:
 /// a rescan reads the file again and must not overwrite what a person said
 /// about it. Touching a photograph on disk would otherwise clear its stars.
+///
+/// The orientation is the disk's as well, except while a turn made here is
+/// still waiting to be written into the file. Then the catalogue is ahead of
+/// the file, and a header read in the meantime — the pass that follows
+/// opening a folder, reaching this photograph a moment after somebody
+/// turned it — would put the old orientation back and the turn with it.
 const UPSERT: &str = "
     INSERT INTO photos(path, folder, file_size, modified_at, taken_at, width, height,
                        orientation, camera, lens, latitude, longitude, place_verdict,
@@ -291,7 +318,12 @@ const UPSERT: &str = "
         taken_at = excluded.taken_at,
         width = excluded.width,
         height = excluded.height,
-        orientation = excluded.orientation,
+        orientation = CASE
+            WHEN EXISTS(SELECT 1 FROM metadata_outbox o
+                        WHERE o.photo_id = photos.id AND o.turn = 1)
+            THEN photos.orientation
+            ELSE excluded.orientation
+        END,
         camera = excluded.camera,
         lens = excluded.lens,
         latitude = excluded.latitude,
@@ -695,24 +727,76 @@ impl Catalog {
         }
 
         let transaction = self.conn.transaction()?;
+        queue(&transaction, photos, now, false)?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Turns photographs by quarter-turns clockwise, as they are shown —
+    /// negative is anticlockwise — and queues the files to say so.
+    ///
+    /// The orientation and the face frames move together, in one
+    /// transaction: a frame is a fraction of the photograph the right way
+    /// up, so a turned photograph with frames that stayed put has every
+    /// name beside somebody else's face. Answers each photograph's new
+    /// orientation, for the rows on screen.
+    pub fn turn(
+        &mut self,
+        photos: &[PhotoId],
+        quarters: i32,
+        now: i64,
+    ) -> Result<Vec<(PhotoId, u8)>> {
+        if photos.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let transaction = self.conn.transaction()?;
+        let mut turned = Vec::with_capacity(photos.len());
         {
-            // A fresh change clears the attempts: whatever stopped the last
-            // write — a file open elsewhere, a drive not there — may well be
-            // over, and making somebody wait out a backoff they cannot see
-            // is not reasonable.
-            let mut statement = transaction.prepare(
-                "INSERT INTO metadata_outbox(photo_id, not_before, attempts, last_error)
-                 VALUES(?1, ?2, 0, NULL)
-                 ON CONFLICT(photo_id) DO UPDATE SET
-                     not_before = ?2, attempts = 0, last_error = NULL",
-            )?;
+            let mut orientation =
+                transaction.prepare("SELECT orientation FROM photos WHERE id = ?1")?;
+            let mut update =
+                transaction.prepare("UPDATE photos SET orientation = ?2 WHERE id = ?1")?;
+            let mut faces =
+                transaction.prepare("SELECT id, x, y, w, h FROM faces WHERE photo_id = ?1")?;
+            let mut move_face = transaction
+                .prepare("UPDATE faces SET x = ?2, y = ?3, w = ?4, h = ?5 WHERE id = ?1")?;
             for photo in photos {
-                statement.execute(params![photo.0, now])?;
+                let Some(was) = orientation
+                    .query_row(params![photo.0], |row| row.get::<_, u8>(0))
+                    .optional()?
+                else {
+                    continue;
+                };
+
+                let now_is = crate::orientation::turned(was, quarters);
+                update.execute(params![photo.0, now_is])?;
+
+                let frames = faces
+                    .query_map(params![photo.0], |row| {
+                        Ok((
+                            row.get::<_, i64>(0)?,
+                            row.get::<_, f64>(1)?,
+                            row.get::<_, f64>(2)?,
+                            row.get::<_, f64>(3)?,
+                            row.get::<_, f64>(4)?,
+                        ))
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                for (face, x, y, width, height) in frames {
+                    let [x, y, width, height] =
+                        crate::orientation::turned_rect(x, y, width, height, quarters);
+                    move_face.execute(params![face, x, y, width, height])?;
+                }
+
+                turned.push((*photo, now_is));
             }
         }
 
+        let ids: Vec<PhotoId> = turned.iter().map(|(photo, _)| *photo).collect();
+        queue(&transaction, &ids, now, true)?;
         transaction.commit()?;
-        Ok(())
+        Ok(turned)
     }
 
     /// What is due to be written, and what to write.
@@ -721,7 +805,7 @@ impl Catalog {
     /// queue, which is what makes a retry write the truth as it stands.
     pub fn due(&self, now: i64, limit: usize) -> Result<Vec<Pending>> {
         let mut statement = self.conn.prepare(&format!(
-            "SELECT {COLUMNS}, o.attempts FROM metadata_outbox o
+            "SELECT {COLUMNS}, o.attempts, o.turn, o.generation FROM metadata_outbox o
              JOIN photos p ON p.id = o.photo_id
              WHERE o.not_before <= ?1 AND o.attempts < ?2
              ORDER BY o.not_before
@@ -733,6 +817,8 @@ impl Catalog {
                     photo: read_photo(row)?,
                     regions: None,
                     attempts: row.get(COLUMN_COUNT)?,
+                    turned: row.get::<_, i64>(COLUMN_COUNT + 1)? != 0,
+                    generation: row.get(COLUMN_COUNT + 2)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -745,17 +831,23 @@ impl Catalog {
         Ok(pending)
     }
 
-    /// The file now says what the catalogue says.
+    /// The file now says what the catalogue said when `entry` was taken off
+    /// the queue.
     ///
     /// The row's length and write time are brought up to date in the same
     /// breath. Writing metadata changes both, and leaving them stale would
     /// have the next scan read the whole file again to learn what we just
     /// put there ourselves.
-    pub fn written(&mut self, photo: PhotoId, identity: &FileIdentity) -> Result<()> {
+    ///
+    /// The entry leaves the queue only if nothing has changed since it was
+    /// taken. A photograph rated or turned again while it was being written
+    /// stays queued, and the next pass writes the newer truth.
+    pub fn written(&mut self, entry: &Pending, identity: &FileIdentity) -> Result<()> {
+        let photo = entry.photo.id;
         let transaction = self.conn.transaction()?;
         transaction.execute(
-            "DELETE FROM metadata_outbox WHERE photo_id = ?1",
-            params![photo.0],
+            "DELETE FROM metadata_outbox WHERE photo_id = ?1 AND generation = ?2",
+            params![photo.0, entry.generation],
         )?;
         transaction.execute(
             "UPDATE photos SET file_size = ?2, modified_at = ?3 WHERE id = ?1",
@@ -1155,6 +1247,40 @@ pub struct Pending {
     /// comes back out of the file.
     pub regions: Option<Vec<crate::people::Region>>,
     pub attempts: i64,
+    /// The photograph was turned here, so its orientation is ours to write.
+    /// Otherwise the orientation is whatever the file said, and is left as
+    /// the file has it.
+    pub turned: bool,
+    /// Which change this is. See [`Catalog::written`].
+    pub generation: i64,
+}
+
+/// Puts photographs on the queue, or brings them to the front of it.
+///
+/// A fresh change clears the attempts: whatever stopped the last write — a
+/// file open elsewhere, a drive not there — may well be over, and making
+/// somebody wait out a backoff they cannot see is not reasonable. A turn,
+/// once asked for, stays asked for until it is written: rating a photograph
+/// that is waiting to be turned must not cancel the turn.
+fn queue(
+    transaction: &rusqlite::Transaction<'_>,
+    photos: &[PhotoId],
+    now: i64,
+    turn: bool,
+) -> Result<()> {
+    let mut statement = transaction.prepare(
+        "INSERT INTO metadata_outbox(photo_id, not_before, attempts, last_error, turn)
+         VALUES(?1, ?2, 0, NULL, ?3)
+         ON CONFLICT(photo_id) DO UPDATE SET
+             not_before = ?2, attempts = 0, last_error = NULL,
+             turn = MAX(turn, excluded.turn),
+             generation = generation + 1",
+    )?;
+    for photo in photos {
+        statement.execute(params![photo.0, now, i64::from(turn)])?;
+    }
+
+    Ok(())
 }
 
 /// How many columns [`COLUMNS`] names, so a query can add its own after them.
@@ -1562,12 +1688,128 @@ mod tests {
             file_size: 9999,
             modified_at: 1_800_000_000,
         };
-        catalog.written(id, &after).unwrap();
+        let due = catalog.due(100, 10).unwrap();
+        catalog.written(&due[0], &after).unwrap();
 
         assert_eq!(catalog.outbox().unwrap(), (0, 0));
         let photo = catalog.by_path(Path::new("/a/b.jpg")).unwrap().unwrap();
         assert_eq!(photo.file_size, 9999);
         assert!(catalog.is_current(&after).unwrap());
+    }
+
+    /// Rated again while the last rating was on its way into the file: the
+    /// write that finishes wrote the older of the two, so the entry stays
+    /// for the next pass rather than leaving the file a step behind.
+    #[test]
+    fn a_change_made_during_the_write_is_not_lost_when_it_finishes() {
+        let mut catalog = Catalog::in_memory().unwrap();
+        let id = catalog.upsert(&sample("/a/b.jpg")).unwrap();
+        catalog.enqueue(&[id], 100).unwrap();
+        let taken = catalog.due(100, 10).unwrap();
+
+        catalog.set_rating(&[id], 4).unwrap();
+        catalog.enqueue(&[id], 101).unwrap();
+
+        let after = FileIdentity {
+            path: PathBuf::from("/a/b.jpg"),
+            file_size: 9999,
+            modified_at: 1_800_000_000,
+        };
+        catalog.written(&taken[0], &after).unwrap();
+
+        let again = catalog.due(200, 10).unwrap();
+        assert_eq!(again.len(), 1, "the newer change was taken off the queue");
+        assert_eq!(again[0].photo.organisation.rating, 4);
+    }
+
+    #[test]
+    fn turning_moves_the_orientation_and_queues_the_file() {
+        let mut catalog = Catalog::in_memory().unwrap();
+        // The sample was taken with the camera on its side: 6.
+        let id = catalog.upsert(&sample("/a/b.jpg")).unwrap();
+
+        let turned = catalog.turn(&[id], 1, 100).unwrap();
+        assert_eq!(turned, [(id, 3)]);
+        let turned = catalog.turn(&[id], 1, 100).unwrap();
+        assert_eq!(turned, [(id, 8)]);
+
+        let due = catalog.due(100, 10).unwrap();
+        assert_eq!(due.len(), 1);
+        assert!(due[0].turned, "the turn is not marked as ours to write");
+        assert_eq!(due[0].photo.orientation, 8);
+    }
+
+    /// A header read while a turn is still on its way into the file must not
+    /// put the old orientation back. Once the file has it, the file is the
+    /// truth again.
+    #[test]
+    fn a_scan_does_not_undo_a_turn_that_is_still_to_be_written() {
+        let mut catalog = Catalog::in_memory().unwrap();
+        let photo = sample("/a/b.jpg");
+        let id = catalog.upsert(&photo).unwrap();
+        catalog.turn(&[id], 1, 100).unwrap();
+
+        catalog.upsert(&photo).unwrap();
+        let row = catalog.by_path(Path::new("/a/b.jpg")).unwrap().unwrap();
+        assert_eq!(row.orientation, 3, "the scan undid the turn");
+
+        let due = catalog.due(100, 10).unwrap();
+        let after = FileIdentity {
+            path: PathBuf::from("/a/b.jpg"),
+            file_size: 9999,
+            modified_at: 1_800_000_000,
+        };
+        catalog.written(&due[0], &after).unwrap();
+        catalog.upsert(&photo).unwrap();
+        let row = catalog.by_path(Path::new("/a/b.jpg")).unwrap().unwrap();
+        assert_eq!(row.orientation, 6, "the file is not the truth again");
+    }
+
+    /// Only a turn made here is written back. The orientation of anything
+    /// else is what the file said, and a star must not rewrite it.
+    #[test]
+    fn a_rating_does_not_make_the_orientation_ours_and_does_not_undo_a_turn() {
+        let mut catalog = Catalog::in_memory().unwrap();
+        let rated = catalog.upsert(&sample("/a/rated.jpg")).unwrap();
+        let turned = catalog.upsert(&sample("/a/turned.jpg")).unwrap();
+        catalog.enqueue(&[rated], 100).unwrap();
+        catalog.turn(&[turned], -1, 100).unwrap();
+        catalog.enqueue(&[turned], 100).unwrap();
+
+        let due = catalog.due(100, 10).unwrap();
+        let of = |id: PhotoId| due.iter().find(|entry| entry.photo.id == id).unwrap();
+        assert!(!of(rated).turned);
+        assert!(of(turned).turned, "a rating cancelled the turn");
+    }
+
+    /// A frame is a fraction of the photograph the right way up. Turned
+    /// right, a face at the top left is at the top right.
+    #[test]
+    fn the_face_frames_turn_with_the_photograph() {
+        let mut catalog = Catalog::in_memory().unwrap();
+        let id = catalog.upsert(&sample("/a/b.jpg")).unwrap();
+        catalog
+            .conn
+            .execute(
+                "INSERT INTO faces(photo_id, x, y, w, h, confidence, embedding)
+                 VALUES(?1, 0.1, 0.2, 0.3, 0.1, 0.9, x'00')",
+                params![id.0],
+            )
+            .unwrap();
+
+        catalog.turn(&[id], 1, 100).unwrap();
+
+        let (x, y, width, height): (f64, f64, f64, f64) = catalog
+            .conn
+            .query_row(
+                "SELECT x, y, w, h FROM faces WHERE photo_id = ?1",
+                params![id.0],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        for (got, want) in [(x, 0.7), (y, 0.1), (width, 0.1), (height, 0.3)] {
+            assert!((got - want).abs() < 1e-9, "{x} {y} {width} {height}");
+        }
     }
 
     #[test]

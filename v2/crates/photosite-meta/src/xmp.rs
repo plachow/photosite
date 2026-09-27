@@ -31,6 +31,10 @@ const NS_EXIF: &[u8] = b"http://ns.adobe.com/exif/1.0/";
 /// Windows all read a face frame from. Named `mwg-rs:` by everybody, and the
 /// URI is what we match on, as everywhere else here.
 const NS_MWG_RS: &[u8] = b"http://www.metadataworkinggroup.com/schemas/regions/";
+/// Where the orientation lives in XMP. digiKam reads it from here before it
+/// reads EXIF, so a photograph turned in the EXIF alone would stay on its
+/// side there.
+const NS_TIFF: &[u8] = b"http://ns.adobe.com/tiff/1.0/";
 
 /// What we read out of a packet, and what we put back into one.
 // Not `Eq`: a position is two floating-point numbers.
@@ -54,6 +58,11 @@ pub struct Xmp {
     /// looked and nobody here is named", which is a thing to write — it is
     /// how a face taken off somebody comes back out of the file.
     pub regions: Option<Regions>,
+    /// The orientation, **only when the photograph was turned here**. The
+    /// same rule as the regions: `None` leaves whatever another program
+    /// wrote exactly as it was, because an orientation we merely read is
+    /// not ours to repeat back into the file.
+    pub orientation: Option<u8>,
     /// The two halves as they were read, held between reading the latitude
     /// and the longitude. They are separate properties and either can come
     /// first.
@@ -119,10 +128,19 @@ impl From<&Organisation> for Xmp {
             // same goes for who is on it.
             place: None,
             regions: None,
+            orientation: None,
             latitude: None,
             longitude: None,
         }
     }
+}
+
+/// Which of the properties that are ours only some of the time are ours
+/// this time.
+#[derive(Debug, Clone, Copy)]
+struct Taking {
+    regions: bool,
+    orientation: bool,
 }
 
 /// Is this one of the properties we own?
@@ -130,13 +148,15 @@ impl From<&Organisation> for Xmp {
 /// The face regions are ours **only when we have some to write**. A
 /// photograph nobody has face-scanned here may well carry frames another
 /// program put there, and taking those out because we happen to be writing a
-/// rating would be destroying somebody else's work on the way past.
-fn ours(namespace: Option<&[u8]>, local: &[u8], regions: bool) -> bool {
+/// rating would be destroying somebody else's work on the way past. The
+/// orientation is the same: ours only when the photograph was turned here.
+fn ours(namespace: Option<&[u8]>, local: &[u8], taking: Taking) -> bool {
     match namespace {
         Some(NS_XMP) => matches!(local, b"Rating" | b"Label"),
         Some(NS_DC) => matches!(local, b"title" | b"description" | b"subject"),
         Some(NS_EXIF) => matches!(local, b"GPSLatitude" | b"GPSLongitude"),
-        Some(NS_MWG_RS) => regions && local == b"Regions",
+        Some(NS_MWG_RS) => taking.regions && local == b"Regions",
+        Some(NS_TIFF) => taking.orientation && local == b"Orientation",
         _ => false,
     }
 }
@@ -404,6 +424,18 @@ fn our_block(xmp: &Xmp) -> String {
         out.push_str(&region_block(regions));
     }
 
+    // A block of its own, and only when there is something in it: the
+    // namespace would otherwise appear in every packet we ever write, for a
+    // property almost none of them carry.
+    if let Some(orientation) = xmp.orientation {
+        out.push_str(&format!(
+            "  <rdf:Description rdf:about=\"\"\n      \
+             xmlns:tiff=\"http://ns.adobe.com/tiff/1.0/\">\n   \
+             <tiff:Orientation>{orientation}</tiff:Orientation>\n  \
+             </rdf:Description>\n"
+        ));
+    }
+
     out
 }
 
@@ -530,8 +562,12 @@ pub fn merge(existing: Option<&str>, xmp: &Xmp) -> String {
 }
 
 fn transform(existing: &str, xmp: &Xmp) -> anyhow::Result<String> {
-    // Whether the face frames already in the packet are ours to replace.
-    let replacing_regions = xmp.regions.is_some();
+    // Whether the face frames and the orientation already in the packet are
+    // ours to replace.
+    let taking = Taking {
+        regions: xmp.regions.is_some(),
+        orientation: xmp.orientation.is_some(),
+    };
     let mut reader = NsReader::from_str(existing);
     let mut writer = Writer::new(Cursor::new(Vec::new()));
 
@@ -593,12 +629,12 @@ fn transform(existing: &str, xmp: &Xmp) -> anyhow::Result<String> {
         match event {
             Event::Start(element) => {
                 let local = element.local_name().as_ref().to_vec();
-                if ours(namespace, &local, replacing_regions) {
+                if ours(namespace, &local, taking) {
                     skipping = Some(0);
                     continue;
                 }
 
-                let kept = without_our_attributes(&reader, &element, replacing_regions);
+                let kept = without_our_attributes(&reader, &element, taking);
                 if held.is_none() && namespace == Some(NS_RDF) && local == b"Description" {
                     held = Some(Held {
                         start: kept,
@@ -621,11 +657,11 @@ fn transform(existing: &str, xmp: &Xmp) -> anyhow::Result<String> {
             }
             Event::Empty(element) => {
                 let local = element.local_name().as_ref().to_vec();
-                if ours(namespace, &local, replacing_regions) {
+                if ours(namespace, &local, taking) {
                     continue;
                 }
 
-                let kept = without_our_attributes(&reader, &element, replacing_regions);
+                let kept = without_our_attributes(&reader, &element, taking);
                 if held.is_none() && namespace == Some(NS_RDF) && local == b"Description" {
                     // An empty Description with nothing of ours left on it
                     // says nothing at all.
@@ -748,13 +784,13 @@ fn name_of_start(element: &BytesStart<'_>) -> String {
 fn without_our_attributes(
     reader: &NsReader<&[u8]>,
     element: &BytesStart<'_>,
-    regions: bool,
+    taking: Taking,
 ) -> BytesStart<'static> {
     let name = String::from_utf8_lossy(element.name().as_ref()).into_owned();
     let mut kept = BytesStart::new(name);
     for attribute in element.attributes().flatten() {
         let (resolved, local) = reader.resolve_attribute(attribute.key);
-        if ours(namespace_of(&resolved), local.as_ref(), regions) {
+        if ours(namespace_of(&resolved), local.as_ref(), taking) {
             continue;
         }
 
@@ -782,6 +818,7 @@ mod tests {
             keywords: vec!["Hawaii".to_owned(), "holiday".to_owned()],
             place: None,
             regions: None,
+            orientation: None,
             latitude: None,
             longitude: None,
         }
@@ -1029,6 +1066,37 @@ mod tests {
             !merged.contains("xmp:Rating=\"1\""),
             "the old rating is still there as an attribute:\n{merged}"
         );
+    }
+
+    /// Photoshop writes the orientation as an attribute. A turn replaces it;
+    /// anything else leaves it exactly as it was.
+    #[test]
+    fn the_orientation_is_replaced_only_by_a_turn() {
+        let existing = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:tiff="http://ns.adobe.com/tiff/1.0/"
+    tiff:Orientation="6"
+    tiff:Make="NIKON CORPORATION"/>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+
+        let rated = merge(Some(existing), &sample());
+        assert!(rated.contains("tiff:Orientation=\"6\""), "{rated}");
+
+        let turned = merge(
+            Some(existing),
+            &Xmp {
+                orientation: Some(3),
+                ..sample()
+            },
+        );
+        assert!(!turned.contains("tiff:Orientation=\"6\""), "{turned}");
+        assert!(
+            turned.contains("<tiff:Orientation>3</tiff:Orientation>"),
+            "{turned}"
+        );
+        assert!(turned.contains("NIKON CORPORATION"), "{turned}");
     }
 
     #[test]

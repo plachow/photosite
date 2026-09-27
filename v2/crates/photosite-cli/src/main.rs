@@ -651,25 +651,10 @@ fn write_out(paths: &Paths) -> Result<()> {
         }
 
         for entry in due {
-            let regions =
-                entry
-                    .regions
-                    .clone()
-                    .zip(entry.photo.shown())
-                    .map(|(faces, (width, height))| photosite_meta::xmp::Regions {
-                        width,
-                        height,
-                        faces,
-                    });
-            match photosite_meta::write(
-                &entry.photo.path,
-                &entry.photo.organisation,
-                entry.photo.place,
-                regions,
-            ) {
+            match photosite_meta::write_entry(&entry) {
                 Ok(_) => match domain::FileIdentity::read(&entry.photo.path) {
                     Ok(identity) => {
-                        catalog.written(entry.photo.id, &identity)?;
+                        catalog.written(&entry, &identity)?;
                         written += 1;
                     }
                     Err(error) => {

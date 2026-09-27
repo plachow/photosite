@@ -212,6 +212,25 @@ pub const COMMANDS: &[Command] = &[
         toolbar: false,
         scope: Scope::Manager,
     },
+    // Handing the photographs to another program, and asking the system
+    // what it can do with them. Both speak to Windows' own shell and
+    // exist only there; elsewhere they say so and do nothing.
+    Command {
+        id: "file.open_with",
+        title_key: "command-file-open-with",
+        group: Group::File,
+        default_shortcut: None,
+        toolbar: false,
+        scope: Scope::Manager,
+    },
+    Command {
+        id: "file.system_menu",
+        title_key: "command-file-system-menu",
+        group: Group::File,
+        default_shortcut: None,
+        toolbar: false,
+        scope: Scope::Manager,
+    },
     Command {
         id: "file.quit",
         title_key: "command-file-quit",
@@ -364,6 +383,26 @@ pub const COMMANDS: &[Command] = &[
         title_key: "command-photo-reject",
         group: Group::Photo,
         default_shortcut: Some("X"),
+        toolbar: false,
+        scope: Scope::Manager,
+    },
+    // A quarter-turn either way, without re-encoding anything: the
+    // orientation tag changes and the pixels stay as they are. No keys yet
+    // — Zoner's Ctrl+L and Ctrl+R are the list view and the subfolders
+    // here.
+    Command {
+        id: "photo.rotate_left",
+        title_key: "command-photo-rotate-left",
+        group: Group::Photo,
+        default_shortcut: None,
+        toolbar: false,
+        scope: Scope::Manager,
+    },
+    Command {
+        id: "photo.rotate_right",
+        title_key: "command-photo-rotate-right",
+        group: Group::Photo,
+        default_shortcut: None,
         toolbar: false,
         scope: Scope::Manager,
     },

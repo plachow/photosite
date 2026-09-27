@@ -122,6 +122,38 @@ pub struct Gallery {
     /// into piles is one dialog and then a key, rather than one dialog for
     /// every photograph.
     pub last_destination: Option<String>,
+    /// The last few places things were copied or moved to, the latest
+    /// first. The context menu offers them before it offers a dialog:
+    /// sorting a card into a handful of folders is the same handful every
+    /// time, and a dialog per pile is the slow way round.
+    pub recent_destinations: Vec<String>,
+}
+
+/// How many recent destinations are kept.
+pub const RECENT_DESTINATIONS: usize = 8;
+
+impl Gallery {
+    /// Remembers where a copy or a move went: as the last destination, and
+    /// at the front of the recent ones, which it is taken out of first if
+    /// it was already further down.
+    pub fn remember_destination(&mut self, folder: &std::path::Path) {
+        let folder = folder.display().to_string();
+        self.recent_destinations
+            .retain(|already| !same_folder(already, &folder));
+        self.recent_destinations.insert(0, folder.clone());
+        self.recent_destinations.truncate(RECENT_DESTINATIONS);
+        self.last_destination = Some(folder);
+    }
+}
+
+/// Two spellings of one folder. Windows does not care about case, and a
+/// list with `D:\Foto` and `d:\foto` in it is one folder offered twice.
+fn same_folder(a: &str, b: &str) -> bool {
+    if cfg!(windows) {
+        a.to_lowercase() == b.to_lowercase()
+    } else {
+        a == b
+    }
 }
 
 impl Default for Gallery {
@@ -144,6 +176,7 @@ impl Default for Gallery {
             sort_descending: false,
             last_folder: None,
             last_destination: None,
+            recent_destinations: Vec::new(),
             map_url: crate::place::OPENSTREETMAP.to_owned(),
         }
     }
@@ -784,6 +817,11 @@ pub const TUNABLES: &[Tunable] = &[
         kind: Kind::State,
     },
     Tunable {
+        path: "gallery.recent_destinations",
+        label_key: "setting-recent-destinations",
+        kind: Kind::State,
+    },
+    Tunable {
         path: "loading.thumb_size",
         label_key: "setting-thumb-size",
         kind: Kind::Int { min: 96, max: 1024 },
@@ -1218,5 +1256,43 @@ tile_size = 'sto'
                 tunable.label_key
             );
         }
+    }
+
+    #[test]
+    fn a_destination_used_again_comes_to_the_front_rather_than_twice() {
+        let mut gallery = Gallery::default();
+        for folder in ["/piles/keep", "/piles/maybe", "/piles/keep"] {
+            gallery.remember_destination(std::path::Path::new(folder));
+        }
+
+        assert_eq!(gallery.recent_destinations, ["/piles/keep", "/piles/maybe"]);
+        assert_eq!(gallery.last_destination.as_deref(), Some("/piles/keep"));
+    }
+
+    #[test]
+    fn only_the_last_few_destinations_are_kept() {
+        let mut gallery = Gallery::default();
+        for at in 0..RECENT_DESTINATIONS + 3 {
+            gallery.remember_destination(&std::path::PathBuf::from(format!("/pile/{at}")));
+        }
+
+        assert_eq!(gallery.recent_destinations.len(), RECENT_DESTINATIONS);
+        assert_eq!(
+            gallery.recent_destinations[0],
+            format!("/pile/{}", RECENT_DESTINATIONS + 2)
+        );
+    }
+
+    /// Settings written before there was a list still load, and load with
+    /// nothing in it.
+    #[test]
+    fn settings_from_before_the_recent_list_still_load() {
+        let settings: Settings =
+            toml::from_str("[gallery]\nlast_destination = \"/piles/keep\"\n").unwrap();
+        assert!(settings.gallery.recent_destinations.is_empty());
+        assert_eq!(
+            settings.gallery.last_destination.as_deref(),
+            Some("/piles/keep")
+        );
     }
 }

@@ -39,6 +39,7 @@ velopack.workspace = true
 [target.'cfg(windows)'.dependencies]
 clipboard-win.workspace = true
 windows-sys.workspace = true
+windows.workspace = true
 
 # Not under `cfg(windows)`, deliberately. Build scripts are compiled for the
 # host, and a dependency written under a target cfg is not there when the two

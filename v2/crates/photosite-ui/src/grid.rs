@@ -95,6 +95,7 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
             let mut wanted_sharp: Vec<(usize, PathBuf)> = Vec::new();
             let mut clicked: Option<(usize, egui::Modifiers)> = None;
             let mut opened: Option<usize> = None;
+            let mut menu_on: Option<(usize, egui::Response)> = None;
 
             for row in first..last {
                 for col in 0..cols {
@@ -121,6 +122,10 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
 
                     if response.double_clicked() {
                         opened = Some(index);
+                    }
+
+                    if crate::menu::wanted(&response) {
+                        menu_on = Some((index, response.clone()));
                     }
 
                     let name = path
@@ -239,6 +244,12 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
             // selection agree.
             if let Some(index) = opened {
                 app.edit(index);
+            }
+
+            // The menu last, once the tiles are drawn: what it does can
+            // reorder the folder under the loop that drew them.
+            if let Some((index, response)) = menu_on {
+                crate::menu::attach(app, index, &response);
             }
         });
 }

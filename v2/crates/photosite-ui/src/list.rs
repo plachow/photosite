@@ -50,6 +50,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
             }
             let mut clicked: Option<(usize, egui::Modifiers)> = None;
             let mut opened: Option<usize> = None;
+            let mut menu_on: Option<(usize, egui::Response)> = None;
 
             // The columns, from the right. The name takes whatever is left,
             // because it is the one that can be any length at all and the
@@ -68,6 +69,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
 
                 if response.double_clicked() {
                     opened = Some(index);
+                }
+
+                if crate::menu::wanted(&response) {
+                    menu_on = Some((index, response.clone()));
                 }
 
                 let chosen = app.is_selected(index);
@@ -92,6 +97,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
 
             if let Some(index) = opened {
                 app.edit(index);
+            }
+
+            if let Some((index, response)) = menu_on {
+                crate::menu::attach(app, index, &response);
             }
         });
 }

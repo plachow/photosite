@@ -447,6 +447,38 @@ files-already-there = They are already in that folder
 copy-into = Copy into…
 move-into = Move into…
 
+## The menu on a tile
+
+command-photo-rotate-left = Rotate left
+command-photo-rotate-right = Rotate right
+command-file-open-with = Open with
+command-file-system-menu = Show the system menu
+setting-recent-destinations = Recent destinations
+
+menu-copy-to = Copy to
+menu-move-to = Move to
+menu-choose-folder = Choose a folder…
+menu-other-app = Choose another app…
+menu-no-apps = No app has said it opens these
+
+files-turned =
+    { $count ->
+        [one] { $count } photograph turned
+       *[other] { $count } photographs turned
+    }
+files-turned-not-all =
+    { $skipped ->
+        [one] { $count } turned; { $skipped } is not a JPEG and was left alone
+       *[other] { $count } turned; { $skipped } are not JPEGs and were left alone
+    }
+files-turn-only-jpeg = Only a JPEG can be turned without re-encoding it
+files-one-folder-only =
+    { $count ->
+        [one] Only the one in { $folder }: the system asks about one folder at a time
+       *[other] Only the { $count } in { $folder }: the system asks about one folder at a time
+    }
+files-windows-only = That is something only Windows can do
+
 place-nowhere = No position
 place-precise = Precise
 place-approximate = Approximate

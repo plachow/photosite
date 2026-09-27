@@ -71,6 +71,23 @@ windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_System_Console",
 ] }
+# Windows' own shell, for the two things on a tile's menu that only the
+# system can answer: which programs open a photograph, and the menu Explorer
+# would show for it. Those are COM interfaces, which `windows-sys` does not
+# describe. The crate is in the tree already through wgpu, at this version;
+# naming it here adds the Shell features to a build that was happening
+# anyway, not a second copy.
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Ole",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
+    "Win32_UI_WindowsAndMessaging",
+] }
 # The icon and the version, compiled into the executable. Only ever a build
 # dependency, and only on Windows.
 winresource = "0.1"
