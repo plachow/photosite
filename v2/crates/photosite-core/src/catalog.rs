@@ -389,11 +389,21 @@ impl Catalog {
         Self::prepare(Connection::open_in_memory()?)
     }
 
-    fn prepare(conn: Connection) -> Result<Self> {
+    fn prepare(mut conn: Connection) -> Result<Self> {
         // WAL so that reads do not block writes; NORMAL because the
         // catalogue can be rebuilt by a scan at any time and full fsync is
         // not worth it.
         conn.pragma_update(None, "journal_mode", "WAL")?;
+        // Every transaction here writes, and takes the right to write as it
+        // begins. Begun the ordinary way, one that reads first — turning a
+        // photograph reads its orientation before it writes the new one —
+        // holds a picture of the catalogue as it was, and when another
+        // connection writes in between, SQLite refuses the write at once
+        // rather than waiting: the picture is stale and waiting cannot
+        // freshen it. Every thread here has its own connection, the writer
+        // among them, so that was a turn now and then refused with "database
+        // is busy". Taken at the start, the lock is waited for instead.
+        conn.set_transaction_behavior(rusqlite::TransactionBehavior::Immediate);
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "foreign_keys", true)?;
         let mut catalog = Self { conn };
@@ -1696,6 +1706,32 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM photos", [], |row| row.get(0))
             .unwrap();
         assert_eq!(rows, 2, "a second row was started");
+    }
+
+    /// A transaction takes the right to write as it begins, so another
+    /// connection wanting to write waits for it rather than one of the two
+    /// being refused halfway through.
+    #[test]
+    fn a_transaction_takes_the_right_to_write_as_it_begins() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("catalog.db");
+        let mut first = Catalog::open(&path).unwrap();
+        let second = Catalog::open(&path).unwrap();
+        second
+            .conn
+            .busy_timeout(std::time::Duration::from_millis(0))
+            .unwrap();
+
+        let holding = first.conn.transaction().unwrap();
+        assert!(
+            second.conn.execute_batch("BEGIN IMMEDIATE").is_err(),
+            "the first transaction did not take the write lock as it began"
+        );
+        drop(holding);
+        second
+            .conn
+            .execute_batch("BEGIN IMMEDIATE; COMMIT")
+            .unwrap();
     }
 
     #[test]

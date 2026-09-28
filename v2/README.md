@@ -6,7 +6,7 @@ A clean sheet. Rust, egui over wgpu, Windows / macOS / Linux from one source.
 cd v2
 cargo run --release -p photosite-ui              # the application
 cargo run --release -p photosite-cli -- doctor   # where everything lives
-cargo test --workspace                           # 678 tests, no window, no GPU
+cargo test --workspace                           # 679 tests, no window, no GPU
 ./packaging/pack.ps1                             # a Windows installer
 ```
 

@@ -6533,8 +6533,10 @@ mod pasting {
                 "{wanted} is not in File: {drawn:?}"
             );
         }
+        // Written the platform's way: Ctrl+Shift+S here, ⇧⌘S on the Mac.
+        let save_as = app.shortcut_label("file.save_as").unwrap();
         assert!(
-            drawn.iter().any(|text| text == "Ctrl+Shift+S"),
+            drawn.contains(&save_as),
             "the keys are not beside the entries: {drawn:?}"
         );
     }
