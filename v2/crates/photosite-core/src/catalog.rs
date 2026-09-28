@@ -479,6 +479,42 @@ impl Catalog {
         Ok(())
     }
 
+    /// What the headers said, written into the rows the folder listing made —
+    /// and only into those still there.
+    ///
+    /// The pass that reads the headers works from a list taken when the
+    /// folder opened. A photograph renamed or deleted while it runs has left
+    /// that list behind: its row has moved to the new name or gone. Writing
+    /// what was read under the old name would start a second row for a file
+    /// that no longer exists, and a tile with nothing behind it. So a row
+    /// that is not there is not made.
+    ///
+    /// The check and the write are one transaction that takes the write
+    /// lock first, so a rename cannot land between them.
+    pub fn fill_in_many(&mut self, photos: &[NewPhoto]) -> Result<usize> {
+        let transaction = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let mut written = 0usize;
+        {
+            let mut there =
+                transaction.prepare("SELECT EXISTS(SELECT 1 FROM photos WHERE path = ?1)")?;
+            let mut statement = transaction.prepare(UPSERT)?;
+            for photo in photos {
+                let path = photo.path.to_string_lossy();
+                if !there.query_row(params![path], |row| row.get::<_, bool>(0))? {
+                    continue;
+                }
+
+                statement.execute(rusqlite::params_from_iter(upsert_params(photo)))?;
+                written += 1;
+            }
+        }
+
+        transaction.commit()?;
+        Ok(written)
+    }
+
     /// Writes a row for every file, reading none of them.
     ///
     /// Batched, because a row per transaction slows a folder of seven
@@ -1634,6 +1670,32 @@ mod tests {
             .len(),
             UPSERT_PARAMS
         );
+    }
+
+    /// Renamed while its header was being read: what was read under the old
+    /// name must not start a second row.
+    #[test]
+    fn what_a_header_said_is_not_written_where_the_row_has_gone() {
+        let mut catalog = Catalog::in_memory().unwrap();
+        let old = sample("/a/old.jpg");
+        catalog.upsert(&old).unwrap();
+        catalog.upsert(&sample("/a/other.jpg")).unwrap();
+
+        catalog
+            .moved(Path::new("/a/old.jpg"), Path::new("/a/new.jpg"))
+            .unwrap();
+        let written = catalog
+            .fill_in_many(&[old, sample("/a/other.jpg")])
+            .unwrap();
+
+        assert_eq!(written, 1);
+        assert!(catalog.by_path(Path::new("/a/old.jpg")).unwrap().is_none());
+        assert!(catalog.by_path(Path::new("/a/new.jpg")).unwrap().is_some());
+        let rows: i64 = catalog
+            .conn
+            .query_row("SELECT COUNT(*) FROM photos", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rows, 2, "a second row was started");
     }
 
     #[test]

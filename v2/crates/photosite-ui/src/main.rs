@@ -1236,7 +1236,9 @@ impl App {
                     .filter_map(|path| photosite_meta::scan(path))
                     .collect();
                 let batch: Vec<NewPhoto> = read.iter().map(|(photo, _)| photo.clone()).collect();
-                catalog.upsert_many(&batch)?;
+                // Only into the rows still there: a photograph renamed or
+                // deleted since the list was taken has left it behind.
+                catalog.fill_in_many(&batch)?;
 
                 // A library that has been used before arrives with ratings
                 // and titles already in the files. Taking them is what makes
