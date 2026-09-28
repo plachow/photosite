@@ -25,10 +25,12 @@ mod grid;
 mod info;
 mod list;
 mod menu;
+mod paste_key;
 mod people;
 mod picker;
 mod shell;
 mod startup;
+mod status;
 mod theme;
 mod updates;
 
@@ -157,6 +159,8 @@ fn main() -> Result<()> {
 
     let paths = Paths::resolve(data.as_deref())?;
     paths.ensure()?;
+    // On this thread, which is the one the window will run on.
+    paste_key::listen();
     let _logging = diagnostics::start(&paths, verbose);
     diagnostics::install_panic_hook(&paths);
     tracing::info!(verze = photosite_core::VERSION, "start");
@@ -2826,15 +2830,31 @@ impl App {
     /// filled in at all, which is the sort of thing that is noticed only
     /// once the feature is finished.
     fn shortcuts(&mut self, ctx: &egui::Context) {
+        // Taken before anything else, so that a paste pressed while a text
+        // field had the keys is spent there and does not paste into the
+        // gallery a frame later.
+        let pasted = paste_key::take();
         if ctx.egui_wants_keyboard_input() {
             return;
         }
 
-        let pressed: Vec<Shortcut> = ctx.input(|input| {
+        let chord = |key: &str| Shortcut {
+            ctrl: true,
+            shift: false,
+            alt: false,
+            key: key.to_owned(),
+        };
+        let mut pressed: Vec<Shortcut> = ctx.input(|input| {
             input
                 .events
                 .iter()
                 .filter_map(|event| match event {
+                    // The toolkit hands the clipboard's keys over as events
+                    // of its own and never as keys. They are the keys again
+                    // here, so that they can be bound like any other.
+                    egui::Event::Copy => Some(chord("C")),
+                    egui::Event::Cut => Some(chord("X")),
+                    egui::Event::Paste(_) => Some(chord("V")),
                     egui::Event::Key {
                         key,
                         pressed: true,
@@ -2867,6 +2887,11 @@ impl App {
                 })
                 .collect()
         });
+        // Heard by the hook as well as, sometimes, by the toolkit: one press
+        // is one paste.
+        if pasted && !pressed.contains(&chord("V")) {
+            pressed.push(chord("V"));
+        }
 
         for shortcut in pressed {
             let scope = self.scope();
@@ -3032,6 +3057,14 @@ impl eframe::App for App {
             egui::Panel::top("tabs")
                 .frame(egui::Frame::NONE.fill(panel).inner_margin(4.0))
                 .show(ui, |ui| editor::strip(self, ui, &palette, &ctx));
+        }
+
+        // Along the bottom, whichever tab is in front — but not over a
+        // photograph filling the screen.
+        if self.tabs.manager_is_active() || !self.tabs.fullscreen {
+            egui::Panel::bottom("status")
+                .frame(egui::Frame::NONE.fill(panel).inner_margin(3.0))
+                .show(ui, |ui| status::bar(self, ui, &palette));
         }
 
         // Read after the strip: a click on it has just changed the answer.
@@ -3254,31 +3287,6 @@ impl App {
             // any length at all: laid out first it pushed the count and the
             // task off the edge, and they drew on top of each other.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if self.count() != self.total() {
-                    ui.label(
-                        egui::RichText::new(t!(
-                            "filter-showing",
-                            shown = self.count() as i64,
-                            all = self.total() as i64
-                        ))
-                        .color(theme::color(palette.accent)),
-                    );
-                }
-
-                if self.selection.len() > 1 {
-                    ui.label(
-                        egui::RichText::new(t!(
-                            "gallery-selected",
-                            count = self.selection.len() as i64
-                        ))
-                        .color(theme::color(palette.accent)),
-                    );
-                }
-
-                for task in self.tasks.running() {
-                    ui.label(egui::RichText::new(&task.title).color(theme::color(palette.accent)));
-                }
-
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     let folder = self
                         .folder
@@ -3414,31 +3422,14 @@ impl App {
 
             ui.separator();
 
-            // What just happened goes on this row rather than the toolbar.
-            // The toolbar is a dozen buttons and a search box wide already,
-            // and a message of any length beside them draws straight over
-            // the count: that row is claimed from the right, and whatever
-            // does not fit overflows leftwards on top of everything else.
-            // Here it sits beside the folder it is about.
-            //
-            // Its room is taken **before** the trail, and the trail gets
-            // what is left. The other way round, a scroll area takes the
-            // whole row and the message has nowhere to go.
-            let said = std::mem::take(&mut self.status);
-            let width = ui
-                .painter()
-                .layout_no_wrap(
-                    said.clone(),
-                    egui::FontId::proportional(14.0),
-                    theme::color(palette.dim),
-                )
-                .size()
-                .x;
-            let room = ui.available_width();
-            // Never more than half the row: a long message must not squeeze
-            // the folder we are standing in down to nothing.
-            let for_message = width.min(room * 0.5).max(0.0);
-            let for_trail = (room - for_message - 12.0).max(60.0);
+            // What just happened is said in the status bar at the bottom,
+            // so the trail has the row to itself — less the offer of an
+            // update, when there is one.
+            let for_trail = if self.updates.ready.is_some() {
+                (ui.available_width() * 0.6).max(60.0)
+            } else {
+                ui.available_width()
+            };
 
             // The trail, outermost first. Each part opens the folder it names.
             let mut pick = None;
@@ -3495,15 +3486,8 @@ impl App {
                         egui::RichText::new(t!("updates-ready", version = ready.version.as_str()))
                             .color(theme::color(palette.accent)),
                     );
-                    ui.separator();
                 }
-
-                ui.add(
-                    egui::Label::new(egui::RichText::new(&said).color(theme::color(palette.dim)))
-                        .truncate(),
-                );
             });
-            self.status = said;
 
             if restart {
                 // The process ends inside `restart`, so `Drop` never runs:
@@ -4371,6 +4355,40 @@ mod culling {
             (shown.width, shown.height),
             (20, 40),
             "the picture is still the old way up"
+        );
+    }
+
+    /// A frame in which the toolkit delivered these events and nothing else.
+    fn keys_in_a_frame(app: &mut App, events: Vec<egui::Event>) {
+        let ctx = egui::Context::default();
+        let input = egui::RawInput {
+            events,
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| app.shortcuts(ui.ctx()));
+        out.textures_delta.clear();
+    }
+
+    /// The toolkit never hands Ctrl+C over as a key, only as a copy event of
+    /// its own — which is why the key did nothing in the window while the
+    /// menu worked. The same goes for Ctrl+X and Ctrl+V.
+    #[test]
+    fn the_toolkits_clipboard_events_are_the_clipboard_keys() {
+        let (mut app, _data, _photos) = three();
+        app.select_only(0);
+        keys_in_a_frame(&mut app, vec![egui::Event::Copy]);
+        assert_eq!(app.clipboard.paths.len(), 1, "Ctrl+C did not copy");
+        assert!(!app.clipboard.cut);
+
+        app.select_only(1);
+        keys_in_a_frame(&mut app, vec![egui::Event::Cut]);
+        assert!(app.clipboard.cut, "Ctrl+X did not cut");
+
+        keys_in_a_frame(&mut app, vec![egui::Event::Paste("anything".to_owned())]);
+        assert_eq!(
+            app.status,
+            t!("files-already-there"),
+            "Ctrl+V did not paste"
         );
     }
 

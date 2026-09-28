@@ -248,17 +248,6 @@ toolbar-sort-descending = Newest and largest first
 setting-sort-field = Sort the gallery by
 setting-sort-descending = Sort the other way round
 
-## The selection
-#
-# Three plural forms are coming in Czech, so the count goes through the same
-# selector as everything else counted.
-
-gallery-selected =
-    { $count ->
-        [one] { $count } selected
-       *[other] { $count } selected
-    }
-
 ## What somebody said about a photograph
 
 info-rating = Rating
@@ -822,3 +811,20 @@ editor-position = { $at } / { $count }
 editor-hint = Wheel or PgUp / PgDn turns the page · Ctrl and the wheel looks closer · middle click or Ctrl+F fills the screen · Enter goes back to the tile · Esc closes
 editor-gone = This photograph is no longer in the folder being shown
 editor-nothing-chosen = Pick a tile to open it
+
+## The status bar
+
+status-ready = Ready
+status-shown =
+    { $count ->
+        [one] { $count } photograph · { $size }
+       *[other] { $count } photographs · { $size }
+    }
+status-shown-of = { $shown } of { $all } shown · { $size }
+status-nothing-selected = Nothing selected
+status-selected = { $count } selected · { $size }
+status-task = { $title }: { $done } / { $total } ({ $percent } %)
+status-task-running = { $title }…
+status-size-kb = { NUMBER($kb, maximumFractionDigits: 0) } kB
+status-size-mb = { NUMBER($mb, maximumFractionDigits: 1) } MB
+status-size-gb = { NUMBER($gb, maximumFractionDigits: 2) } GB
