@@ -19,6 +19,7 @@
 
 use crate::App;
 use anyhow::{Context, Result};
+use photosite_core::Catalog;
 use photosite_core::transfer::{self, Mode, Planned};
 use std::path::{Path, PathBuf};
 
@@ -27,6 +28,15 @@ use std::path::{Path, PathBuf};
 pub enum Asking {
     Rename { path: PathBuf, name: String },
     NewFolder { inside: PathBuf, name: String },
+}
+
+/// The Copy to or Move to dialog, while it is open: where to, as typed or
+/// chosen, and what was wrong with it the last time somebody pressed Enter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sending {
+    pub mode: Mode,
+    pub folder: String,
+    pub problem: Option<String>,
 }
 
 /// Renames a photograph and takes its row with it.
@@ -90,12 +100,33 @@ pub fn duplicate(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
     Ok(made)
 }
 
-/// Copies or moves photographs into another folder.
+/// Copies or moves photographs into another folder, here and now. The
+/// window does it on a thread of its own; this is for the tests of what a
+/// copy or a move does to the files.
+#[cfg(test)]
+pub fn transfer(app: &mut App, files: &[PathBuf], into: &Path, mode: Mode) -> Result<usize> {
+    carry_all(app.catalog.as_mut(), files, into, mode, &mut |_, _, _| true)
+}
+
+/// Copies or moves photographs into another folder, one after another,
+/// saying after each how far it has got.
+///
+/// `catalog` is whichever connection the calling thread has: the window's
+/// own, or one a thread of its own opened for the purpose — a hundred
+/// photographs going to another drive take long enough that the window
+/// must not wait for them. `each` hears the count done, the count planned
+/// and the photograph just carried, and stops the rest by answering false.
 ///
 /// The catalogue follows a move, the same as it follows a rename: the rating
 /// and the words hang off the row's number, and forgetting one row to write
 /// another loses them.
-pub fn transfer(app: &mut App, files: &[PathBuf], into: &Path, mode: Mode) -> Result<usize> {
+pub fn carry_all(
+    mut catalog: Option<&mut Catalog>,
+    files: &[PathBuf],
+    into: &Path,
+    mode: Mode,
+    each: &mut dyn FnMut(usize, usize, &Path) -> bool,
+) -> Result<usize> {
     anyhow::ensure!(into.is_dir(), "{} is not a folder", into.display());
 
     let planned = transfer::plan(files, into, mode, &|path| path.exists());
@@ -104,8 +135,18 @@ pub fn transfer(app: &mut App, files: &[PathBuf], into: &Path, mode: Mode) -> Re
         carry(step, mode)?;
         done += 1;
         if mode == Mode::Move {
-            let (from, to) = (step.from.clone(), step.to.clone());
-            app.write_catalog(move |catalog| catalog.moved(&from, &to));
+            match catalog.as_deref_mut() {
+                Some(catalog) => {
+                    if let Err(error) = catalog.moved(&step.from, &step.to) {
+                        tracing::error!(error = %format!("{error:#}"), "the catalogue did not follow the move");
+                    }
+                }
+                None => tracing::error!("there is no catalogue; the move is not remembered"),
+            }
+        }
+
+        if !each(done, planned.len(), &step.to) {
+            break;
         }
     }
 

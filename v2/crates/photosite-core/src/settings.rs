@@ -127,6 +127,13 @@ pub struct Gallery {
     /// sorting a card into a handful of folders is the same handful every
     /// time, and a dialog per pile is the slow way round.
     pub recent_destinations: Vec<String>,
+    /// Where the last copy went and where the last move went, apart. The
+    /// dialog for each opens on its own: a folder is sorted by moving the
+    /// rejects to one place and copying the keepers to another, and a dialog
+    /// that offered wherever the other one went last would be wrong every
+    /// other time.
+    pub last_copy_destination: Option<String>,
+    pub last_move_destination: Option<String>,
 }
 
 /// How many recent destinations are kept.
@@ -136,13 +143,27 @@ impl Gallery {
     /// Remembers where a copy or a move went: as the last destination, and
     /// at the front of the recent ones, which it is taken out of first if
     /// it was already further down.
-    pub fn remember_destination(&mut self, folder: &std::path::Path) {
+    pub fn remember_destination(&mut self, folder: &std::path::Path, mode: crate::transfer::Mode) {
         let folder = folder.display().to_string();
         self.recent_destinations
             .retain(|already| !same_folder(already, &folder));
         self.recent_destinations.insert(0, folder.clone());
         self.recent_destinations.truncate(RECENT_DESTINATIONS);
+        match mode {
+            crate::transfer::Mode::Copy => self.last_copy_destination = Some(folder.clone()),
+            crate::transfer::Mode::Move => self.last_move_destination = Some(folder.clone()),
+        }
         self.last_destination = Some(folder);
+    }
+
+    /// Where a copy or a move is offered to go: where the last one of the
+    /// same kind went, else wherever anything went last.
+    pub fn destination_for(&self, mode: crate::transfer::Mode) -> Option<&str> {
+        let own = match mode {
+            crate::transfer::Mode::Copy => self.last_copy_destination.as_deref(),
+            crate::transfer::Mode::Move => self.last_move_destination.as_deref(),
+        };
+        own.or(self.last_destination.as_deref())
     }
 }
 
@@ -177,6 +198,8 @@ impl Default for Gallery {
             last_folder: None,
             last_destination: None,
             recent_destinations: Vec::new(),
+            last_copy_destination: None,
+            last_move_destination: None,
             map_url: crate::place::OPENSTREETMAP.to_owned(),
         }
     }
@@ -822,6 +845,16 @@ pub const TUNABLES: &[Tunable] = &[
         kind: Kind::State,
     },
     Tunable {
+        path: "gallery.last_copy_destination",
+        label_key: "setting-last-copy-destination",
+        kind: Kind::State,
+    },
+    Tunable {
+        path: "gallery.last_move_destination",
+        label_key: "setting-last-move-destination",
+        kind: Kind::State,
+    },
+    Tunable {
         path: "loading.thumb_size",
         label_key: "setting-thumb-size",
         kind: Kind::Int { min: 96, max: 1024 },
@@ -1019,6 +1052,8 @@ pub fn paths_in_settings() -> Vec<String> {
     probe.window.y = Some(0.0);
     probe.gallery.last_folder = Some(String::new());
     probe.gallery.last_destination = Some(String::new());
+    probe.gallery.last_copy_destination = Some(String::new());
+    probe.gallery.last_move_destination = Some(String::new());
     if let Ok(table) = toml::Table::try_from(&probe) {
         walk("", &table, &mut found);
     }
@@ -1030,6 +1065,7 @@ pub fn paths_in_settings() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::transfer::Mode;
 
     fn scratch() -> (tempfile::TempDir, Paths) {
         let dir = tempfile::tempdir().unwrap();
@@ -1262,7 +1298,7 @@ tile_size = 'sto'
     fn a_destination_used_again_comes_to_the_front_rather_than_twice() {
         let mut gallery = Gallery::default();
         for folder in ["/piles/keep", "/piles/maybe", "/piles/keep"] {
-            gallery.remember_destination(std::path::Path::new(folder));
+            gallery.remember_destination(std::path::Path::new(folder), Mode::Copy);
         }
 
         assert_eq!(gallery.recent_destinations, ["/piles/keep", "/piles/maybe"]);
@@ -1273,7 +1309,8 @@ tile_size = 'sto'
     fn only_the_last_few_destinations_are_kept() {
         let mut gallery = Gallery::default();
         for at in 0..RECENT_DESTINATIONS + 3 {
-            gallery.remember_destination(&std::path::PathBuf::from(format!("/pile/{at}")));
+            gallery
+                .remember_destination(&std::path::PathBuf::from(format!("/pile/{at}")), Mode::Move);
         }
 
         assert_eq!(gallery.recent_destinations.len(), RECENT_DESTINATIONS);
@@ -1281,6 +1318,22 @@ tile_size = 'sto'
             gallery.recent_destinations[0],
             format!("/pile/{}", RECENT_DESTINATIONS + 2)
         );
+    }
+
+    /// Moving the rejects to one pile and copying the keepers to another:
+    /// each dialog opens where its own kind went last.
+    #[test]
+    fn a_copy_and_a_move_each_remember_their_own_folder() {
+        let mut gallery = Gallery::default();
+        assert_eq!(gallery.destination_for(Mode::Move), None);
+
+        gallery.remember_destination(std::path::Path::new("/piles/rejects"), Mode::Move);
+        assert_eq!(gallery.destination_for(Mode::Copy), Some("/piles/rejects"));
+
+        gallery.remember_destination(std::path::Path::new("/piles/keep"), Mode::Copy);
+        assert_eq!(gallery.destination_for(Mode::Move), Some("/piles/rejects"));
+        assert_eq!(gallery.destination_for(Mode::Copy), Some("/piles/keep"));
+        assert_eq!(gallery.last_destination.as_deref(), Some("/piles/keep"));
     }
 
     /// Settings written before there was a list still load, and load with

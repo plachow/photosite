@@ -84,6 +84,20 @@ enum ShellAsk {
     ChooseApp(PathBuf),
 }
 
+/// A copy or a move running on a thread of its own, and what to do once it
+/// is over.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Transferring {
+    task: u64,
+    mode: Mode,
+    into: PathBuf,
+    /// Remember the folder for the dialog and the menu. Not after a paste:
+    /// the folder pasted into is the one already open.
+    remember: bool,
+    /// A paste of something cut: once it has arrived, the cut is spent.
+    spends_cut: bool,
+}
+
 /// A finished image waiting to be uploaded to the GPU.
 pub struct Pixels {
     pub size: [usize; 2],
@@ -461,6 +475,12 @@ pub struct App {
     /// Something of the system's to show, and how many frames are still to
     /// be drawn first. See [`App::shell_when_clear`].
     shell_waiting: Option<(ShellAsk, u8)>,
+    /// The Copy to or Move to dialog, while it is open.
+    pub sending: Option<files::Sending>,
+    /// The copy or move under way, if one is. One at a time: two moves out
+    /// of the same folder at once would plan against a folder the other one
+    /// is emptying.
+    transferring: Option<Transferring>,
     /// The folder the tree on the left should scroll to. Set on opening, and
     /// taken by the tree straight away.
     pub scroll_tree_to: Option<PathBuf>,
@@ -673,6 +693,8 @@ impl App {
             turned: crossbeam_channel::unbounded(),
             open_with: None,
             shell_waiting: None,
+            sending: None,
+            transferring: None,
             scroll_tree_to: None,
             scroll_grid_to: None,
             tabs: editor::Tabs::default(),
@@ -903,8 +925,9 @@ impl App {
         };
 
         // Our own writing disturbs the folder, and rereading on the back of
-        // it would mean a rescan for every star anybody presses.
-        if self.writing.is_some() {
+        // it would mean a rescan for every star anybody presses. A copy or a
+        // move of our own is read again when it finishes, once.
+        if self.writing.is_some() || self.transferring.is_some() {
             self.disturbed_at = None;
             return;
         }
@@ -1246,15 +1269,41 @@ impl App {
 
         // A destination dialog opens where the last one went, not where the
         // gallery is: sorting into piles means going back to the same place.
-        let remembered = match wanted {
-            Wanted::ToOpen => self.settings.gallery.last_folder.as_deref(),
-            _ => self.settings.gallery.last_destination.as_deref().or(self
-                .settings
-                .gallery
-                .last_folder
-                .as_deref()),
+        // Better still, where the Copy to dialog says it is about to go.
+        let start = match wanted {
+            Wanted::ToOpen => picker::start_dir(
+                self.folder.as_deref(),
+                self.settings.gallery.last_folder.as_deref(),
+            ),
+            Wanted::ToCopyInto | Wanted::ToMoveInto => {
+                let mode = if wanted == Wanted::ToCopyInto {
+                    Mode::Copy
+                } else {
+                    Mode::Move
+                };
+                let typed = self
+                    .sending
+                    .as_ref()
+                    .map(|sending| sending.folder.trim().to_owned())
+                    .filter(|typed| !typed.is_empty());
+                let wanted_dir = typed.or_else(|| {
+                    self.settings
+                        .gallery
+                        .destination_for(mode)
+                        .map(str::to_owned)
+                });
+                picker::start_dir(wanted_dir.as_deref().map(Path::new), None)
+                    .or_else(|| picker::start_dir(self.folder.as_deref(), None))
+            }
+            Wanted::ToConvertInto => picker::start_dir(
+                self.folder.as_deref(),
+                self.settings.gallery.last_destination.as_deref().or(self
+                    .settings
+                    .gallery
+                    .last_folder
+                    .as_deref()),
+            ),
         };
-        let start = picker::start_dir(self.folder.as_deref(), remembered);
         let title = match wanted {
             Wanted::ToOpen => t!("dialog-pick-folder"),
             Wanted::ToCopyInto => t!("copy-into"),
@@ -1279,8 +1328,22 @@ impl App {
                 self.folder_dialog = None;
                 match wanted {
                     Wanted::ToOpen => self.open(folder),
-                    Wanted::ToCopyInto => self.send_to(&folder, Mode::Copy),
-                    Wanted::ToMoveInto => self.send_to(&folder, Mode::Move),
+                    Wanted::ToCopyInto | Wanted::ToMoveInto => match self.sending.as_mut() {
+                        // Into the dialog that asked, which then waits for
+                        // Enter like any other folder in it.
+                        Some(sending) => {
+                            sending.folder = folder.display().to_string();
+                            sending.problem = None;
+                        }
+                        None => {
+                            let mode = if wanted == Wanted::ToCopyInto {
+                                Mode::Copy
+                            } else {
+                                Mode::Move
+                            };
+                            self.send_to(&folder, mode);
+                        }
+                    },
                     Wanted::ToConvertInto => {
                         self.batch.preset.into = Some(folder.to_string_lossy().into_owned());
                         self.batch.preset.beside_source = false;
@@ -1292,7 +1355,7 @@ impl App {
     }
 
     /// Copies or moves what is chosen into a folder, and remembers it as the
-    /// place the next `Ctrl+Shift+C` means.
+    /// place the dialog offers next time.
     fn send_to(&mut self, folder: &Path, mode: Mode) {
         let chosen = self.chosen_paths();
         if chosen.is_empty() {
@@ -1300,19 +1363,130 @@ impl App {
             return;
         }
 
-        let outcome = files::transfer(self, &chosen, folder, mode);
-        if outcome.is_ok() {
-            self.settings.gallery.remember_destination(folder);
+        self.start_transfer(chosen, folder.to_path_buf(), mode, true, false);
+    }
+
+    /// Opens the Copy to or Move to dialog on the folder the last one of the
+    /// same kind went to, so that sorting a card into piles is the key and
+    /// then Enter.
+    fn ask_where(&mut self, mode: Mode) {
+        if self.chosen_paths().is_empty() {
+            self.status = t!("files-nothing-selected");
+            return;
         }
 
-        self.did(outcome, move |count| match mode {
-            Mode::Copy => t!("files-copied", count = count as i64),
-            Mode::Move => t!("files-moved", count = count as i64),
+        let folder = self
+            .settings
+            .gallery
+            .destination_for(mode)
+            .unwrap_or_default()
+            .to_owned();
+        self.sending = Some(files::Sending {
+            mode,
+            folder,
+            problem: None,
         });
+    }
+
+    /// Starts a copy or a move on a thread of its own. The status bar shows
+    /// how far it has got, and [`App::collect_transfer`] says how it ended.
+    fn start_transfer(
+        &mut self,
+        files: Vec<PathBuf>,
+        into: PathBuf,
+        mode: Mode,
+        remember: bool,
+        spends_cut: bool,
+    ) {
+        if self.transferring.is_some() {
+            self.status = t!("files-busy");
+            return;
+        }
+
+        let title = match mode {
+            Mode::Copy => t!("task-copying"),
+            Mode::Move => t!("task-moving"),
+        };
+        let catalog = self.paths.catalog();
+        let waker = self.waker.clone();
+        let to = into.clone();
+        let task = self.tasks.spawn(title, move |cancel, progress| {
+            // A connection of its own: the window's belongs to the window's
+            // thread. A move whose rows cannot follow it is not started at
+            // all, or every star on the way would be lost.
+            let mut catalog = match (mode, Catalog::open(&catalog)) {
+                (_, Ok(catalog)) => Some(catalog),
+                (Mode::Copy, Err(_)) => None,
+                (Mode::Move, Err(error)) => return Err(error),
+            };
+            files::carry_all(
+                catalog.as_mut(),
+                &files,
+                &to,
+                mode,
+                &mut |done, total, path| {
+                    progress.report(done as u64, Some(total as u64), path.display().to_string());
+                    if let Some(ctx) = waker.get() {
+                        ctx.request_repaint();
+                    }
+                    !cancel.cancelled()
+                },
+            )?;
+            Ok(())
+        });
+        self.transferring = Some(Transferring {
+            task,
+            mode,
+            into,
+            remember,
+            spends_cut,
+        });
+    }
+
+    /// Notices that a copy or a move has finished, and says how it went.
+    fn collect_transfer(&mut self) {
+        let Some(transferring) = self.transferring.clone() else {
+            return;
+        };
+
+        let Some(task) = self
+            .tasks
+            .snapshot()
+            .into_iter()
+            .find(|task| task.id == transferring.task && task.finished)
+        else {
+            return;
+        };
+
+        self.transferring = None;
+        let count = task.done as i64;
+        self.status = match (&task.error, transferring.mode) {
+            (Some(error), _) => t!("files-stopped", count = count, error = error.as_str()),
+            (None, _) if count == 0 => t!("files-already-there"),
+            (None, Mode::Copy) => t!("files-copied", count = count),
+            (None, Mode::Move) => t!("files-moved", count = count),
+        };
+        if let Some(error) = &task.error {
+            tracing::error!(%error, "the file operation failed");
+        }
+
+        if transferring.remember && count > 0 {
+            self.settings
+                .gallery
+                .remember_destination(&transferring.into, transferring.mode);
+        }
+
+        // A cut is spent once it is pasted. Leaving it on would move the
+        // same photographs again on the next Ctrl+V, from a folder they are
+        // no longer in.
+        if transferring.spends_cut && task.error.is_none() {
+            self.clipboard = clipboard::Held::default();
+        }
 
         // A move takes photographs out of this folder and a copy can land in
         // it, so either way what is on screen may no longer be the truth.
         self.reopen();
+        self.tasks.forget_finished();
     }
 
     /// Where the face models are: what the settings say, or the ordinary
@@ -1497,6 +1671,22 @@ impl App {
     #[cfg(test)]
     fn run_for_test(&mut self, id: &str) {
         self.run_for_shot(id);
+        self.settle_for_test();
+    }
+
+    /// Waits for a copy or a move a command started, and takes its result
+    /// the way the frames after it would.
+    #[cfg(test)]
+    fn settle_for_test(&mut self) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while self.transferring.is_some() {
+            self.collect_transfer();
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the copy or move never finished"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
     }
 
     /// The same, for the command line flags that open a view before the
@@ -1711,9 +1901,14 @@ impl App {
             "file.copy" => self.onto_clipboard(ctx, false),
             "file.cut" => self.onto_clipboard(ctx, true),
             "file.paste" => self.paste(),
-            "file.copy_to" => self.ask_for_folder(ctx, Wanted::ToCopyInto),
-            "file.move_to" => self.ask_for_folder(ctx, Wanted::ToMoveInto),
-            "file.copy_again" => match self.settings.gallery.last_destination.clone() {
+            "file.copy_to" => self.ask_where(Mode::Copy),
+            "file.move_to" => self.ask_where(Mode::Move),
+            "file.copy_again" => match self
+                .settings
+                .gallery
+                .destination_for(Mode::Copy)
+                .map(str::to_owned)
+            {
                 Some(folder) => self.send_to(Path::new(&folder), Mode::Copy),
                 None => self.status = t!("files-nowhere-yet"),
             },
@@ -1764,24 +1959,7 @@ impl App {
             return;
         }
 
-        let mode = held.mode();
-        let outcome = files::transfer(self, &files, &folder, mode);
-        // A cut is spent once it is pasted. Leaving it on would move the
-        // same photographs again on the next Ctrl+V, from a folder they are
-        // no longer in.
-        if outcome.is_ok() && held.cut {
-            self.clipboard = clipboard::Held::default();
-        }
-
-        match outcome {
-            Ok(0) => self.status = t!("files-already-there"),
-            outcome => self.did(outcome, move |count| match mode {
-                Mode::Copy => t!("files-copied", count = count as i64),
-                Mode::Move => t!("files-moved", count = count as i64),
-            }),
-        }
-
-        self.reopen();
+        self.start_transfer(files, folder, held.mode(), false, held.cut);
     }
 
     /// A quarter-turn, clockwise for a positive number, on everything chosen
@@ -3034,6 +3212,7 @@ impl eframe::App for App {
         self.collect_batch();
         self.collect_describing();
         self.collect_writing();
+        self.collect_transfer();
         self.collect_disturbance();
         self.updates.poll();
         self.take_picked_folder();
@@ -3099,6 +3278,7 @@ impl eframe::App for App {
         describe::window(self, &ctx, &palette);
         filter::window(self, &ctx, &palette);
         self.ask_window(&ctx);
+        self.sending_window(&ctx);
 
         // The wishlist is overwritten only here, once it is clear what is
         // visible and what is selected. Anything not on it stops being
@@ -3309,6 +3489,142 @@ impl App {
     /// One dialog for both, because they ask the same question and a second
     /// one would be a second place for Enter and Escape to behave slightly
     /// differently.
+    /// Copy to, or Move to: where the chosen photographs go.
+    ///
+    /// It opens on where the last one of the same kind went, so the whole of
+    /// sorting a folder into piles is the key and then Enter. Browse fills
+    /// the field and waits; a recent folder clicked does the same. Nothing
+    /// moves until the folder is confirmed, and a folder that is not there is
+    /// said so rather than made.
+    fn sending_window(&mut self, ctx: &egui::Context) {
+        let Some(mut sending) = self.sending.clone() else {
+            return;
+        };
+
+        let count = self.chosen_paths().len() as i64;
+        let (title, heading, go_label, browse) = match sending.mode {
+            Mode::Copy => (
+                t!("menu-copy-to"),
+                t!("send-copy-heading", count = count),
+                t!("send-copy"),
+                Wanted::ToCopyInto,
+            ),
+            Mode::Move => (
+                t!("menu-move-to"),
+                t!("send-move-heading", count = count),
+                t!("send-move"),
+                Wanted::ToMoveInto,
+            ),
+        };
+        let recent = self.settings.gallery.recent_destinations.clone();
+
+        let mut open = true;
+        let mut go = false;
+        let mut cancelled = false;
+        let mut browsing = false;
+        egui::Window::new(title)
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label(heading);
+                ui.horizontal(|ui| {
+                    let field = ui.add(
+                        egui::TextEdit::singleline(&mut sending.folder)
+                            .desired_width(420.0)
+                            .hint_text(t!("send-hint")),
+                    );
+                    // Always the field: Enter is the whole point of the
+                    // dialog, and it has to land here.
+                    if self.folder_dialog.is_none() {
+                        field.request_focus();
+                    }
+                    // Asked of the field as it is now, not whether it lost
+                    // the keys: it was just given them back above, and a
+                    // field that always has the keys never loses them.
+                    if (field.has_focus() || field.lost_focus())
+                        && ui.input(|input| input.key_pressed(egui::Key::Enter))
+                    {
+                        go = true;
+                    }
+
+                    if ui.button(t!("send-browse")).clicked() {
+                        browsing = true;
+                    }
+                });
+
+                if let Some(problem) = &sending.problem {
+                    ui.label(egui::RichText::new(problem).color(ui.visuals().error_fg_color));
+                }
+
+                if !recent.is_empty() {
+                    ui.add_space(4.0);
+                    ui.label(egui::RichText::new(t!("send-recent")).weak());
+                    for folder in &recent {
+                        let chosen = sending.folder.trim() == folder;
+                        let row = ui.selectable_label(chosen, folder);
+                        if row.double_clicked() {
+                            sending.folder = folder.clone();
+                            go = true;
+                        } else if row.clicked() {
+                            sending.folder = folder.clone();
+                            sending.problem = None;
+                        }
+                    }
+                }
+
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if ui.button(go_label).clicked() {
+                        go = true;
+                    }
+
+                    if ui.button(t!("ask-cancel")).clicked() {
+                        cancelled = true;
+                    }
+                });
+
+                if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+                    cancelled = true;
+                }
+            });
+
+        if !open || cancelled {
+            self.sending = None;
+            return;
+        }
+
+        if browsing {
+            self.sending = Some(sending);
+            self.ask_for_folder(ctx, browse);
+            return;
+        }
+
+        if !go {
+            self.sending = Some(sending);
+            return;
+        }
+
+        let folder = PathBuf::from(sending.folder.trim());
+        if sending.folder.trim().is_empty() {
+            sending.problem = Some(t!("send-choose-first"));
+            self.sending = Some(sending);
+            return;
+        }
+
+        if !folder.is_dir() {
+            sending.problem = Some(t!(
+                "send-no-such-folder",
+                path = folder.display().to_string()
+            ));
+            self.sending = Some(sending);
+            return;
+        }
+
+        self.sending = None;
+        self.send_to(&folder, sending.mode);
+    }
+
     fn ask_window(&mut self, ctx: &egui::Context) {
         let Some(asking) = self.asking.clone() else {
             return;
@@ -3334,7 +3650,11 @@ impl App {
                     ui.label(t!("ask-name"));
                     let field = ui.add(egui::TextEdit::singleline(&mut name).desired_width(260.0));
                     field.request_focus();
-                    if field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
+                    // Whether it has the keys now, not whether it lost them:
+                    // it is handed them back every frame, so it never does.
+                    if (field.has_focus() || field.lost_focus())
+                        && ui.input(|input| input.key_pressed(egui::Key::Enter))
+                    {
                         go = true;
                     }
                 });
@@ -4367,6 +4687,7 @@ mod culling {
         };
         let mut out = ctx.run_ui(input, |ui| app.shortcuts(ui.ctx()));
         out.textures_delta.clear();
+        app.settle_for_test();
     }
 
     /// The toolkit never hands Ctrl+C over as a key, only as a copy event of
@@ -4392,6 +4713,119 @@ mod culling {
         );
     }
 
+    /// A frame of the Copy to or Move to dialog with these events in it.
+    fn a_frame_of_sending(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                egui::vec2(1200.0, 800.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| app.sending_window(ui.ctx()));
+        out.textures_delta.clear();
+    }
+
+    fn enter() -> egui::Event {
+        egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        }
+    }
+
+    /// The whole of sorting a card into piles: the key, then Enter.
+    #[test]
+    fn alt_x_then_enter_moves_them_to_where_the_last_move_went() {
+        let (mut app, _data, photos) = three();
+        let rejects = tempfile::tempdir().unwrap();
+        let keepers = tempfile::tempdir().unwrap();
+        app.settings
+            .gallery
+            .remember_destination(rejects.path(), Mode::Move);
+        app.settings
+            .gallery
+            .remember_destination(keepers.path(), Mode::Copy);
+        app.select_only(0);
+
+        app.run_for_test("file.move_to");
+        assert_eq!(
+            app.sending.as_ref().map(|sending| sending.folder.clone()),
+            Some(rejects.path().display().to_string()),
+            "the dialog did not open on where the last move went"
+        );
+
+        let ctx = egui::Context::default();
+        // The window measures itself in its first frame and the field takes
+        // the keys in the second; Enter is pressed in the third.
+        for _ in 0..2 {
+            a_frame_of_sending(&mut app, &ctx, Vec::new());
+        }
+        a_frame_of_sending(&mut app, &ctx, vec![enter()]);
+        app.settle_for_test();
+
+        assert!(app.sending.is_none(), "Enter did not close the dialog");
+        assert!(rejects.path().join("a.jpg").exists());
+        assert!(!photos.path().join("a.jpg").exists());
+        assert_eq!(app.status, t!("files-moved", count = 1));
+    }
+
+    /// F2, a new name, Enter. The field keeps the keys the whole time, so
+    /// Enter has to be heard while it has them.
+    #[test]
+    fn enter_in_the_rename_dialog_renames() {
+        let (mut app, _data, photos) = three();
+        app.select_only(0);
+        app.run_for_test("file.rename");
+        if let Some(files::Asking::Rename { name, .. }) = app.asking.as_mut() {
+            *name = "renamed.jpg".to_owned();
+        }
+
+        let ctx = egui::Context::default();
+        for events in [Vec::new(), Vec::new(), vec![enter()]] {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::pos2(0.0, 0.0),
+                    egui::vec2(1200.0, 800.0),
+                )),
+                events,
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| app.ask_window(ui.ctx()));
+            out.textures_delta.clear();
+        }
+
+        assert!(app.asking.is_none(), "Enter did not close the dialog");
+        assert!(photos.path().join("renamed.jpg").exists());
+    }
+
+    #[test]
+    fn a_folder_that_is_not_there_is_said_so_and_nothing_moves() {
+        let (mut app, _data, photos) = three();
+        app.select_only(0);
+        app.run_for_test("file.move_to");
+        let nowhere = photos.path().join("no such pile");
+        if let Some(sending) = app.sending.as_mut() {
+            sending.folder = nowhere.display().to_string();
+        }
+
+        let ctx = egui::Context::default();
+        // The window measures itself in its first frame and the field takes
+        // the keys in the second; Enter is pressed in the third.
+        for _ in 0..2 {
+            a_frame_of_sending(&mut app, &ctx, Vec::new());
+        }
+        a_frame_of_sending(&mut app, &ctx, vec![enter()]);
+
+        let sending = app.sending.as_ref().expect("the dialog closed");
+        assert!(sending.problem.is_some());
+        assert!(photos.path().join("a.jpg").exists());
+        assert!(!nowhere.exists(), "a folder was made from a typing mistake");
+    }
+
     #[test]
     fn nothing_to_turn_says_why() {
         let (mut app, _data, _photos) = app_over(&[("b.nef", 20)]);
@@ -4406,8 +4840,10 @@ mod culling {
         let piles = [tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap()];
         app.select_only(0);
         app.send_to(piles[0].path(), Mode::Copy);
+        app.settle_for_test();
         app.select_only(1);
         app.send_to(piles[1].path(), Mode::Move);
+        app.settle_for_test();
 
         assert_eq!(
             app.settings.gallery.recent_destinations,

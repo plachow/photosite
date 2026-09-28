@@ -6,7 +6,7 @@ A clean sheet. Rust, egui over wgpu, Windows / macOS / Linux from one source.
 cd v2
 cargo run --release -p photosite-ui              # the application
 cargo run --release -p photosite-cli -- doctor   # where everything lives
-cargo test --workspace                           # 640 tests, no window, no GPU
+cargo test --workspace                           # 646 tests, no window, no GPU
 ./packaging/pack.ps1                             # a Windows installer
 ```
 
@@ -627,11 +627,21 @@ coordinates we happen not to hold is not one whose coordinates are wrong.
 
 `Ctrl+C` and `Ctrl+V` mean the files themselves, not a list of their names —
 they are the file manager's own keys and it would be strange for them to mean
-anything else here. `Ctrl+X` cuts, `Alt+C` and `Alt+X` copy or move into a
-folder chosen there and then, and `Ctrl+Shift+C` goes to wherever the last one
-went, because sorting a folder into three piles is otherwise three dialogs and
-two of them say the same thing. The last eight folders are kept, and the
-menu on a tile offers them before it offers a dialog.
+anything else here. `Ctrl+X` cuts, and `Ctrl+Shift+C` goes to wherever the
+last copy went.
+
+`Alt+C` and `Alt+X` open a small dialog on **the folder the last copy, or the
+last move, went to** — each remembers its own, because a folder is sorted by
+moving the rejects to one place and copying the keepers to another. Enter
+confirms, so sorting a card into piles is the key and then Enter. Browse
+fills the field and waits, the last eight folders are listed beneath it, and
+a folder that is not there is said so rather than made from a typing
+mistake. The menu on a tile offers the same eight directly.
+
+A copy or a move runs on a thread of its own, with its own connection to
+the catalogue, and the status bar says how far it has got — `Moving: 114 /
+117 (97 %)` — and then how it ended. One at a time: two moves out of the
+same folder would each plan against a folder the other is emptying.
 
 **Nothing at a destination is ever written over.** A photograph landing on a
 name already in use takes a number instead — `holiday (2).jpg` — and where

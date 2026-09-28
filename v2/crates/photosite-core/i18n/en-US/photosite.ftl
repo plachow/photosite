@@ -443,7 +443,34 @@ command-photo-rotate-right = Rotate right
 command-file-open-with = Open with
 command-file-system-menu = Show the system menu
 setting-recent-destinations = Recent destinations
+setting-last-copy-destination = Last copied to
+setting-last-move-destination = Last moved to
 
+send-copy-heading =
+    { $count ->
+        [one] Copy { $count } photograph into
+       *[other] Copy { $count } photographs into
+    }
+send-move-heading =
+    { $count ->
+        [one] Move { $count } photograph into
+       *[other] Move { $count } photographs into
+    }
+send-copy = Copy
+send-move = Move
+send-browse = Browse…
+send-hint = The folder to put them in
+send-recent = Recent folders
+send-choose-first = Choose a folder first
+send-no-such-folder = There is no folder { $path }
+files-busy = Wait for the copy or move under way to finish
+files-stopped =
+    { $count ->
+        [one] { $count } done, then: { $error }
+       *[other] { $count } done, then: { $error }
+    }
+task-copying = Copying
+task-moving = Moving
 menu-copy-to = Copy to
 menu-move-to = Move to
 menu-choose-folder = Choose a folder…
