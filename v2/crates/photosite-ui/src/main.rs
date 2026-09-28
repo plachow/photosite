@@ -3960,52 +3960,80 @@ impl App {
             ),
         };
         let recent = self.settings.gallery.recent_destinations.clone();
+        let palette = *self.palette();
+
+        // One window for both, so it stands in one place. Where it was left
+        // last time, even in a run before this one; the first time of all,
+        // in the middle. Placed by its middle every frame: a window placed by
+        // its middle one frame and by its corner the next jumps by half its
+        // size, and egui keeps whichever it was told last.
+        let middle = match (
+            self.settings.window.send_to_x,
+            self.settings.window.send_to_y,
+        ) {
+            (Some(x), Some(y)) => egui::pos2(x as f32, y as f32),
+            _ => ctx.content_rect().center(),
+        };
+        let window = egui::Window::new(title)
+            .id(egui::Id::new("send-to"))
+            .collapsible(false)
+            .resizable(false)
+            .pivot(egui::Align2::CENTER_CENTER)
+            .default_pos(middle);
 
         let mut open = true;
         let mut go = false;
         let mut cancelled = false;
         let mut browsing = false;
-        egui::Window::new(title)
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .show(ctx, |ui| {
-                ui.label(heading);
-                ui.horizontal(|ui| {
-                    let field = ui.add(
-                        egui::TextEdit::singleline(&mut sending.folder)
-                            .desired_width(420.0)
-                            .hint_text(t!("send-hint")),
-                    );
-                    // Always the field: Enter is the whole point of the
-                    // dialog, and it has to land here.
-                    if self.folder_dialog.is_none() {
-                        field.request_focus();
-                    }
-                    // Asked of the field as it is now, not whether it lost
-                    // the keys: it was just given them back above, and a
-                    // field that always has the keys never loses them.
-                    if (field.has_focus() || field.lost_focus())
-                        && ui.input(|input| input.key_pressed(egui::Key::Enter))
-                    {
-                        go = true;
-                    }
-
-                    if ui.button(t!("send-browse")).clicked() {
-                        browsing = true;
-                    }
-                });
-
-                if let Some(problem) = &sending.problem {
-                    ui.label(egui::RichText::new(problem).color(ui.visuals().error_fg_color));
+        let mut forget: Option<String> = None;
+        let shown = window.open(&mut open).show(ctx, |ui| {
+            ui.label(heading);
+            ui.horizontal(|ui| {
+                let field = ui.add(
+                    egui::TextEdit::singleline(&mut sending.folder)
+                        .desired_width(420.0)
+                        .hint_text(t!("send-hint")),
+                );
+                // Always the field: Enter is the whole point of the
+                // dialog, and it has to land here.
+                if self.folder_dialog.is_none() {
+                    field.request_focus();
+                }
+                // Asked of the field as it is now, not whether it lost
+                // the keys: it was just given them back above, and a
+                // field that always has the keys never loses them.
+                if (field.has_focus() || field.lost_focus())
+                    && ui.input(|input| input.key_pressed(egui::Key::Enter))
+                {
+                    go = true;
                 }
 
-                if !recent.is_empty() {
-                    ui.add_space(4.0);
-                    ui.label(egui::RichText::new(t!("send-recent")).weak());
-                    for folder in &recent {
+                if ui.button(t!("send-browse")).clicked() {
+                    browsing = true;
+                }
+            });
+
+            if let Some(problem) = &sending.problem {
+                ui.label(egui::RichText::new(problem).color(ui.visuals().error_fg_color));
+            }
+
+            if !recent.is_empty() {
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new(t!("send-recent")).weak());
+                for folder in &recent {
+                    ui.horizontal(|ui| {
+                        // As wide as the field above, so the crosses
+                        // stand in a column however long the names.
                         let chosen = sending.folder.trim() == folder;
-                        let row = ui.selectable_label(chosen, folder);
+                        let row = ui
+                            .add(
+                                egui::Button::selectable(
+                                    chosen,
+                                    (crate::menu::elided(folder, 72), egui::Atom::grow()),
+                                )
+                                .min_size(egui::vec2(420.0, 0.0)),
+                            )
+                            .on_hover_text(folder);
                         if row.double_clicked() {
                             sending.folder = folder.clone();
                             go = true;
@@ -4013,24 +4041,44 @@ impl App {
                             sending.folder = folder.clone();
                             sending.problem = None;
                         }
-                    }
+
+                        if crate::editor::cross(ui, &palette)
+                            .on_hover_text(t!("send-forget"))
+                            .clicked()
+                        {
+                            forget = Some(folder.clone());
+                        }
+                    });
+                }
+            }
+
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if ui.button(go_label).clicked() {
+                    go = true;
                 }
 
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    if ui.button(go_label).clicked() {
-                        go = true;
-                    }
-
-                    if ui.button(t!("ask-cancel")).clicked() {
-                        cancelled = true;
-                    }
-                });
-
-                if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+                if ui.button(t!("ask-cancel")).clicked() {
                     cancelled = true;
                 }
             });
+
+            if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+                cancelled = true;
+            }
+        });
+
+        if let Some(folder) = forget {
+            self.settings.gallery.forget_destination(&folder);
+        }
+
+        // Kept every frame it is shown, so that wherever it is closed from,
+        // the next one opens there.
+        if let Some(shown) = shown {
+            let middle = shown.response.rect.center();
+            self.settings.window.send_to_x = Some(f64::from(middle.x));
+            self.settings.window.send_to_y = Some(f64::from(middle.y));
+        }
 
         if !open || cancelled {
             self.sending = None;
@@ -5214,6 +5262,116 @@ mod culling {
         assert!(rejects.path().join("a.jpg").exists());
         assert!(!photos.path().join("a.jpg").exists());
         assert_eq!(app.status, t!("files-moved", count = 1));
+    }
+
+    /// The first time of all it opens in the middle; after that where it
+    /// was left, which the settings keep for the next run.
+    #[test]
+    fn the_dialog_opens_in_the_middle_and_then_where_it_was_left() {
+        let (mut app, _data, _photos) = three();
+        app.select_only(0);
+        assert_eq!(app.settings.window.send_to_x, None);
+
+        app.run_for_test("file.copy_to");
+        let ctx = egui::Context::default();
+        for _ in 0..3 {
+            a_frame_of_sending(&mut app, &ctx, Vec::new());
+        }
+        let (x, y) = (
+            app.settings
+                .window
+                .send_to_x
+                .expect("the place was not kept") as f32,
+            app.settings.window.send_to_y.unwrap() as f32,
+        );
+        assert!(
+            (x - 600.0).abs() < 1.0 && (y - 400.0).abs() < 1.0,
+            "not in the middle of the screen: {x} {y}"
+        );
+
+        // Somewhere else, as a new run would read it from the settings.
+        app.sending = None;
+        app.settings.window.send_to_x = Some(340.0);
+        app.settings.window.send_to_y = Some(260.0);
+        app.run_for_test("file.move_to");
+        let ctx = egui::Context::default();
+        for _ in 0..3 {
+            a_frame_of_sending(&mut app, &ctx, Vec::new());
+        }
+        // Within a point: egui puts a window on whole pixels.
+        let near =
+            |kept: Option<f64>, wanted: f64| kept.is_some_and(|kept| (kept - wanted).abs() < 1.0);
+        assert!(near(app.settings.window.send_to_x, 340.0));
+        assert!(near(app.settings.window.send_to_y, 260.0));
+    }
+
+    /// The cross beside a recent folder takes it off the list.
+    #[test]
+    fn the_cross_beside_a_recent_folder_takes_it_off_the_list() {
+        let (mut app, _data, _photos) = three();
+        app.settings
+            .gallery
+            .remember_destination(Path::new("/piles/old"), Mode::Copy);
+        app.settings
+            .gallery
+            .remember_destination(Path::new("/piles/keep"), Mode::Copy);
+        app.select_only(0);
+        app.run_for_test("file.copy_to");
+
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1200.0, 800.0));
+        let frame = |app: &mut App, events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                screen_rect: Some(screen),
+                events,
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| app.sending_window(ui.ctx()));
+            out.textures_delta.clear();
+            out
+        };
+        for _ in 0..2 {
+            frame(&mut app, Vec::new());
+        }
+
+        // Where the row naming the old pile is, and so where its cross is:
+        // past the row, which is as wide as the field.
+        let out = frame(&mut app, Vec::new());
+        let mut row: Option<egui::Rect> = None;
+        for clipped in &out.shapes {
+            let mut stack = vec![&clipped.shape];
+            while let Some(shape) = stack.pop() {
+                match shape {
+                    egui::Shape::Text(text) if text.galley.text() == "/piles/old" => {
+                        row = Some(text.galley.rect.translate(text.pos.to_vec2()));
+                    }
+                    egui::Shape::Vec(shapes) => stack.extend(shapes.iter()),
+                    _ => {}
+                }
+            }
+        }
+        let row = row.expect("the old pile is not listed");
+        let spacing = ctx.global_style().spacing.clone();
+        let cross = egui::pos2(
+            row.left() - spacing.button_padding.x + 420.0 + spacing.item_spacing.x + 7.0,
+            row.center().y,
+        );
+
+        frame(&mut app, vec![egui::Event::PointerMoved(cross)]);
+        for pressed in [true, false] {
+            frame(
+                &mut app,
+                vec![egui::Event::PointerButton {
+                    pos: cross,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::default(),
+                }],
+            );
+        }
+
+        assert_eq!(app.settings.gallery.recent_destinations, ["/piles/keep"]);
+        assert!(app.sending.is_some(), "the dialog closed");
     }
 
     /// F2, a new name, Enter. The field keeps the keys the whole time, so

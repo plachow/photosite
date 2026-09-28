@@ -174,7 +174,7 @@ fn open_with(app: &mut App, ui: &mut egui::Ui, ctx: &egui::Context) {
 
 /// A long path with its middle taken out. The end is kept longer than the
 /// start: the folder's own name is the part somebody is looking for.
-fn elided(text: &str, max: usize) -> String {
+pub(crate) fn elided(text: &str, max: usize) -> String {
     let count = text.chars().count();
     if count <= max || max < 8 {
         return text.to_owned();

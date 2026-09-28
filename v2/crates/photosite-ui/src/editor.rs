@@ -299,9 +299,10 @@ pub fn strip(app: &mut App, ui: &mut egui::Ui, palette: &Palette, ctx: &egui::Co
     }
 }
 
-/// A small cross to close a tab, drawn rather than written: egui's default
-/// font has no ✕ and it would come out as an empty box.
-fn cross(ui: &mut egui::Ui, palette: &Palette) -> egui::Response {
+/// A small cross to close a tab — or to take anything else away — drawn
+/// rather than written: egui's default font has no ✕ and it would come out
+/// as an empty box.
+pub(crate) fn cross(ui: &mut egui::Ui, palette: &Palette) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(14.0), Sense::click());
     let tint = theme::color(if response.hovered() {
         palette.text

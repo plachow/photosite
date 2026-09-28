@@ -59,6 +59,12 @@ pub struct Window {
     /// not a constant in the drawing layer — on a touch screen six points is
     /// not enough.
     pub splitter: f64,
+    /// Where the Copy to and Move to dialog was left: its middle, in points.
+    /// The middle and not a corner, because the dialog grows and shrinks
+    /// with the list of recent folders in it. Nothing until it has been
+    /// shown once, and then it opens in the middle of the window.
+    pub send_to_x: Option<f64>,
+    pub send_to_y: Option<f64>,
 }
 
 impl Default for Window {
@@ -72,6 +78,8 @@ impl Default for Window {
             layout: crate::docks::DEFAULT.to_owned(),
             docks_hidden: String::new(),
             splitter: 6.0,
+            send_to_x: None,
+            send_to_y: None,
         }
     }
 }
@@ -154,6 +162,26 @@ impl Gallery {
             crate::transfer::Mode::Move => self.last_move_destination = Some(folder.clone()),
         }
         self.last_destination = Some(folder);
+    }
+
+    /// Takes a folder off the list of recent ones, and stops offering it as
+    /// where the next copy or move goes. A folder somebody took off the list
+    /// is not one they want put back in the field.
+    pub fn forget_destination(&mut self, folder: &str) {
+        self.recent_destinations
+            .retain(|kept| !same_folder(kept, folder));
+        for last in [
+            &mut self.last_destination,
+            &mut self.last_copy_destination,
+            &mut self.last_move_destination,
+        ] {
+            if last
+                .as_deref()
+                .is_some_and(|last| same_folder(last, folder))
+            {
+                *last = None;
+            }
+        }
     }
 
     /// Where a copy or a move is offered to go: where the last one of the
@@ -737,6 +765,16 @@ pub const TUNABLES: &[Tunable] = &[
         kind: Kind::State,
     },
     Tunable {
+        path: "window.send_to_x",
+        label_key: "setting-send-to-x",
+        kind: Kind::State,
+    },
+    Tunable {
+        path: "window.send_to_y",
+        label_key: "setting-send-to-y",
+        kind: Kind::State,
+    },
+    Tunable {
         path: "window.splitter",
         label_key: "setting-window-splitter",
         kind: Kind::Float {
@@ -1050,6 +1088,8 @@ pub fn paths_in_settings() -> Vec<String> {
     let mut probe = Settings::default();
     probe.window.x = Some(0.0);
     probe.window.y = Some(0.0);
+    probe.window.send_to_x = Some(0.0);
+    probe.window.send_to_y = Some(0.0);
     probe.gallery.last_folder = Some(String::new());
     probe.gallery.last_destination = Some(String::new());
     probe.gallery.last_copy_destination = Some(String::new());
@@ -1334,6 +1374,21 @@ tile_size = 'sto'
         assert_eq!(gallery.destination_for(Mode::Move), Some("/piles/rejects"));
         assert_eq!(gallery.destination_for(Mode::Copy), Some("/piles/keep"));
         assert_eq!(gallery.last_destination.as_deref(), Some("/piles/keep"));
+    }
+
+    /// Taken off the list, a folder is not offered again either — not in the
+    /// list and not in the field.
+    #[test]
+    fn a_forgotten_destination_is_offered_nowhere() {
+        let mut gallery = Gallery::default();
+        gallery.remember_destination(std::path::Path::new("/piles/old"), Mode::Move);
+        gallery.remember_destination(std::path::Path::new("/piles/keep"), Mode::Copy);
+
+        gallery.forget_destination("/piles/old");
+        assert_eq!(gallery.recent_destinations, ["/piles/keep"]);
+        assert_eq!(gallery.last_move_destination, None);
+        assert_eq!(gallery.destination_for(Mode::Move), Some("/piles/keep"));
+        assert_eq!(gallery.destination_for(Mode::Copy), Some("/piles/keep"));
     }
 
     /// Settings written before there was a list still load, and load with
