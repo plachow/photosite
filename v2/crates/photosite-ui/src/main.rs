@@ -939,7 +939,8 @@ impl App {
         self.scroll_tree_to = Some(folder);
     }
 
-    /// Goes wherever the history says, without recording it again.
+    /// Goes to a folder remembered rather than picked from the disk — from
+    /// the history or the favourites — which may have gone since.
     fn go(&mut self, folder: Option<PathBuf>) {
         let Some(folder) = folder else {
             return;
@@ -951,6 +952,27 @@ impl App {
             // A folder that has been renamed or unplugged since. Saying so
             // beats opening nothing and leaving somebody wondering.
             self.status = t!("error-not-a-folder", path = folder.display().to_string());
+        }
+    }
+
+    /// Puts a folder among the favourites or takes it off, and writes that
+    /// down at once rather than when the window closes: a favourite is made
+    /// on purpose, and one lost to a crash would have to be made again.
+    pub fn toggle_favourite(&mut self, folder: &Path) {
+        self.settings.gallery.toggle_favourite(folder);
+        self.save_settings();
+    }
+
+    /// Takes a folder off the favourites, the ✕ beside it. The folder on
+    /// the disk is not touched.
+    pub fn forget_favourite(&mut self, folder: &str) {
+        self.settings.gallery.forget_favourite(folder);
+        self.save_settings();
+    }
+
+    fn save_settings(&self) {
+        if let Err(error) = self.settings.save(&self.paths) {
+            tracing::error!(error = %format!("{error:#}"), "the settings could not be saved");
         }
     }
 
@@ -1910,6 +1932,11 @@ impl App {
                 let to = self.folder.as_deref().and_then(History::up_from);
                 self.go(to);
             }
+            "go.favourite" => {
+                if let Some(folder) = self.folder.clone() {
+                    self.toggle_favourite(&folder);
+                }
+            }
             "file.rename" => {
                 if let Some(photo) = self.photo_at_cursor() {
                     let path = photo.path.clone();
@@ -2379,7 +2406,7 @@ impl App {
                 .active_editor()
                 .is_some_and(|editor| editor.pasted.is_some()),
             "view.clear_filter" => self.filter.is_active(),
-            "file.rescan" | "file.new_folder" => self.folder.is_some(),
+            "file.rescan" | "file.new_folder" | "go.favourite" => self.folder.is_some(),
             "file.open_with" | "file.system_menu" => shell::AVAILABLE && !self.selection.is_empty(),
             "file.copy" | "file.cut" | "file.delete" | "file.duplicate" | "file.rename"
             | "file.copy_to" | "file.move_to" | "file.copy_again" | "file.reveal"
@@ -2397,6 +2424,11 @@ impl App {
         match id {
             "view.recursive" => Some(self.settings.gallery.recursive),
             "view.as_list" => Some(self.settings.gallery.as_list),
+            "go.favourite" => Some(
+                self.folder
+                    .as_deref()
+                    .is_some_and(|folder| self.settings.gallery.is_favourite(folder)),
+            ),
             "view.filter" => Some(self.show_filter),
             "view.toggle_tree" => Some(dock("tree")),
             "view.toggle_preview" => Some(dock("preview")),
@@ -4375,9 +4407,7 @@ impl App {
             if restart {
                 // The process ends inside `restart`, so `Drop` never runs:
                 // what it would have saved is saved here.
-                if let Err(error) = self.settings.save(&self.paths) {
-                    tracing::error!(error = %format!("{error:#}"), "the settings could not be saved");
-                }
+                self.save_settings();
                 self.updates.restart();
             }
 
@@ -4505,8 +4535,8 @@ impl App {
             self.dress(ctx);
         }
 
-        if changed && let Err(error) = self.settings.save(&self.paths) {
-            tracing::error!(error = %format!("{error:#}"), "the settings could not be saved");
+        if changed {
+            self.save_settings();
         }
     }
 
@@ -4658,9 +4688,7 @@ impl App {
 
 impl Drop for App {
     fn drop(&mut self) {
-        if let Err(error) = self.settings.save(&self.paths) {
-            tracing::error!(error = %format!("{error:#}"), "the settings could not be saved");
-        }
+        self.save_settings();
     }
 }
 

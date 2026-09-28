@@ -10,6 +10,7 @@
 use crate::{App, Node, Want, theme};
 use eframe::egui;
 use egui::{Sense, Vec2};
+use photosite_core::settings::same_folder;
 use photosite_core::t;
 use photosite_core::theme::Palette;
 use std::path::{Path, PathBuf};
@@ -361,15 +362,20 @@ fn frames(app: &mut App, ui: &mut egui::Ui, index: usize, into: egui::Rect) {
     }
 }
 
+/// The height of a row of the tree, and of a favourite above it.
+const TREE_ROW: f32 = 18.0;
+
 pub fn tree(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
     // Explorer's spacing: a step of a box per level, and no guide lines.
     ui.spacing_mut().indent = 16.0;
     ui.visuals_mut().indent_has_left_vline = false;
     theme::solid_scrollbar(ui);
+    favourites(app, ui, palette);
     egui::ScrollArea::both()
         .auto_shrink([false, false])
         .show(ui, |ui| {
             let mut pick = None;
+            let mut favourite = None;
             let current = app.folder.clone();
             // It has to be taken before drawing: if the scroll request were
             // cleared afterwards, it would clear the very one this tree just
@@ -390,18 +396,174 @@ pub fn tree(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
                         current: current.as_deref(),
                         scroll_to: scroll_to.as_deref(),
                         known: &app.subfolders,
+                        gallery: &app.settings.gallery,
                     },
                     &mut pick,
+                    &mut favourite,
                     &mut unknown,
                 );
             }
 
             app.roots = roots;
             app.probing.wish(vec![unknown]);
+            if let Some(folder) = favourite {
+                app.toggle_favourite(&folder);
+            }
             if let Some(folder) = pick {
                 app.open(folder);
             }
         });
+}
+
+/// The favourites, above the tree and apart from it: a row each, the name
+/// in bold, and a ✕ to take it off the list. Nothing at all when there are
+/// none, not even the line — a heading over nothing is clutter.
+///
+/// Outside the tree's scroll area on purpose. The tree scrolls itself to
+/// whatever folder is opened, and a favourite would slide away from under
+/// the pointer that had just clicked it.
+fn favourites(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
+    if app.settings.gallery.favourites.is_empty() {
+        return;
+    }
+
+    let favourites = app.settings.gallery.favourites.clone();
+    let current = app.folder.clone();
+    let mut open = None;
+    let mut forget = None;
+    // A long list scrolls in its own share of the pane rather than pushing
+    // the tree out of it.
+    egui::ScrollArea::vertical()
+        .id_salt("favourites")
+        .max_height(ui.available_height() * 0.4)
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            for folder in &favourites {
+                let path = Path::new(folder);
+                let lit = current
+                    .as_deref()
+                    .is_some_and(|current| same_folder(folder, &current.display().to_string()));
+                if let Some(asked) = favourite(ui, path, folder, lit, palette) {
+                    match asked {
+                        Asked::Open => open = Some(path.to_path_buf()),
+                        Asked::Forget => forget = Some(folder.clone()),
+                    }
+                }
+            }
+        });
+
+    // Decently apart: a hairline with air on both sides, the tree's own
+    // colours and nothing louder.
+    ui.add_space(2.0);
+    ui.separator();
+    ui.add_space(2.0);
+
+    if let Some(folder) = forget {
+        app.forget_favourite(&folder);
+    }
+    // Through the same door as the history: a favourite on a disk that is
+    // not plugged in says so, and stays on the list for when it is back.
+    if let Some(folder) = open {
+        app.go(Some(folder));
+    }
+}
+
+/// What a favourite's row was asked to do.
+enum Asked {
+    Open,
+    Forget,
+}
+
+/// One favourite: the folder, its name in bold, the whole row lit when it
+/// is the folder open, and the ✕ at the far end, where the crosses stand in
+/// a column however long the names.
+fn favourite(
+    ui: &mut egui::Ui,
+    path: &Path,
+    folder: &str,
+    lit: bool,
+    palette: &Palette,
+) -> Option<Asked> {
+    const CROSS: f32 = 14.0;
+    let mut asked = None;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        let whole =
+            egui::Rect::from_min_size(ui.cursor().min, Vec2::new(ui.available_width(), TREE_ROW));
+        let (row, response) = ui.allocate_exact_size(
+            Vec2::new((whole.width() - CROSS - 2.0).max(TREE_ROW), TREE_ROW),
+            Sense::click(),
+        );
+        // Lit from the folder on, as the tree lights its rows, and across
+        // the ✕ too: it is one row. Hovered by the pointer anywhere in it,
+        // or the light would go out on the way to the cross.
+        let band = egui::Rect::from_min_max(egui::pos2(row.min.x + TREE_ROW, row.min.y), whole.max);
+        if lit {
+            ui.painter()
+                .rect_filled(band, 2, theme::color(palette.accent).gamma_multiply(0.35));
+        } else if ui.rect_contains_pointer(whole) {
+            ui.painter().rect_filled(
+                band,
+                2,
+                theme::color(palette.bevel_light).gamma_multiply(0.6),
+            );
+        }
+
+        // Where the tree has its plus, a favourite has its star: the same
+        // column, so the folders line up with the tree's below.
+        theme::star(
+            ui.painter(),
+            egui::pos2(row.min.x + TREE_ROW * 0.5, row.center().y),
+            5.0,
+            theme::color(palette.dim),
+        );
+        theme::folder(
+            ui.painter(),
+            egui::Rect::from_min_size(
+                egui::pos2(row.min.x + TREE_ROW + 1.0, row.center().y - 6.0),
+                Vec2::new(16.0, 12.0),
+            ),
+            lit,
+        );
+
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| folder.to_owned());
+        let left = row.min.x + TREE_ROW * 2.0 + 4.0;
+        let mut job = egui::text::LayoutJob::simple_singleline(
+            name,
+            egui::FontId::proportional(13.0),
+            theme::color(palette.text),
+        );
+        job.wrap = egui::text::TextWrapping::truncate_at_width((row.max.x - left - 2.0).max(0.0));
+        let galley = ui.painter().layout_job(job);
+        theme::bold(
+            ui.painter(),
+            egui::pos2(left, row.center().y - galley.size().y * 0.5),
+            galley,
+            theme::color(palette.text),
+        );
+
+        let response = response.on_hover_text(folder);
+        if response.clicked() {
+            asked = Some(Asked::Open);
+        }
+        response.context_menu(|ui| {
+            if ui.button(t!("tree-remove-favourite")).clicked() {
+                asked = Some(Asked::Forget);
+                ui.close();
+            }
+        });
+
+        if crate::editor::cross(ui, palette)
+            .on_hover_text(t!("tree-remove-favourite"))
+            .clicked()
+        {
+            asked = Some(Asked::Forget);
+        }
+    });
+    asked
 }
 
 /// What every folder of the tree is drawn against.
@@ -413,6 +575,8 @@ struct Place<'a> {
     scroll_to: Option<&'a Path>,
     /// Which folders have folders in them, as far as anybody has looked.
     known: &'a std::collections::HashMap<PathBuf, bool>,
+    /// Which of them are favourites, for the menu on a folder.
+    gallery: &'a photosite_core::settings::Gallery,
 }
 
 /// One folder of the tree, drawn the way Explorer draws one: a boxed plus
@@ -422,16 +586,18 @@ struct Place<'a> {
 /// not a folder.
 ///
 /// A folder whose own folders are not known yet goes on `unknown`, to be
-/// looked into alongside.
+/// looked into alongside. One made a favourite, or taken off them, from its
+/// menu goes on `favourite`.
 fn node(
     ui: &mut egui::Ui,
     node: &mut Node,
     palette: &Palette,
     place: Place<'_>,
     pick: &mut Option<PathBuf>,
+    favourite: &mut Option<PathBuf>,
     unknown: &mut Vec<PathBuf>,
 ) {
-    const ROW: f32 = 18.0;
+    const ROW: f32 = TREE_ROW;
     let is_current = place.current == Some(node.path.as_path());
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 3.0;
@@ -541,6 +707,18 @@ fn node(
             node.expanded = true;
             *pick = Some(node.path.clone());
         }
+
+        response.context_menu(|ui| {
+            let title = if place.gallery.is_favourite(&node.path) {
+                t!("tree-remove-favourite")
+            } else {
+                t!("tree-add-favourite")
+            };
+            if ui.button(title).clicked() {
+                *favourite = Some(node.path.clone());
+                ui.close();
+            }
+        });
     });
 
     if node.expanded
@@ -548,7 +726,7 @@ fn node(
     {
         ui.indent(node.path.as_path(), |ui| {
             for child in children {
-                self::node(ui, child, palette, place, pick, unknown);
+                self::node(ui, child, palette, place, pick, favourite, unknown);
             }
         });
     }
@@ -571,4 +749,283 @@ pub fn speed_wheel(ui: &mut egui::Ui, speed: f64) {
     ui.input_mut(|input| {
         input.smooth_scroll_delta.y *= speed;
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Paths, Settings, Startup};
+
+    /// What a frame of the tree pane drew: every piece of text with where it
+    /// stands, and every filled rectangle.
+    struct Drawn {
+        texts: Vec<(String, egui::Rect)>,
+        fills: Vec<(egui::Rect, egui::Color32)>,
+    }
+
+    impl Drawn {
+        /// Where a piece of text was drawn, the first time it was.
+        fn at(&self, text: &str) -> egui::Rect {
+            self.texts
+                .iter()
+                .find(|(drawn, _)| drawn == text)
+                .map(|(_, rect)| *rect)
+                .unwrap_or_else(|| panic!("{text} was not drawn: {:?}", self.names()))
+        }
+
+        /// Where it was drawn the last time: the tree is drawn after the
+        /// favourites, so this is the tree's own row.
+        fn last(&self, text: &str) -> egui::Rect {
+            self.texts
+                .iter()
+                .rev()
+                .find(|(drawn, _)| drawn == text)
+                .map(|(_, rect)| *rect)
+                .unwrap_or_else(|| panic!("{text} was not drawn: {:?}", self.names()))
+        }
+
+        fn count(&self, text: &str) -> usize {
+            self.texts.iter().filter(|(drawn, _)| drawn == text).count()
+        }
+
+        fn names(&self) -> Vec<&str> {
+            self.texts.iter().map(|(text, _)| text.as_str()).collect()
+        }
+
+        /// Whether the row holding this text is lit as the folder open.
+        fn lit(&self, text: &str, palette: &Palette) -> bool {
+            let middle = self.at(text).center();
+            let light = theme::color(palette.accent).gamma_multiply(0.35);
+            self.fills
+                .iter()
+                .any(|(rect, fill)| *fill == light && rect.contains(middle))
+        }
+    }
+
+    fn tree_frame(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) -> Drawn {
+        fn walk(shape: &egui::Shape, into: &mut Drawn) {
+            match shape {
+                egui::Shape::Text(text) => into
+                    .texts
+                    .push((text.galley.text().to_owned(), text.visual_bounding_rect())),
+                egui::Shape::Rect(rect) => into.fills.push((rect.rect, rect.fill)),
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| walk(shape, into)),
+                _ => {}
+            }
+        }
+
+        let palette = *app.palette();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                egui::vec2(300.0, 600.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| tree(app, ui, &palette));
+        // With no renderer nothing is ever uploaded, and epaint says so with
+        // a panic when the output is dropped.
+        out.textures_delta.clear();
+        let mut drawn = Drawn {
+            texts: Vec::new(),
+            fills: Vec::new(),
+        };
+        for clipped in &out.shapes {
+            walk(&clipped.shape, &mut drawn);
+        }
+        drawn
+    }
+
+    fn button(at: egui::Pos2, which: egui::PointerButton, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos: at,
+            button: which,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        }
+    }
+
+    /// A click the way a hand makes one: over it, down, up.
+    fn click(app: &mut App, ctx: &egui::Context, at: egui::Pos2, which: egui::PointerButton) {
+        tree_frame(app, ctx, vec![egui::Event::PointerMoved(at)]);
+        tree_frame(app, ctx, vec![button(at, which, true)]);
+        tree_frame(app, ctx, vec![button(at, which, false)]);
+    }
+
+    /// An application whose tree is one folder holding `keep` and `sort`,
+    /// with `keep` a favourite.
+    fn with_a_favourite() -> (App, tempfile::TempDir, tempfile::TempDir, tempfile::TempDir) {
+        let (mut app, data, photos) = crate::culling::three();
+        let disk = tempfile::tempdir().unwrap();
+        for name in ["keep", "sort"] {
+            std::fs::create_dir(disk.path().join(name)).unwrap();
+        }
+        let mut root = Node::new(disk.path().to_path_buf());
+        root.load_children();
+        root.expanded = true;
+        app.roots = vec![root];
+        app.settings.gallery.favourites = vec![disk.path().join("keep").display().to_string()];
+        (app, data, photos, disk)
+    }
+
+    fn name_of(path: &Path) -> String {
+        path.file_name().unwrap().to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn the_favourites_stand_above_the_tree_in_bold() {
+        let (mut app, _data, _photos, disk) = with_a_favourite();
+        let ctx = egui::Context::default();
+        tree_frame(&mut app, &ctx, Vec::new());
+        let drawn = tree_frame(&mut app, &ctx, Vec::new());
+
+        assert!(
+            drawn.at("keep").max.y <= drawn.at(&name_of(disk.path())).min.y,
+            "the favourite is not above the tree: {:?}",
+            drawn.names()
+        );
+        // Twice or more as a favourite, which is how bold is drawn, and once
+        // in the tree, where it is an ordinary folder.
+        assert!(drawn.count("keep") >= 3, "{:?}", drawn.names());
+        assert_eq!(drawn.count("sort"), 1, "only the favourite is bold");
+    }
+
+    #[test]
+    fn with_no_favourites_the_tree_starts_at_the_top() {
+        let (mut app, _data, _photos, disk) = with_a_favourite();
+        app.settings.gallery.favourites.clear();
+        let ctx = egui::Context::default();
+        tree_frame(&mut app, &ctx, Vec::new());
+        let drawn = tree_frame(&mut app, &ctx, Vec::new());
+
+        let root = drawn.at(&name_of(disk.path()));
+        assert!(root.min.y < TREE_ROW, "{root:?}");
+        assert_eq!(drawn.count("keep"), 1);
+    }
+
+    #[test]
+    fn a_click_on_a_favourite_opens_it_and_its_cross_takes_it_off() {
+        let (mut app, _data, _photos, disk) = with_a_favourite();
+        let keep = disk.path().join("keep");
+        let ctx = egui::Context::default();
+        tree_frame(&mut app, &ctx, Vec::new());
+        let at = tree_frame(&mut app, &ctx, Vec::new()).at("keep").center();
+
+        click(&mut app, &ctx, at, egui::PointerButton::Primary);
+        assert_eq!(app.folder.as_deref(), Some(keep.as_path()));
+        let palette = *app.palette();
+        let drawn = tree_frame(&mut app, &ctx, Vec::new());
+        assert!(drawn.lit("keep", &palette), "the favourite open is not lit");
+        // Still where it was clicked: the tree scrolled to the folder, the
+        // favourites did not go with it.
+        assert!((drawn.at("keep").center().y - at.y).abs() < 1.0);
+
+        // The cross stands at the far end of the row.
+        click(
+            &mut app,
+            &ctx,
+            egui::pos2(300.0 - 8.0, at.y),
+            egui::PointerButton::Primary,
+        );
+        assert!(app.settings.gallery.favourites.is_empty());
+        assert!(keep.is_dir(), "the folder itself went with it");
+        assert!(
+            Settings::load(&app.paths).gallery.favourites.is_empty(),
+            "taken off the list, but not in the settings on the disk"
+        );
+        assert_eq!(tree_frame(&mut app, &ctx, Vec::new()).count("keep"), 1);
+    }
+
+    #[test]
+    fn a_folder_in_the_tree_is_made_a_favourite_from_its_menu() {
+        let (mut app, _data, _photos, disk) = with_a_favourite();
+        let ctx = egui::Context::default();
+        tree_frame(&mut app, &ctx, Vec::new());
+        let sort = tree_frame(&mut app, &ctx, Vec::new()).last("sort").center();
+
+        click(&mut app, &ctx, sort, egui::PointerButton::Secondary);
+        let add = tree_frame(&mut app, &ctx, Vec::new())
+            .at("Add to favourites")
+            .center();
+        click(&mut app, &ctx, add, egui::PointerButton::Primary);
+
+        let sort = disk.path().join("sort");
+        assert!(app.settings.gallery.is_favourite(&sort));
+        assert_eq!(
+            app.settings.gallery.favourites.last(),
+            Some(&sort.display().to_string()),
+            "a new favourite goes to the end"
+        );
+        assert!(Settings::load(&app.paths).gallery.is_favourite(&sort));
+
+        // And the same menu on a favourite says the opposite.
+        let keep = tree_frame(&mut app, &ctx, Vec::new()).last("keep").center();
+        click(&mut app, &ctx, keep, egui::PointerButton::Secondary);
+        let menu = tree_frame(&mut app, &ctx, Vec::new());
+        assert_eq!(
+            menu.count("Remove from favourites"),
+            1,
+            "{:?}",
+            menu.names()
+        );
+    }
+
+    #[test]
+    fn the_go_menu_switch_makes_the_open_folder_a_favourite_and_back() {
+        let (mut app, _data, photos) = crate::culling::three();
+        assert_eq!(app.checked("go.favourite"), Some(false));
+
+        app.run_for_test("go.favourite");
+        assert!(app.settings.gallery.is_favourite(photos.path()));
+        assert_eq!(app.checked("go.favourite"), Some(true));
+
+        app.run_for_test("go.favourite");
+        assert!(app.settings.gallery.favourites.is_empty());
+    }
+
+    /// A favourite on a disk that is not plugged in says so, and stays.
+    #[test]
+    fn a_favourite_that_is_gone_says_so_and_stays_on_the_list() {
+        let (mut app, _data, photos, disk) = with_a_favourite();
+        std::fs::remove_dir(disk.path().join("keep")).unwrap();
+        let ctx = egui::Context::default();
+        tree_frame(&mut app, &ctx, Vec::new());
+        let at = tree_frame(&mut app, &ctx, Vec::new()).at("keep").center();
+
+        click(&mut app, &ctx, at, egui::PointerButton::Primary);
+        assert_eq!(app.folder.as_deref(), Some(photos.path()));
+        assert!(app.status.contains("keep"), "{}", app.status);
+        assert_eq!(app.settings.gallery.favourites.len(), 1);
+    }
+
+    /// The whole of what was asked for: work ends in a favourite, and the
+    /// next start opens it and lights it where it was left.
+    #[test]
+    fn the_favourite_left_last_time_is_lit_again_after_a_restart() {
+        let (mut app, data, _photos, disk) = with_a_favourite();
+        let keep = disk.path().join("keep");
+        app.go(Some(keep.clone()));
+        drop(app);
+
+        let paths = Paths::resolve(Some(data.path())).unwrap();
+        let settings = Settings::load(&paths);
+        let folder = settings.gallery.last_folder.as_ref().map(PathBuf::from);
+        assert_eq!(folder.as_deref(), Some(keep.as_path()));
+        assert!(settings.gallery.is_favourite(&keep));
+
+        let mut app = App::new(paths, settings);
+        let mut root = Node::new(disk.path().to_path_buf());
+        root.load_children();
+        app.roots = vec![root];
+        app.start(Startup {
+            folder,
+            ..Default::default()
+        });
+        let palette = *app.palette();
+        let ctx = egui::Context::default();
+        tree_frame(&mut app, &ctx, Vec::new());
+        let drawn = tree_frame(&mut app, &ctx, Vec::new());
+        assert!(drawn.lit("keep", &palette), "{:?}", drawn.names());
+    }
 }

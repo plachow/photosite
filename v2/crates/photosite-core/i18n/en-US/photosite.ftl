@@ -361,6 +361,10 @@ group-go = Go
 command-go-back = Back
 command-go-forward = Forward
 command-go-up = Up one folder
+command-go-favourite = Favourite folder
+tree-add-favourite = Add to favourites
+tree-remove-favourite = Remove from favourites
+setting-favourites = Favourite folders
 
 command-file-rename = Rename…
 command-file-duplicate = Duplicate

@@ -74,6 +74,13 @@ the Manager and another in the Editor (Enter opens the editor from the
 Manager and leaves it from the Editor); a conflict is a key shared by two
 commands reachable from the same place. Rejected synonyms: *context*, *mode*.
 
+**Favourite** (v2: `Gallery::favourites`) — a folder kept above the folder
+tree, its name in bold, in the order it was added. A click opens it, its ✕
+takes it off the list; the folder on the disk is never touched. Made from the
+menu on a folder in the tree or with the Go menu's switch. Favourites are a
+list somebody made, not a preference, so resetting the settings keeps them.
+Rejected synonyms: *bookmark*, *pinned folder*, *quick access*.
+
 ## Organisation
 
 **Rating** — 0 to 5 stars. Written into the file (XMP and EXIF).

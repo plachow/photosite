@@ -193,6 +193,28 @@ pub fn solid_scrollbar(ui: &mut egui::Ui) {
     };
 }
 
+/// Text in bold, from a font that comes in one weight: the same galley again
+/// a pixel to the right, once for every pixel a point is wide. Offset by
+/// whole pixels because text is snapped to them, and half of one would land
+/// on the first copy and thicken nothing.
+pub fn bold(
+    painter: &egui::Painter,
+    at: egui::Pos2,
+    galley: std::sync::Arc<egui::Galley>,
+    colour: Color32,
+) {
+    let pixel = 1.0 / painter.pixels_per_point();
+    let copies = painter.pixels_per_point().round().max(1.0) as usize;
+    for copy in 1..=copies {
+        painter.galley(
+            egui::pos2(at.x + pixel * copy as f32, at.y),
+            galley.clone(),
+            colour,
+        );
+    }
+    painter.galley(at, galley, colour);
+}
+
 /// A folder, as Explorer draws one: a yellow body with a tab on the top
 /// left, and a lighter front when it is open.
 pub fn folder(painter: &egui::Painter, rect: Rect, open: bool) {

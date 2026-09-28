@@ -342,6 +342,18 @@ pub const COMMANDS: &[Command] = &[
         scope: Scope::Manager,
         menu: Menu::Item,
     },
+    // A switch on the open folder: ticked, it stands among the favourites
+    // above the tree. No key, because a folder is made a favourite once and
+    // then gone to every day, and the keys are for the every day.
+    Command {
+        id: "go.favourite",
+        title_key: "command-go-favourite",
+        group: Group::Go,
+        default_shortcut: None,
+        toolbar: false,
+        scope: Scope::Manager,
+        menu: Menu::Section,
+    },
     // What somebody says about a photograph. None of these is on the
     // toolbar: twelve buttons for the stars and the labels would crowd out
     // everything else, and the keys are how anybody culls a folder anyway.

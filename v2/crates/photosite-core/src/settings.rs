@@ -142,6 +142,11 @@ pub struct Gallery {
     /// other time.
     pub last_copy_destination: Option<String>,
     pub last_move_destination: Option<String>,
+    /// The folders kept above the tree, in the order they were added. A
+    /// folder a whole year of sorting goes into is five levels down on a
+    /// second disk, and walking there through the tree every morning is the
+    /// slow way round.
+    pub favourites: Vec<String>,
 }
 
 /// How many recent destinations are kept.
@@ -193,11 +198,36 @@ impl Gallery {
         };
         own.or(self.last_destination.as_deref())
     }
+
+    /// Whether a folder is one of the favourites, however it is spelt.
+    pub fn is_favourite(&self, folder: &std::path::Path) -> bool {
+        let folder = folder.display().to_string();
+        self.favourites
+            .iter()
+            .any(|kept| same_folder(kept, &folder))
+    }
+
+    /// Puts a folder among the favourites, at the end, or takes it out if
+    /// it is there already. Whether it is one afterwards is returned.
+    pub fn toggle_favourite(&mut self, folder: &std::path::Path) -> bool {
+        if self.is_favourite(folder) {
+            self.forget_favourite(&folder.display().to_string());
+            return false;
+        }
+
+        self.favourites.push(folder.display().to_string());
+        true
+    }
+
+    /// Takes a folder off the favourites. The folder itself is not touched.
+    pub fn forget_favourite(&mut self, folder: &str) {
+        self.favourites.retain(|kept| !same_folder(kept, folder));
+    }
 }
 
 /// Two spellings of one folder. Windows does not care about case, and a
 /// list with `D:\Foto` and `d:\foto` in it is one folder offered twice.
-fn same_folder(a: &str, b: &str) -> bool {
+pub fn same_folder(a: &str, b: &str) -> bool {
     if cfg!(windows) {
         a.to_lowercase() == b.to_lowercase()
     } else {
@@ -228,6 +258,7 @@ impl Default for Gallery {
             recent_destinations: Vec::new(),
             last_copy_destination: None,
             last_move_destination: None,
+            favourites: Vec::new(),
             map_url: crate::place::OPENSTREETMAP.to_owned(),
         }
     }
@@ -615,13 +646,15 @@ impl Settings {
     }
 
     /// Everything back to the defaults, except what is not a preference —
-    /// the last opened folder and the window position are not what a reset
-    /// means.
+    /// the last opened folder, the favourites somebody put together by hand
+    /// and the window position are not what a reset means.
     pub fn reset_all(&mut self) {
         let keep_folder = self.gallery.last_folder.clone();
+        let favourites = std::mem::take(&mut self.gallery.favourites);
         let window = self.window.clone();
         *self = Settings::default();
         self.gallery.last_folder = keep_folder;
+        self.gallery.favourites = favourites;
         self.window = window;
     }
 }
@@ -890,6 +923,11 @@ pub const TUNABLES: &[Tunable] = &[
     Tunable {
         path: "gallery.last_move_destination",
         label_key: "setting-last-move-destination",
+        kind: Kind::State,
+    },
+    Tunable {
+        path: "gallery.favourites",
+        label_key: "setting-favourites",
         kind: Kind::State,
     },
     Tunable {
@@ -1391,6 +1429,60 @@ tile_size = 'sto'
         assert_eq!(gallery.destination_for(Mode::Copy), Some("/piles/keep"));
     }
 
+    /// A favourite goes to the end, once; asked again, it comes off.
+    #[test]
+    fn a_favourite_is_kept_once_in_the_order_it_came_and_toggles_off() {
+        let mut gallery = Gallery::default();
+        assert!(gallery.toggle_favourite(std::path::Path::new("/photos/2019")));
+        assert!(gallery.toggle_favourite(std::path::Path::new("/photos/keep")));
+        assert_eq!(gallery.favourites, ["/photos/2019", "/photos/keep"]);
+        assert!(gallery.is_favourite(std::path::Path::new("/photos/keep")));
+
+        assert!(!gallery.toggle_favourite(std::path::Path::new("/photos/2019")));
+        assert_eq!(gallery.favourites, ["/photos/keep"]);
+
+        gallery.forget_favourite("/photos/keep");
+        assert!(gallery.favourites.is_empty());
+    }
+
+    /// `D:\Foto` and `d:\foto` are one folder on Windows, and one favourite.
+    #[cfg(windows)]
+    #[test]
+    fn a_favourite_spelt_in_another_case_is_the_same_one() {
+        let mut gallery = Gallery::default();
+        gallery.toggle_favourite(std::path::Path::new(r"D:\Foto\Keep"));
+        assert!(gallery.is_favourite(std::path::Path::new(r"d:\foto\keep")));
+        assert!(!gallery.toggle_favourite(std::path::Path::new(r"d:\FOTO\keep")));
+        assert!(gallery.favourites.is_empty());
+    }
+
+    /// A reset is about preferences. Favourites are a list somebody made.
+    #[test]
+    fn resetting_everything_keeps_the_favourites() {
+        let mut settings = Settings::default();
+        settings.gallery.favourites = vec!["E:/photos/keep".to_owned()];
+        settings.gallery.tile_size = 999.0;
+        settings.reset_all();
+        assert_eq!(settings.gallery.favourites, ["E:/photos/keep"]);
+    }
+
+    #[test]
+    fn the_favourites_come_back_after_a_restart() {
+        let (_dir, paths) = scratch();
+        let mut settings = Settings::default();
+        settings.gallery.favourites =
+            vec!["E:/photos/keep".to_owned(), "E:/photos/2019".to_owned()];
+        settings.gallery.last_folder = Some("E:/photos/2019".to_owned());
+        settings.save(&paths).unwrap();
+
+        let loaded = Settings::load(&paths);
+        assert_eq!(loaded.gallery.favourites, settings.gallery.favourites);
+        assert_eq!(
+            loaded.gallery.last_folder.as_deref(),
+            Some("E:/photos/2019")
+        );
+    }
+
     /// Settings written before there was a list still load, and load with
     /// nothing in it.
     #[test]
@@ -1398,6 +1490,7 @@ tile_size = 'sto'
         let settings: Settings =
             toml::from_str("[gallery]\nlast_destination = \"/piles/keep\"\n").unwrap();
         assert!(settings.gallery.recent_destinations.is_empty());
+        assert!(settings.gallery.favourites.is_empty());
         assert_eq!(
             settings.gallery.last_destination.as_deref(),
             Some("/piles/keep")
