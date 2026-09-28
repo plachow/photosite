@@ -25,6 +25,7 @@ mod grid;
 mod info;
 mod list;
 mod menu;
+mod menubar;
 mod paste_key;
 mod people;
 mod picker;
@@ -82,6 +83,17 @@ enum ShellAsk {
     Menu(Vec<PathBuf>),
     /// The system's dialog for choosing a program to open this with.
     ChooseApp(PathBuf),
+}
+
+/// What somebody answered when a pasted picture was about to close unsaved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Closing {
+    /// Save it first, then close it.
+    Save,
+    /// Close it and let the picture go.
+    Discard,
+    /// Leave it open, and the window with it.
+    Cancel,
 }
 
 /// A copy or a move running on a thread of its own, and what to do once it
@@ -268,6 +280,8 @@ pub enum Wanted {
     ToMoveInto,
     /// Where a batch conversion puts its output.
     ToConvertInto,
+    /// Where the pasted picture with this number is saved.
+    ToSaveAs(usize),
 }
 
 /// A node of the folder tree. Children are loaded only on expansion.
@@ -481,6 +495,19 @@ pub struct App {
     /// of the same folder at once would plan against a folder the other one
     /// is emptying.
     transferring: Option<Transferring>,
+    /// How many pictures have been pasted, so that each is named apart.
+    pasted_count: usize,
+    /// A pasted picture somebody is closing unsaved, while the question is
+    /// on the screen.
+    closing: Option<usize>,
+    /// Close this pasted picture once it is saved: saving it was the answer
+    /// to closing it.
+    close_after_save: Option<usize>,
+    /// The window was asked to close and is waiting for the unsaved
+    /// pictures to be dealt with first.
+    quitting: bool,
+    /// A picture being written into a file: the task, which picture, where.
+    saving: Option<(u64, usize, PathBuf)>,
     /// The folder the tree on the left should scroll to. Set on opening, and
     /// taken by the tree straight away.
     pub scroll_tree_to: Option<PathBuf>,
@@ -695,6 +722,11 @@ impl App {
             shell_waiting: None,
             sending: None,
             transferring: None,
+            pasted_count: 0,
+            closing: None,
+            close_after_save: None,
+            quitting: false,
+            saving: None,
             scroll_tree_to: None,
             scroll_grid_to: None,
             tabs: editor::Tabs::default(),
@@ -1303,12 +1335,14 @@ impl App {
                     .last_folder
                     .as_deref()),
             ),
+            Wanted::ToSaveAs(_) => None,
         };
         let title = match wanted {
             Wanted::ToOpen => t!("dialog-pick-folder"),
             Wanted::ToCopyInto => t!("copy-into"),
             Wanted::ToMoveInto => t!("move-into"),
             Wanted::ToConvertInto => t!("batch-into"),
+            Wanted::ToSaveAs(_) => t!("save-as-title"),
         };
         self.folder_dialog = Some((picker::ask(ctx, title, start), wanted));
     }
@@ -1323,7 +1357,15 @@ impl App {
         let wanted = *wanted;
         match dialog.answer() {
             picker::Answer::Waiting => {}
-            picker::Answer::Cancelled => self.folder_dialog = None,
+            picker::Answer::Cancelled => {
+                self.folder_dialog = None;
+                // Not saving is not closing either: whatever was waiting on
+                // the save waits no longer.
+                if let Wanted::ToSaveAs(_) = wanted {
+                    self.close_after_save = None;
+                    self.quitting = false;
+                }
+            }
             picker::Answer::Picked(folder) => {
                 self.folder_dialog = None;
                 match wanted {
@@ -1349,6 +1391,7 @@ impl App {
                         self.batch.preset.beside_source = false;
                         self.batch.stale = true;
                     }
+                    Wanted::ToSaveAs(number) => self.save_pasted(number, folder),
                 }
             }
         }
@@ -1900,7 +1943,13 @@ impl App {
             "file.open_folder" => self.ask_for_folder(ctx, Wanted::ToOpen),
             "file.copy" => self.onto_clipboard(ctx, false),
             "file.cut" => self.onto_clipboard(ctx, true),
-            "file.paste" => self.paste(),
+            // In the manager, the files on the clipboard or else a picture;
+            // in the editor, only ever a picture.
+            "file.paste" if self.scope() == Scope::Manager => self.paste(ctx),
+            "file.paste" | "file.new_from_clipboard" => {
+                self.new_from_clipboard(ctx);
+            }
+            "file.save" | "file.save_as" => self.ask_where_to_save(ctx),
             "file.copy_to" => self.ask_where(Mode::Copy),
             "file.move_to" => self.ask_where(Mode::Move),
             "file.copy_again" => match self
@@ -1945,14 +1994,29 @@ impl App {
         };
     }
 
-    /// Brings whatever is on the clipboard into the open folder.
-    fn paste(&mut self) {
+    /// Brings whatever is on the clipboard into the open folder — or, when
+    /// what is on it is a picture and no files, opens the picture as a new
+    /// image.
+    ///
+    /// The system's files come first: somebody who copied files in Explorer
+    /// means those files. Then a picture. What was copied here comes last,
+    /// because on Windows it is on the system's clipboard as well whenever
+    /// it is still the latest thing copied — and when it is not, a picture
+    /// copied since is the one meant.
+    fn paste(&mut self, ctx: &egui::Context) {
+        let held = match clipboard::system_files() {
+            Some(from_system) => from_system,
+            None => match clipboard::picture() {
+                Some(picture) => return self.new_image(ctx, picture),
+                None => self.clipboard.clone(),
+            },
+        };
+
         let Some(folder) = self.folder.clone() else {
             self.status = t!("files-nowhere-to-paste");
             return;
         };
 
-        let held = clipboard::take(&self.clipboard);
         let files = clipboard::pastable(&held);
         if files.is_empty() {
             self.status = t!("files-clipboard-empty");
@@ -1960,6 +2024,340 @@ impl App {
         }
 
         self.start_transfer(files, folder, held.mode(), false, held.cut);
+    }
+
+    /// The picture on the clipboard, as a new image in a tab of its own.
+    fn new_from_clipboard(&mut self, ctx: &egui::Context) -> bool {
+        match clipboard::picture() {
+            Some(picture) => {
+                self.new_image(ctx, picture);
+                true
+            }
+            None => {
+                self.status = t!("files-no-picture");
+                false
+            }
+        }
+    }
+
+    /// Opens pixels that have no file as a new image, in front.
+    ///
+    /// The picture is kept whole, to be saved whole. What is uploaded to be
+    /// drawn is no larger than the graphics card takes — a fifty megapixel
+    /// frame is wider than many of them allow a texture to be.
+    pub fn new_image(&mut self, ctx: &egui::Context, picture: img::Rgb) {
+        self.pasted_count += 1;
+        let number = self.pasted_count;
+        let (width, height) = (picture.width, picture.height);
+
+        let largest = ctx.input(|input| input.max_texture_side).max(1) as u32;
+        let drawn = if width > largest || height > largest {
+            let (fitted_width, fitted_height) = img::fit(width, height, largest);
+            img::resize(&picture, fitted_width, fitted_height).ok()
+        } else {
+            None
+        };
+        let shown = drawn.as_ref().unwrap_or(&picture);
+        let texture = ctx.load_texture(
+            format!("pasted {number}"),
+            egui::ColorImage::from_rgb(
+                [shown.width as usize, shown.height as usize],
+                &shown.pixels,
+            ),
+            egui::TextureOptions::LINEAR,
+        );
+
+        self.tabs.open_pasted(editor::Pasted {
+            number,
+            pixels: Arc::new(picture),
+            texture,
+        });
+        self.apply_fullscreen(ctx);
+        self.status = t!(
+            "files-pasted-picture",
+            width = width as i64,
+            height = height as i64
+        );
+    }
+
+    /// Save, or Save as: only a pasted picture has anything to save yet.
+    fn ask_where_to_save(&mut self, ctx: &egui::Context) {
+        match self
+            .tabs
+            .active_editor()
+            .and_then(|editor| editor.pasted.clone())
+        {
+            Some(pasted) => self.save_dialog(ctx, pasted.number),
+            None => self.status = t!("files-nothing-to-save"),
+        }
+    }
+
+    /// Asks where the pasted picture with this number goes. It starts in the
+    /// folder open in the manager, which is where a picture put beside
+    /// photographs is wanted.
+    fn save_dialog(&mut self, ctx: &egui::Context, number: usize) {
+        if self.folder_dialog.is_some() {
+            return;
+        }
+
+        let start = picker::start_dir(
+            self.folder.as_deref(),
+            self.settings.gallery.last_folder.as_deref(),
+        );
+        let name = format!("{}.jpg", t!("editor-pasted", number = number as i64));
+        self.folder_dialog = Some((
+            picker::save(ctx, t!("save-as-title"), start, &name),
+            Wanted::ToSaveAs(number),
+        ));
+    }
+
+    /// Writes the pasted picture into the file chosen, on a thread of its
+    /// own: a full-size photograph takes a noticeable moment to encode.
+    fn save_pasted(&mut self, number: usize, path: PathBuf) {
+        let Some(pixels) = self
+            .tabs
+            .editors()
+            .iter()
+            .filter_map(|editor| editor.pasted.as_ref())
+            .find(|pasted| pasted.number == number)
+            .map(|pasted| pasted.pixels.clone())
+        else {
+            return;
+        };
+
+        let path = with_a_format(path);
+        let Some(format) = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .and_then(img::encode::Format::of)
+        else {
+            return;
+        };
+
+        let to = path.clone();
+        let task = self.tasks.spawn(t!("task-saving"), move |_, _| {
+            img::encode::write(&to, &pixels, format, 92)
+        });
+        self.saving = Some((task, number, path));
+    }
+
+    /// Notices that a picture has been saved. From then on its tab is that
+    /// file — and if saving it was the answer to closing it, it closes.
+    fn collect_saving(&mut self, ctx: &egui::Context) {
+        let Some((task, number, path)) = self.saving.clone() else {
+            return;
+        };
+
+        let Some(task) = self
+            .tasks
+            .snapshot()
+            .into_iter()
+            .find(|finished| finished.id == task && finished.finished)
+        else {
+            return;
+        };
+
+        self.saving = None;
+        self.tasks.forget_finished();
+        if let Some(error) = task.error {
+            tracing::error!(%error, "the picture could not be saved");
+            self.status = error;
+            self.close_after_save = None;
+            self.quitting = false;
+            return;
+        }
+
+        if let Some(tab) = self.tabs.of_pasted(number)
+            && let Some(editor) = self.tabs.editor_mut(tab)
+        {
+            editor.saved_as(path.clone());
+        }
+
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.status = t!("files-saved-as", name = name);
+        // Saved beside the photographs being looked at: there it is.
+        if path.parent().is_some() && path.parent() == self.folder.as_deref() {
+            self.reopen();
+        }
+
+        if self.close_after_save == Some(number) {
+            self.close_after_save = None;
+            if let Some(tab) = self
+                .tabs
+                .editors()
+                .iter()
+                .position(|editor| editor.path == path)
+            {
+                self.close_tab(tab + 1, ctx);
+            }
+
+            if self.quitting {
+                self.carry_on_quitting(ctx);
+            }
+        }
+    }
+
+    /// The first pasted picture that has not been saved, and its tab.
+    fn first_unsaved(&self) -> Option<(usize, usize)> {
+        self.tabs
+            .editors()
+            .iter()
+            .enumerate()
+            .find_map(|(at, editor)| editor.pasted.as_ref().map(|pasted| (at + 1, pasted.number)))
+    }
+
+    /// On with closing the window: the next unsaved picture is asked about,
+    /// and when there are none left the window closes.
+    fn carry_on_quitting(&mut self, ctx: &egui::Context) {
+        match self.first_unsaved() {
+            Some((tab, number)) => {
+                self.tabs.activate(tab);
+                self.closing = Some(number);
+            }
+            None => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+        }
+    }
+
+    /// The window was asked to close. Unsaved pictures hold it open until
+    /// somebody has said what becomes of each of them.
+    fn hold_the_close(&mut self, ctx: &egui::Context) {
+        if !ctx.input(|input| input.viewport().close_requested()) {
+            return;
+        }
+
+        if let Some((tab, number)) = self.first_unsaved() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.quitting = true;
+            self.tabs.activate(tab);
+            self.apply_fullscreen(ctx);
+            self.closing = Some(number);
+        }
+    }
+
+    /// The question asked before a pasted picture closes unsaved.
+    fn closing_window(&mut self, ctx: &egui::Context) {
+        let Some(number) = self.closing else {
+            return;
+        };
+
+        if self.tabs.of_pasted(number).is_none() {
+            self.closing = None;
+            return;
+        }
+
+        let mut choice: Option<Closing> = None;
+        egui::Window::new(t!("closing-title"))
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label(t!(
+                    "closing-question",
+                    name = t!("editor-pasted", number = number as i64)
+                ));
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if ui.button(t!("closing-save")).clicked() {
+                        choice = Some(Closing::Save);
+                    }
+                    if ui.button(t!("closing-discard")).clicked() {
+                        choice = Some(Closing::Discard);
+                    }
+                    if ui.button(t!("ask-cancel")).clicked() {
+                        choice = Some(Closing::Cancel);
+                    }
+                });
+
+                if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+                    choice = Some(Closing::Cancel);
+                }
+            });
+
+        if let Some(choice) = choice {
+            self.answer_closing(ctx, choice);
+        }
+    }
+
+    /// Does what was answered about the pasted picture being closed.
+    fn answer_closing(&mut self, ctx: &egui::Context, choice: Closing) {
+        let Some(number) = self.closing else {
+            return;
+        };
+        let Some(tab) = self.tabs.of_pasted(number) else {
+            self.closing = None;
+            return;
+        };
+
+        match choice {
+            Closing::Save => {
+                self.closing = None;
+                self.close_after_save = Some(number);
+                self.save_dialog(ctx, number);
+            }
+            Closing::Discard => {
+                self.closing = None;
+                self.tabs.close(tab);
+                self.apply_fullscreen(ctx);
+                if self.quitting {
+                    self.carry_on_quitting(ctx);
+                }
+            }
+            Closing::Cancel => {
+                self.closing = None;
+                self.quitting = false;
+            }
+        }
+    }
+
+    /// Whether a command can be given right now, beyond whether it can be
+    /// given from here at all — which the menu greys out and the keys
+    /// quietly do nothing about.
+    pub fn can_run(&self, id: &str) -> bool {
+        match id {
+            "go.back" => self.history.can_go_back(),
+            "go.forward" => self.history.can_go_forward(),
+            "go.up" => self.folder.as_deref().and_then(History::up_from).is_some(),
+            "photo.rotate_left" | "photo.rotate_right" => self.turnable() > 0,
+            "file.save" | "file.save_as" => self
+                .tabs
+                .active_editor()
+                .is_some_and(|editor| editor.pasted.is_some()),
+            "view.clear_filter" => self.filter.is_active(),
+            "file.rescan" | "file.new_folder" => self.folder.is_some(),
+            "file.open_with" | "file.system_menu" => shell::AVAILABLE && !self.selection.is_empty(),
+            "file.copy" | "file.cut" | "file.delete" | "file.duplicate" | "file.rename"
+            | "file.copy_to" | "file.move_to" | "file.copy_again" | "file.reveal"
+            | "photo.edit" => !self.selection.is_empty(),
+            _ => true,
+        }
+    }
+
+    /// Whether a command that is a switch is on. Nothing for the ones that
+    /// are not switches.
+    pub fn checked(&self, id: &str) -> Option<bool> {
+        let dock = |name: &str| !self.hidden.iter().any(|hidden| hidden == name);
+        let sorted_by =
+            |field: SortField| Some(SortField::from_id(&self.settings.gallery.sort_field) == field);
+        match id {
+            "view.recursive" => Some(self.settings.gallery.recursive),
+            "view.as_list" => Some(self.settings.gallery.as_list),
+            "view.filter" => Some(self.show_filter),
+            "view.toggle_tree" => Some(dock("tree")),
+            "view.toggle_preview" => Some(dock("preview")),
+            "view.toggle_info" => Some(dock("info")),
+            "view.fullscreen" => Some(self.fullscreen),
+            "editor.fullscreen" => Some(self.tabs.fullscreen),
+            "sort.reverse" => Some(self.settings.gallery.sort_descending),
+            "sort.taken" => sorted_by(SortField::TakenAt),
+            "sort.name" => sorted_by(SortField::Name),
+            "sort.rating" => sorted_by(SortField::Rating),
+            "sort.modified" => sorted_by(SortField::ModifiedAt),
+            "sort.size" => sorted_by(SortField::FileSize),
+            "sort.dimensions" => sorted_by(SortField::Dimensions),
+            _ => None,
+        }
     }
 
     /// A quarter-turn, clockwise for a positive number, on everything chosen
@@ -2259,12 +2657,16 @@ impl App {
     /// Closes a tab — from its cross or from the key. The one place the
     /// question about unsaved work will be asked, once there is any.
     pub fn close_tab(&mut self, tab: usize, ctx: &egui::Context) -> bool {
-        let may = self
-            .tabs
-            .editors()
-            .get(tab.wrapping_sub(1))
-            .is_some_and(editor::Editor::can_close);
-        if !may {
+        let Some(editor) = self.tabs.editors().get(tab.wrapping_sub(1)) else {
+            return false;
+        };
+
+        if !editor.can_close() {
+            // The question, rather than a tab that will not close.
+            if let Some(pasted) = &editor.pasted {
+                self.closing = Some(pasted.number);
+            }
+            self.tabs.activate(tab);
             return false;
         }
 
@@ -2277,6 +2679,18 @@ impl App {
     /// photograph — the folder opened if it has to be, the tree unfolded to
     /// it, the tile chosen and scrolled into view.
     fn editor_back(&mut self, ctx: &egui::Context) {
+        // A pasted picture stands nowhere in the manager, and going back to
+        // the manager must not ask whether to throw it away.
+        if self
+            .tabs
+            .active_editor()
+            .is_some_and(|editor| editor.pasted.is_some())
+        {
+            self.tabs.activate(editor::Tabs::MANAGER);
+            self.apply_fullscreen(ctx);
+            return;
+        }
+
         let tab = self.tabs.active();
         let Some(path) = self.tabs.active_editor().map(|editor| editor.path.clone()) else {
             return;
@@ -3150,6 +3564,25 @@ fn effective_budget(configured: i64, needed: usize) -> usize {
 /// the greater-than sign, which reads as an operator.
 const SEPARATOR_MARK: &str = "\u{203a}";
 
+/// The path a picture is saved to, with an extension that says what to
+/// write. A name typed without one — or with one nothing here writes — is
+/// saved as a JPEG and says so, rather than being written in some format and
+/// named as another.
+fn with_a_format(path: PathBuf) -> PathBuf {
+    let known = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .and_then(img::encode::Format::of)
+        .is_some();
+    if known {
+        path
+    } else {
+        let mut named = path.into_os_string();
+        named.push(".jpg");
+        PathBuf::from(named)
+    }
+}
+
 /// Seconds since the epoch.
 ///
 /// The queue needs a clock for its backoff, and this is the only place the
@@ -3204,6 +3637,7 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.first_frames(&ctx);
+        self.hold_the_close(&ctx);
         self.shell_when_clear(&ctx);
         self.collect_turned();
         let delivered = self.collect(&ctx);
@@ -3213,6 +3647,7 @@ impl eframe::App for App {
         self.collect_describing();
         self.collect_writing();
         self.collect_transfer();
+        self.collect_saving(&ctx);
         self.collect_disturbance();
         self.updates.poll();
         self.take_picked_folder();
@@ -3230,8 +3665,15 @@ impl eframe::App for App {
         let panel = theme::color(palette.panel);
         let window = theme::color(palette.window);
 
-        // The strip of tabs first, unless the editor is filling the screen:
-        // then the photograph has the whole of it.
+        // The menu bar under the title bar, then the strip of tabs — unless
+        // the editor is filling the screen: then the photograph has the
+        // whole of it.
+        if self.tabs.manager_is_active() || !self.tabs.fullscreen {
+            egui::Panel::top("menu")
+                .frame(egui::Frame::NONE.fill(panel).inner_margin(2.0))
+                .show(ui, |ui| menubar::bar(self, ui));
+        }
+
         if self.tabs.manager_is_active() || !self.tabs.fullscreen {
             egui::Panel::top("tabs")
                 .frame(egui::Frame::NONE.fill(panel).inner_margin(4.0))
@@ -3279,6 +3721,7 @@ impl eframe::App for App {
         filter::window(self, &ctx, &palette);
         self.ask_window(&ctx);
         self.sending_window(&ctx);
+        self.closing_window(&ctx);
 
         // The wishlist is overwritten only here, once it is clear what is
         // visible and what is selected. Anything not on it stops being
@@ -5520,6 +5963,267 @@ mod editing {
         assert!(
             !app.fullscreen,
             "the window's own fullscreen was never asked for"
+        );
+    }
+}
+
+/// Pictures that come off the clipboard: the new image they open as, the
+/// question before one closes unsaved, saving one, and the window that will
+/// not close with one still open. And the menu bar that offers all of it.
+#[cfg(test)]
+mod pasting {
+    use super::*;
+
+    fn picture(width: u32, height: u32) -> img::Rgb {
+        img::Rgb::new(width, height, vec![200; (width * height * 3) as usize]).unwrap()
+    }
+
+    /// A frame whose input is this, drawing nothing but what `draw` draws.
+    fn a_frame(
+        app: &mut App,
+        ctx: &egui::Context,
+        input: egui::RawInput,
+        mut draw: impl FnMut(&mut App, &mut egui::Ui),
+    ) -> egui::FullOutput {
+        let mut out = ctx.run_ui(input, |ui| draw(app, ui));
+        out.textures_delta.clear();
+        out
+    }
+
+    #[test]
+    fn a_picture_opens_as_a_new_image_in_front() {
+        let (mut app, _data, _photos) = crate::culling::three();
+        let ctx = egui::Context::default();
+        app.new_image(&ctx, picture(40, 20));
+
+        let editor = app.tabs.active_editor().expect("no tab in front");
+        assert_eq!(editor.name(), t!("editor-pasted", number = 1));
+        assert!(
+            !editor.can_close(),
+            "an unsaved picture would close silently"
+        );
+    }
+
+    /// Ctrl+V in the manager with a picture and no files on the clipboard.
+    #[test]
+    fn ctrl_v_with_only_a_picture_opens_it_rather_than_pasting_files() {
+        let (mut app, _data, _photos) = crate::culling::three();
+        clipboard::put_picture_for_test(Some(picture(16, 9)));
+        app.run_for_test("file.paste");
+        clipboard::put_picture_for_test(None);
+
+        assert!(!app.tabs.manager_is_active());
+        assert!(app.tabs.active_editor().unwrap().pasted.is_some());
+    }
+
+    #[test]
+    fn with_nothing_to_paste_new_from_clipboard_says_so() {
+        let (mut app, _data, _photos) = crate::culling::three();
+        clipboard::put_picture_for_test(None);
+        app.run_for_test("file.new_from_clipboard");
+        assert!(app.tabs.manager_is_active());
+        assert_eq!(app.status, t!("files-no-picture"));
+    }
+
+    /// Closing an unsaved picture asks first, and nothing closes until the
+    /// answer comes.
+    #[test]
+    fn closing_an_unsaved_picture_asks_and_waits_for_the_answer() {
+        let (mut app, _data, _photos) = crate::culling::three();
+        let ctx = egui::Context::default();
+        app.new_image(&ctx, picture(40, 20));
+
+        app.run_for_test("editor.close");
+        assert_eq!(app.closing, Some(1), "nothing was asked");
+        assert_eq!(app.tabs.count(), 2, "it closed without asking");
+
+        app.answer_closing(&ctx, Closing::Cancel);
+        assert_eq!(app.tabs.count(), 2);
+        assert_eq!(app.closing, None);
+
+        app.run_for_test("editor.close");
+        app.answer_closing(&ctx, Closing::Discard);
+        assert_eq!(app.tabs.count(), 1);
+        assert!(app.tabs.manager_is_active());
+    }
+
+    /// Back to the manager leaves the picture open: it stands nowhere in
+    /// the manager, and going there is not throwing it away.
+    #[test]
+    fn going_back_to_the_manager_keeps_the_picture() {
+        let (mut app, _data, _photos) = crate::culling::three();
+        let ctx = egui::Context::default();
+        app.new_image(&ctx, picture(40, 20));
+        app.run_for_test("editor.back");
+        assert!(app.tabs.manager_is_active());
+        assert_eq!(app.tabs.count(), 2);
+        assert_eq!(app.closing, None);
+    }
+
+    fn wait_for_the_save(app: &mut App, ctx: &egui::Context) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while app.saving.is_some() {
+            app.collect_saving(ctx);
+            assert!(std::time::Instant::now() < deadline, "never saved");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    /// Saved, the tab is that file; saved as the answer to closing, it
+    /// closes too.
+    #[test]
+    fn a_saved_picture_becomes_its_file_and_closes_when_that_was_asked() {
+        let (mut app, _data, photos) = crate::culling::three();
+        let ctx = egui::Context::default();
+        app.new_image(&ctx, picture(40, 20));
+
+        // Named without an extension: it is written as a JPEG and says so.
+        let chosen = photos.path().join("screenshot");
+        app.save_pasted(1, chosen);
+        wait_for_the_save(&mut app, &ctx);
+
+        let saved = photos.path().join("screenshot.jpg");
+        assert!(saved.exists(), "{}", app.status);
+        let editor = app.tabs.active_editor().unwrap();
+        assert_eq!(editor.path, saved);
+        assert!(editor.can_close());
+        assert!(
+            app.position_of(&saved).is_some(),
+            "saved beside the photographs, and the gallery does not show it"
+        );
+
+        app.new_image(&ctx, picture(8, 8));
+        app.run_for_test("editor.close");
+        app.close_after_save = app.closing.take();
+        app.save_pasted(2, photos.path().join("second.png"));
+        wait_for_the_save(&mut app, &ctx);
+        assert!(photos.path().join("second.png").exists());
+        assert_eq!(app.tabs.count(), 2, "the saved picture did not close");
+    }
+
+    /// The window will not close over an unsaved picture: the close is held
+    /// and the question asked, and once it is answered the window closes.
+    #[test]
+    fn the_window_waits_for_an_unsaved_picture() {
+        let (mut app, _data, _photos) = crate::culling::three();
+        let ctx = egui::Context::default();
+        app.new_image(&ctx, picture(40, 20));
+        app.run_for_test("editor.back");
+
+        let mut input = egui::RawInput::default();
+        input
+            .viewports
+            .entry(egui::ViewportId::ROOT)
+            .or_default()
+            .events = vec![egui::ViewportEvent::Close];
+        let out = a_frame(&mut app, &ctx, input, |app, ui| {
+            app.hold_the_close(&ui.ctx().clone())
+        });
+        let commands = &out.viewport_output[&egui::ViewportId::ROOT].commands;
+        assert!(
+            commands.contains(&egui::ViewportCommand::CancelClose),
+            "{commands:?}"
+        );
+        assert!(app.quitting);
+        assert_eq!(app.closing, Some(1));
+        assert!(!app.tabs.manager_is_active(), "the picture is not in front");
+
+        let out = a_frame(&mut app, &ctx, egui::RawInput::default(), |app, ui| {
+            app.answer_closing(&ui.ctx().clone(), Closing::Discard)
+        });
+        let commands = &out.viewport_output[&egui::ViewportId::ROOT].commands;
+        assert!(
+            commands.contains(&egui::ViewportCommand::Close),
+            "{commands:?}"
+        );
+    }
+
+    fn texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<(String, egui::Rect)> {
+        fn walk(shape: &egui::Shape, into: &mut Vec<(String, egui::Rect)>) {
+            match shape {
+                egui::Shape::Text(text) => into.push((
+                    text.galley.text().to_owned(),
+                    text.galley.rect.translate(text.pos.to_vec2()),
+                )),
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| walk(shape, into)),
+                _ => {}
+            }
+        }
+
+        let mut found = Vec::new();
+        for clipped in shapes {
+            walk(&clipped.shape, &mut found);
+        }
+        found
+    }
+
+    fn screen(events: Vec<egui::Event>) -> egui::RawInput {
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                egui::vec2(1200.0, 800.0),
+            )),
+            events,
+            ..Default::default()
+        }
+    }
+
+    /// The menus are there, in the order every program has them, and File
+    /// opens on what the registry puts in it, with the keys beside.
+    #[test]
+    fn the_menu_bar_has_the_menus_and_file_opens() {
+        let (mut app, _data, _photos) = crate::culling::three();
+        let ctx = egui::Context::default();
+        let draw = |app: &mut App, ui: &mut egui::Ui| menubar::bar(app, ui);
+
+        let out = a_frame(&mut app, &ctx, screen(Vec::new()), draw);
+        let drawn = texts(&out.shapes);
+        let titles: Vec<&str> = drawn.iter().map(|(text, _)| text.as_str()).collect();
+        assert_eq!(
+            titles,
+            ["File", "Edit", "View", "Go", "Photo", "Editor", "Help"]
+        );
+
+        let file = drawn[0].1.center();
+        a_frame(
+            &mut app,
+            &ctx,
+            screen(vec![egui::Event::PointerMoved(file)]),
+            draw,
+        );
+        for pressed in [true, false] {
+            a_frame(
+                &mut app,
+                &ctx,
+                screen(vec![egui::Event::PointerButton {
+                    pos: file,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::default(),
+                }]),
+                draw,
+            );
+        }
+        let out = a_frame(&mut app, &ctx, screen(Vec::new()), draw);
+        let drawn: Vec<String> = texts(&out.shapes)
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect();
+        for wanted in [
+            "Open folder…",
+            "New from clipboard",
+            "Save as…",
+            "Move to…",
+            "Quit",
+        ] {
+            assert!(
+                drawn.iter().any(|text| text == wanted),
+                "{wanted} is not in File: {drawn:?}"
+            );
+        }
+        assert!(
+            drawn.iter().any(|text| text == "Ctrl+Shift+S"),
+            "the keys are not beside the entries: {drawn:?}"
         );
     }
 }

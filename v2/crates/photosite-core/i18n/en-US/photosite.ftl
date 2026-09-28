@@ -7,6 +7,7 @@
 ## Command groups
 
 group-file = File
+group-edit = Edit
 group-view = View
 group-help = Help
 
@@ -429,7 +430,7 @@ files-cut-to-the-clipboard =
         [one] { $count } photograph ready to move
        *[other] { $count } photographs ready to move
     }
-files-clipboard-empty = There are no photographs on the clipboard
+files-clipboard-empty = There is nothing on the clipboard to paste
 files-nowhere-to-paste = Open a folder to paste into first
 files-nowhere-yet = Nothing has been copied anywhere yet
 files-already-there = They are already in that folder
@@ -855,3 +856,27 @@ status-task-running = { $title }…
 status-size-kb = { NUMBER($kb, maximumFractionDigits: 0) } kB
 status-size-mb = { NUMBER($mb, maximumFractionDigits: 1) } MB
 status-size-gb = { NUMBER($gb, maximumFractionDigits: 2) } GB
+
+## The menu bar
+
+command-file-new-from-clipboard = New from clipboard
+command-file-save = Save
+command-file-save-as = Save as…
+menu-rating = Rating
+menu-label = Label
+menu-sort-by = Sort by
+
+## Pictures pasted as new images
+
+editor-pasted = Pasted { $number }
+editor-pasted-size = { $width } × { $height }
+files-no-picture = There is no picture on the clipboard
+files-pasted-picture = A picture of { $width } × { $height } pasted as a new image
+files-nothing-to-save = Only a pasted picture has anything to save
+files-saved-as = Saved as { $name }
+save-as-title = Save the picture as
+task-saving = Saving
+closing-title = Save the pasted picture?
+closing-question = { $name } has not been saved anywhere. Save it before it closes?
+closing-save = Save as…
+closing-discard = Close without saving

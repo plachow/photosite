@@ -14,6 +14,9 @@
 //! **At most one may be open.** A second Ctrl+O would otherwise stack another
 //! dialog on top of the first, and one of them would be left hanging even
 //! after a folder was chosen.
+//!
+//! The same goes for the dialog asking where to save a picture, which is the
+//! same dialog asking a different question.
 
 use eframe::egui;
 use std::path::{Path, PathBuf};
@@ -46,7 +49,40 @@ pub fn ask(ctx: &egui::Context, title: String, start: Option<PathBuf>) -> Picker
 
     // Here, on the main thread. Moving this line into the thread below looks
     // like a simplification and breaks macOS.
-    let opened = dialog.pick_folder();
+    alongside(ctx, dialog.pick_folder())
+}
+
+/// The formats a picture can be saved in, the first being what is offered.
+const SAVE_AS: &[(&str, &[&str])] = &[
+    ("JPEG", &["jpg", "jpeg"]),
+    ("PNG", &["png"]),
+    ("WebP", &["webp"]),
+    ("TIFF", &["tif", "tiff"]),
+    ("BMP", &["bmp"]),
+];
+
+/// Opens the dialog asking where to save a picture, with a name already in
+/// it. Call only from the main thread, like [`ask`].
+pub fn save(ctx: &egui::Context, title: String, start: Option<PathBuf>, name: &str) -> Picker {
+    let mut dialog = rfd::AsyncFileDialog::new()
+        .set_title(title)
+        .set_file_name(name);
+    for (label, extensions) in SAVE_AS {
+        dialog = dialog.add_filter(*label, extensions);
+    }
+
+    if let Some(start) = start {
+        dialog = dialog.set_directory(start);
+    }
+
+    alongside(ctx, dialog.save_file())
+}
+
+/// Waits for a dialog's answer on a thread alongside, and hands it over.
+fn alongside(
+    ctx: &egui::Context,
+    opened: impl std::future::Future<Output = Option<rfd::FileHandle>> + Send + 'static,
+) -> Picker {
     let (to_ui, from_dialog) = std::sync::mpsc::channel();
     let ctx = ctx.clone();
     std::thread::spawn(move || {

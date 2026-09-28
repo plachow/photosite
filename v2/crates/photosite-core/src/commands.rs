@@ -17,6 +17,9 @@ use std::str::FromStr;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Group {
     File,
+    /// The clipboard, deleting and selecting — where every other program
+    /// keeps them, so that is where a hand looks for them.
+    Edit,
     Go,
     Photo,
     Sort,
@@ -28,8 +31,9 @@ pub enum Group {
 impl Group {
     /// Every group there is. Listing the variants a second time in a test or
     /// a menu is how one of them ends up forgotten.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::File,
+        Self::Edit,
         Self::Go,
         Self::Photo,
         Self::Sort,
@@ -42,6 +46,7 @@ impl Group {
     pub fn title_key(self) -> &'static str {
         match self {
             Group::File => "group-file",
+            Group::Edit => "group-edit",
             Group::Go => "group-go",
             Group::Photo => "group-photo",
             Group::Sort => "group-sort",
@@ -80,6 +85,24 @@ impl Scope {
     }
 }
 
+/// Where a command appears in the menu bar.
+///
+/// The registry says, not the drawing layer: a menu drawn by asking about
+/// commands by name needs rewriting with every command added after it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Menu {
+    /// In its group's menu, after the one before it.
+    Item,
+    /// In its group's menu, with a line above it: the first of a new kind.
+    Section,
+    /// In a submenu of its group's menu, under this translated title. The
+    /// submenu stands where the first of its commands would.
+    Under(&'static str),
+    /// Not in the menu at all. A key that walks the gallery is a key and
+    /// nothing else; a menu entry for "one tile to the left" is noise.
+    Hidden,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Command {
     /// The stable key. This is what the configuration stores, not the name —
@@ -99,6 +122,8 @@ pub struct Command {
     pub toolbar: bool,
     /// Where it can be given. See [`Scope`].
     pub scope: Scope,
+    /// Where it appears in the menu bar. See [`Menu`].
+    pub menu: Menu,
 }
 
 pub const COMMANDS: &[Command] = &[
@@ -109,6 +134,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Ctrl+O"),
         toolbar: true,
         scope: Scope::Manager,
+        menu: Menu::Item,
     },
     Command {
         id: "file.rescan",
@@ -117,6 +143,39 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("F5"),
         toolbar: true,
         scope: Scope::Manager,
+        menu: Menu::Item,
+    },
+    // A picture on the clipboard, as a new image in a tab of its own.
+    // Ctrl+V does the same when there are no files on the clipboard to
+    // paste; this is the way that never pastes files.
+    Command {
+        id: "file.new_from_clipboard",
+        title_key: "command-file-new-from-clipboard",
+        group: Group::File,
+        default_shortcut: None,
+        toolbar: false,
+        scope: Scope::Everywhere,
+        menu: Menu::Section,
+    },
+    // Only a pasted picture has anything to save yet. Ctrl+Shift+S is the
+    // subfolders in the manager, and nobody is in both at once.
+    Command {
+        id: "file.save",
+        title_key: "command-file-save",
+        group: Group::File,
+        default_shortcut: Some("Ctrl+S"),
+        toolbar: false,
+        scope: Scope::Editor,
+        menu: Menu::Item,
+    },
+    Command {
+        id: "file.save_as",
+        title_key: "command-file-save-as",
+        group: Group::File,
+        default_shortcut: Some("Ctrl+Shift+S"),
+        toolbar: false,
+        scope: Scope::Editor,
+        menu: Menu::Item,
     },
     Command {
         id: "file.rename",
@@ -125,6 +184,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("F2"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Section,
     },
     Command {
         id: "file.duplicate",
@@ -133,40 +193,56 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Ctrl+D"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Item,
     },
     Command {
-        id: "file.delete",
-        title_key: "command-file-delete",
+        id: "file.new_folder",
+        title_key: "command-file-new-folder",
         group: Group::File,
-        default_shortcut: Some("Delete"),
+        default_shortcut: None,
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Item,
     },
     // Copying and moving. `Ctrl+C` and `Ctrl+V` are the file manager's own
-    // keys and mean the files themselves, not a list of their names.
-    Command {
-        id: "file.copy",
-        title_key: "command-file-copy",
-        group: Group::File,
-        default_shortcut: Some("Ctrl+C"),
-        toolbar: false,
-        scope: Scope::Manager,
-    },
+    // keys and mean the files themselves, not a list of their names. Paste
+    // reaches the editor too: there it takes a picture off the clipboard as
+    // a new image, and so does the manager when there are no files on it.
     Command {
         id: "file.cut",
         title_key: "command-file-cut",
-        group: Group::File,
+        group: Group::Edit,
         default_shortcut: Some("Ctrl+X"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Item,
+    },
+    Command {
+        id: "file.copy",
+        title_key: "command-file-copy",
+        group: Group::Edit,
+        default_shortcut: Some("Ctrl+C"),
+        toolbar: false,
+        scope: Scope::Manager,
+        menu: Menu::Item,
     },
     Command {
         id: "file.paste",
         title_key: "command-file-paste",
-        group: Group::File,
+        group: Group::Edit,
         default_shortcut: Some("Ctrl+V"),
         toolbar: false,
+        scope: Scope::Everywhere,
+        menu: Menu::Item,
+    },
+    Command {
+        id: "file.delete",
+        title_key: "command-file-delete",
+        group: Group::Edit,
+        default_shortcut: Some("Delete"),
+        toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Section,
     },
     // Somewhere else, chosen now. Alt rather than Ctrl because the clipboard
     // already has Ctrl+C, and these are the same idea without the two steps.
@@ -177,6 +253,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Alt+C"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Section,
     },
     Command {
         id: "file.move_to",
@@ -185,6 +262,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Alt+X"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Item,
     },
     // And to wherever the last one went. Sorting a folder into three piles
     // is three dialogs otherwise, and two of them say the same thing.
@@ -195,14 +273,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Ctrl+Shift+C"),
         toolbar: false,
         scope: Scope::Manager,
-    },
-    Command {
-        id: "file.new_folder",
-        title_key: "command-file-new-folder",
-        group: Group::File,
-        default_shortcut: None,
-        toolbar: false,
-        scope: Scope::Manager,
+        menu: Menu::Item,
     },
     Command {
         id: "file.reveal",
@@ -211,6 +282,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: None,
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Section,
     },
     // Handing the photographs to another program, and asking the system
     // what it can do with them. Both speak to Windows' own shell and
@@ -222,6 +294,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: None,
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Item,
     },
     Command {
         id: "file.system_menu",
@@ -230,6 +303,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: None,
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Item,
     },
     Command {
         id: "file.quit",
@@ -238,6 +312,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Ctrl+Q"),
         toolbar: false,
         scope: Scope::Everywhere,
+        menu: Menu::Section,
     },
     // Where we are, which is not the same group as what is in front of us.
     Command {
@@ -247,6 +322,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Alt+Left"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Item,
     },
     Command {
         id: "go.forward",
@@ -255,6 +331,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Alt+Right"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Item,
     },
     Command {
         id: "go.up",
@@ -263,6 +340,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Alt+Up"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Item,
     },
     // What somebody says about a photograph. None of these is on the
     // toolbar: twelve buttons for the stars and the labels would crowd out
@@ -278,6 +356,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Backtick"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Under("menu-rating"),
     },
     Command {
         id: "photo.rate_1",
@@ -286,6 +365,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("1"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Under("menu-rating"),
     },
     Command {
         id: "photo.rate_2",
@@ -294,6 +374,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("2"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Under("menu-rating"),
     },
     Command {
         id: "photo.rate_3",
@@ -302,6 +383,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("3"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Under("menu-rating"),
     },
     Command {
         id: "photo.rate_4",
@@ -310,6 +392,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("4"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Under("menu-rating"),
     },
     Command {
         id: "photo.rate_5",
@@ -318,6 +401,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("5"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Under("menu-rating"),
     },
     Command {
         id: "photo.label_none",
@@ -326,6 +410,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("0"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Under("menu-label"),
     },
     Command {
         id: "photo.label_red",
@@ -334,6 +419,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("6"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Under("menu-label"),
     },
     Command {
         id: "photo.label_yellow",
@@ -342,6 +428,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("7"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Under("menu-label"),
     },
     Command {
         id: "photo.label_green",
@@ -350,6 +437,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("8"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Under("menu-label"),
     },
     Command {
         id: "photo.label_blue",
@@ -358,6 +446,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("9"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Under("menu-label"),
     },
     Command {
         id: "photo.label_purple",
@@ -366,6 +455,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: None,
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Under("menu-label"),
     },
     // Both toggle. Pressing P on a photograph already picked takes the pick
     // off — otherwise there is no way back to undecided without the mouse,
@@ -377,6 +467,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("P"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Section,
     },
     Command {
         id: "photo.reject",
@@ -385,6 +476,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("X"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Item,
     },
     // A quarter-turn either way, without re-encoding anything: the
     // orientation tag changes and the pixels stay as they are. Zoner's keys,
@@ -397,6 +489,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Ctrl+L"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Section,
     },
     Command {
         id: "photo.rotate_right",
@@ -405,14 +498,16 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Ctrl+R"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Item,
     },
     Command {
         id: "photo.select_all",
         title_key: "command-photo-select-all",
-        group: Group::Photo,
+        group: Group::Edit,
         default_shortcut: Some("Ctrl+A"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Section,
     },
     // Moving through the gallery from the keyboard, Explorer's way: the
     // arrows, Home and End along the row, Ctrl+Home and Ctrl+End to the
@@ -427,6 +522,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Left"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Hidden,
     },
     Command {
         id: "nav.right",
@@ -435,6 +531,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Right"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Hidden,
     },
     Command {
         id: "nav.up",
@@ -443,6 +540,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Up"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Hidden,
     },
     Command {
         id: "nav.down",
@@ -451,6 +549,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Down"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Hidden,
     },
     Command {
         id: "nav.page_up",
@@ -459,6 +558,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("PageUp"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Hidden,
     },
     Command {
         id: "nav.page_down",
@@ -467,6 +567,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("PageDown"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Hidden,
     },
     Command {
         id: "nav.row_start",
@@ -475,6 +576,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Home"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Hidden,
     },
     Command {
         id: "nav.row_end",
@@ -483,6 +585,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("End"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Hidden,
     },
     Command {
         id: "nav.first",
@@ -491,6 +594,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Ctrl+Home"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Hidden,
     },
     Command {
         id: "nav.last",
@@ -499,6 +603,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Ctrl+End"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Hidden,
     },
     // Two to four photographs at once. It toggles: the same key that opens
     // the comparison closes it, so nobody has to hunt for the way out.
@@ -509,6 +614,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Ctrl+K"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Section,
     },
     // Tab does nothing outside a comparison. It is here rather than read
     // straight off the keyboard because every key this application answers
@@ -520,6 +626,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Tab"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Hidden,
     },
     Command {
         id: "photo.compare_previous",
@@ -528,6 +635,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Shift+Tab"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Hidden,
     },
     // One photograph on its own, in a tab of its own. A double-click on a
     // tile does the same; the command is here so the key can be rebound.
@@ -538,6 +646,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Enter"),
         toolbar: true,
         scope: Scope::Manager,
+        menu: Menu::Section,
     },
     // Sorting is a choice among six, not six buttons. The commands exist so
     // the choice can be bound to a key and named in one place; the toolbar
@@ -552,6 +661,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Ctrl+B"),
         toolbar: true,
         scope: Scope::Manager,
+        menu: Menu::Section,
     },
     // Asking a model on this machine what is in them. Ctrl+Shift+A, next
     // to Ctrl+A which selects what it will run over.
@@ -562,6 +672,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Ctrl+Shift+A"),
         toolbar: true,
         scope: Scope::Manager,
+        menu: Menu::Item,
     },
     // Who is in the photographs. It is a window rather than a dock: naming a
     // library is a sitting somebody does once and then rarely, and a pane
@@ -573,6 +684,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Ctrl+Shift+P"),
         toolbar: true,
         scope: Scope::Manager,
+        menu: Menu::Item,
     },
     Command {
         id: "sort.taken",
@@ -581,6 +693,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: None,
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Item,
     },
     Command {
         id: "sort.name",
@@ -589,6 +702,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: None,
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Item,
     },
     Command {
         id: "sort.rating",
@@ -597,6 +711,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: None,
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Item,
     },
     Command {
         id: "sort.modified",
@@ -605,6 +720,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: None,
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Item,
     },
     Command {
         id: "sort.size",
@@ -613,6 +729,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: None,
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Item,
     },
     Command {
         id: "sort.dimensions",
@@ -621,6 +738,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: None,
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Item,
     },
     Command {
         id: "sort.reverse",
@@ -629,6 +747,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Ctrl+Shift+R"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Section,
     },
     // S for subfolders. Ctrl+R turns a photograph right, as it does in
     // Zoner.
@@ -639,6 +758,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Ctrl+Shift+S"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Item,
     },
     Command {
         id: "view.filter",
@@ -647,6 +767,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Ctrl+F"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Item,
     },
     Command {
         id: "view.clear_filter",
@@ -655,6 +776,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Ctrl+Shift+F"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Item,
     },
     Command {
         id: "view.toggle_tree",
@@ -663,6 +785,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Ctrl+1"),
         toolbar: true,
         scope: Scope::Manager,
+        menu: Menu::Section,
     },
     Command {
         id: "view.toggle_preview",
@@ -671,6 +794,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Ctrl+2"),
         toolbar: true,
         scope: Scope::Manager,
+        menu: Menu::Item,
     },
     Command {
         id: "view.toggle_info",
@@ -679,6 +803,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Ctrl+3"),
         toolbar: true,
         scope: Scope::Manager,
+        menu: Menu::Item,
     },
     Command {
         id: "view.reset_layout",
@@ -687,6 +812,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Ctrl+0"),
         toolbar: false,
         scope: Scope::Manager,
+        menu: Menu::Item,
     },
     Command {
         id: "view.bigger_tiles",
@@ -695,6 +821,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Ctrl+Plus"),
         toolbar: true,
         scope: Scope::Manager,
+        menu: Menu::Section,
     },
     Command {
         id: "view.smaller_tiles",
@@ -703,6 +830,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Ctrl+Minus"),
         toolbar: true,
         scope: Scope::Manager,
+        menu: Menu::Item,
     },
     // A bare F, the way every photo application spells it.
     Command {
@@ -713,6 +841,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Ctrl+Shift+L"),
         toolbar: true,
         scope: Scope::Manager,
+        menu: Menu::Item,
     },
     Command {
         id: "view.fullscreen",
@@ -721,6 +850,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("F"),
         toolbar: false,
         scope: Scope::Everywhere,
+        menu: Menu::Section,
     },
     Command {
         id: "view.next_theme",
@@ -729,6 +859,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Ctrl+T"),
         toolbar: true,
         scope: Scope::Everywhere,
+        menu: Menu::Item,
     },
     Command {
         id: "view.settings",
@@ -737,6 +868,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Ctrl+Comma"),
         toolbar: true,
         scope: Scope::Everywhere,
+        menu: Menu::Section,
     },
     // The editor's own keys. They are commands and not hard-wired keys so
     // that they can be rebound alongside everything else — and they share
@@ -751,6 +883,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Escape"),
         toolbar: false,
         scope: Scope::Editor,
+        menu: Menu::Item,
     },
     // Back to the manager standing on this photograph — the folder opened,
     // the tree unfolded to it and the tile chosen.
@@ -761,6 +894,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Enter"),
         toolbar: false,
         scope: Scope::Editor,
+        menu: Menu::Item,
     },
     Command {
         id: "editor.fullscreen",
@@ -769,6 +903,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Ctrl+F"),
         toolbar: false,
         scope: Scope::Editor,
+        menu: Menu::Item,
     },
     // The next and the previous photograph of the folder, in the order the
     // manager shows them. The wheel does the same.
@@ -779,6 +914,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("PageDown"),
         toolbar: false,
         scope: Scope::Editor,
+        menu: Menu::Section,
     },
     Command {
         id: "editor.previous",
@@ -787,6 +923,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("PageUp"),
         toolbar: false,
         scope: Scope::Editor,
+        menu: Menu::Item,
     },
     // One pixel per point, and the whole photograph again: `*` and `0` on
     // the numeric keypad, as every viewer since ACDSee has had them. The
@@ -800,6 +937,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("*"),
         toolbar: false,
         scope: Scope::Editor,
+        menu: Menu::Section,
     },
     Command {
         id: "editor.fit",
@@ -808,6 +946,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("0"),
         toolbar: false,
         scope: Scope::Editor,
+        menu: Menu::Item,
     },
     // A step closer and a step back, about the middle of what is on
     // screen. The keypad's + and - arrive as the same keys as the row's.
@@ -818,6 +957,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Plus"),
         toolbar: false,
         scope: Scope::Editor,
+        menu: Menu::Item,
     },
     Command {
         id: "editor.zoom_out",
@@ -826,6 +966,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Minus"),
         toolbar: false,
         scope: Scope::Editor,
+        menu: Menu::Item,
     },
     Command {
         id: "help.diagnostics",
@@ -834,6 +975,7 @@ pub const COMMANDS: &[Command] = &[
         default_shortcut: Some("Ctrl+Shift+D"),
         toolbar: true,
         scope: Scope::Everywhere,
+        menu: Menu::Item,
     },
 ];
 
@@ -1088,6 +1230,52 @@ mod tests {
                 bindings.command_for(&shortcut, Scope::Manager).unwrap().id,
                 id,
                 "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_submenu_has_a_translation() {
+        for command in COMMANDS {
+            if let Menu::Under(key) = command.menu {
+                assert!(crate::i18n::has(key), "{} is under {key}", command.id);
+            }
+        }
+    }
+
+    /// A key that walks the gallery is a key; the menu has no business with
+    /// "one tile to the left".
+    #[test]
+    fn the_keys_that_walk_the_gallery_are_not_on_the_menu() {
+        for command in COMMANDS.iter().filter(|c| c.id.starts_with("nav.")) {
+            assert_eq!(command.menu, Menu::Hidden, "{}", command.id);
+        }
+    }
+
+    /// Every group has something on the menu, or the menu bar carries an
+    /// empty menu.
+    #[test]
+    fn every_group_has_something_on_the_menu() {
+        for group in Group::ALL {
+            assert!(
+                COMMANDS
+                    .iter()
+                    .any(|c| c.group == group && c.menu != Menu::Hidden),
+                "{group:?}"
+            );
+        }
+    }
+
+    /// Paste means the files in the manager and a picture in the editor;
+    /// the key is the same in both.
+    #[test]
+    fn ctrl_v_pastes_wherever_somebody_is() {
+        let bindings = Bindings::defaults();
+        let shortcut: Shortcut = "Ctrl+V".parse().unwrap();
+        for place in [Scope::Manager, Scope::Editor] {
+            assert_eq!(
+                bindings.command_for(&shortcut, place).unwrap().id,
+                "file.paste"
             );
         }
     }

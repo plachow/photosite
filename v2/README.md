@@ -6,7 +6,7 @@ A clean sheet. Rust, egui over wgpu, Windows / macOS / Linux from one source.
 cd v2
 cargo run --release -p photosite-ui              # the application
 cargo run --release -p photosite-cli -- doctor   # where everything lives
-cargo test --workspace                           # 646 tests, no window, no GPU
+cargo test --workspace                           # 659 tests, no window, no GPU
 ./packaging/pack.ps1                             # a Windows installer
 ```
 
@@ -706,6 +706,55 @@ read from it would pass or fail by what they last copied.
 | copy here | `FileDrop`, `FileNameW`, `FileName` and drop effect 1 |
 | cut here | the same, drop effect 2, so Explorer moves rather than copies |
 | copy in Explorer, paste here | the file arrives in the open folder |
+
+## The menu bar
+
+File, Edit, View, Go, Photo, Editor and Help, under the title bar the way
+every desktop program has them, and **built from the command registry**:
+each command says which menu it is in (its group), whether a line goes above
+it, which submenu holds it — the stars and the labels have one each — and
+whether it is on the menu at all. The arrows that walk the gallery are not:
+a menu entry for "one tile to the left" is noise. Sorting is a submenu of
+View rather than a menu of its own.
+
+A command that cannot be given from where somebody is — the manager's
+commands while a photograph is in front — is greyed rather than left out,
+so the menus keep their shape; switches such as the subfolders, the list and
+the panes are ticked. The keys are written beside every entry, from the same
+bindings the keyboard reads.
+
+## A picture off the clipboard
+
+`Ctrl+V` in the manager pastes the files on the clipboard into the open
+folder. When there are no files on it but a picture — a screenshot, a
+photograph copied in Zoner — it opens the picture as a new image in a tab
+of its own; in the editor it only ever does that. **File › New from
+clipboard** does the same without ever pasting files. The clipboard is read
+through arboard, so this works on every platform; what is see-through is
+laid over white.
+
+A pasted picture exists nowhere else, so its tab does not close without
+asking: Save as…, Close without saving, or Cancel. The window will not close
+over one either — the close is held and the same question asked for each.
+`Ctrl+S` and `Ctrl+Shift+S` save it, as JPEG, PNG, WebP, TIFF or BMP by the
+name's extension, a name without one being a JPEG. Saved, the tab is that
+file, and saved beside the photographs being looked at, it appears among
+them.
+
+**egui never passes the clipboard keys on as keys.** It turns `Ctrl+C`,
+`Ctrl+X` and `Ctrl+V` into copy, cut and paste events of its own, and
+`Ctrl+V` into nothing at all when the clipboard holds no text — files from
+Explorer, a picture from Zoner. The events are read as the keys again, and
+on Windows a keyboard hook on the window's own thread hears `Ctrl+V` for
+everything else, acting on it only if the window it was pressed in is still
+the active one, so a paste typed into a system dialog stays there.
+
+## The status bar
+
+Along the bottom, as in v1: how much of the folder is showing and how large
+it is, how much is selected, and what the application is doing or has just
+done. A task in progress takes that last place — `Moving: 114 / 117 (97 %)`
+— and gives it back with how it ended.
 
 ## The menu on a tile
 

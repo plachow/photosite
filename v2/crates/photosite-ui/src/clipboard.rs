@@ -119,12 +119,66 @@ pub fn dib(picture: &photosite_image::Rgb) -> Vec<u8> {
     out
 }
 
-/// What to paste: the system's files if it has any, else ours.
-pub fn take(held: &Held) -> Held {
-    match system_take() {
-        Some(from_system) => from_system,
-        None => held.clone(),
+/// The files on the system's clipboard, if it holds any.
+pub fn system_files() -> Option<Held> {
+    system_take()
+}
+
+/// A picture on the system's clipboard — a screenshot, a photograph copied
+/// in another program — or nothing when there is none, which is ordinary.
+#[cfg(not(test))]
+pub fn picture() -> Option<photosite_image::Rgb> {
+    let mut clipboard = match arboard::Clipboard::new() {
+        Ok(clipboard) => clipboard,
+        Err(error) => {
+            tracing::warn!(%error, "the clipboard would not open");
+            return None;
+        }
+    };
+
+    let image = clipboard.get_image().ok()?;
+    over_white(image.width, image.height, &image.bytes)
+}
+
+/// Left alone under test, like the rest of the system's clipboard: a test
+/// puts its picture here instead.
+#[cfg(test)]
+pub fn picture() -> Option<photosite_image::Rgb> {
+    PICTURE.with(|picture| picture.borrow().clone())
+}
+
+#[cfg(test)]
+thread_local! {
+    static PICTURE: std::cell::RefCell<Option<photosite_image::Rgb>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// What [`picture`] finds under test, on this thread.
+#[cfg(test)]
+pub fn put_picture_for_test(picture: Option<photosite_image::Rgb>) {
+    PICTURE.with(|held| *held.borrow_mut() = picture);
+}
+
+/// Four bytes a pixel as three, with what is see-through laid over white.
+///
+/// A photograph has no transparency. A screenshot's rounded corner or a
+/// picture copied out of a browser has, and laid over black it would come
+/// out as a black corner nobody put there.
+pub fn over_white(width: usize, height: usize, rgba: &[u8]) -> Option<photosite_image::Rgb> {
+    if width == 0 || height == 0 || rgba.len() < width * height * 4 {
+        return None;
     }
+
+    let mut rgb = Vec::with_capacity(width * height * 3);
+    for pixel in rgba.as_chunks::<4>().0.iter().take(width * height) {
+        let alpha = u32::from(pixel[3]);
+        for channel in &pixel[..3] {
+            let over = (u32::from(*channel) * alpha + 255 * (255 - alpha) + 127) / 255;
+            rgb.push(over as u8);
+        }
+    }
+
+    photosite_image::Rgb::new(width as u32, height as u32, rgb).ok()
 }
 
 /// Speaks to the system's clipboard itself, and says whether it did. When
@@ -309,6 +363,16 @@ fn is_sidecar(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn what_is_see_through_is_laid_over_white() {
+        let picture = over_white(2, 1, &[255, 0, 0, 255, 0, 0, 0, 0]).unwrap();
+        assert_eq!(picture.pixels, [255, 0, 0, 255, 255, 255]);
+
+        let half = over_white(1, 1, &[0, 0, 0, 128]).unwrap();
+        assert_eq!(half.pixels, [127, 127, 127]);
+        assert!(over_white(2, 2, &[0; 4]).is_none(), "too few bytes");
+    }
 
     /// Two by two: a red and a green pixel over a blue and a white one.
     #[test]

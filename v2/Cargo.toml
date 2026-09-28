@@ -50,6 +50,11 @@ pollster = "1"
 # other platform agrees on how to put files on a clipboard, and pretending
 # otherwise would be a portable API over an unportable idea.
 clipboard-win = "5"
+# A picture off the clipboard, on every platform: a screenshot, a photograph
+# copied in another program. egui already carries it, at this version and with
+# pictures turned on, for its own copy and paste; naming it here adds a line
+# and not a build.
+arboard = { version = "3.6", default-features = false, features = ["image-data"] }
 # Installing, and one day updating. Velopack is what v1 shipped with, and the
 # reasons hold better here: it needs no administrator, no MSI and no code
 # signing certificate to produce something somebody can double-click, and the

@@ -2897,6 +2897,7 @@ name = "photosite-ui"
 version = "2.0.0"
 dependencies = [
  "anyhow",
+ "arboard",
  "clipboard-win",
  "crossbeam-channel",
  "eframe",

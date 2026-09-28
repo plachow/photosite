@@ -2,10 +2,10 @@
 //!
 //! The window carries a strip of tabs: the manager first, which cannot be
 //! closed, and after it one tab per photograph that was opened. A tab holds
-//! the photograph and how it is being looked at; nothing in it is written
-//! anywhere yet, which is why closing one asks nothing. When the editor can
-//! change a photograph, [`Editor::can_close`] is the one place that has to
-//! learn to say no.
+//! the photograph and how it is being looked at. A photograph from a file
+//! holds nothing that is not in the file, and closes without asking; a
+//! picture pasted off the clipboard exists nowhere else until it is saved,
+//! and [`Editor::can_close`] says no for it until then.
 //!
 //! The keys are commands from the registry, not keys read here — so that
 //! `Escape`, `Enter` and the rest can be rebound with everything else. What
@@ -22,17 +22,51 @@ use egui::{Sense, Vec2};
 use photosite_core::compare;
 use photosite_core::t;
 use photosite_core::theme::Palette;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 /// How far the wheel has to turn before the page turns. A notch of a mouse
 /// wheel is more than this; a touchpad gets there in a few movements rather
 /// than turning a page per pixel.
 const NOTCH: f32 = 30.0;
 
+/// A picture that came off the clipboard rather than out of a file.
+///
+/// It is kept whole and uploaded once: there is no file to decode it from
+/// again, so it cannot go through the texture cache, which throws away what
+/// it can make again.
+#[derive(Clone)]
+pub struct Pasted {
+    /// Counted from one in the order they were pasted: the tab's name until
+    /// the picture is saved.
+    pub number: usize,
+    pub pixels: Arc<photosite_image::Rgb>,
+    pub texture: egui::TextureHandle,
+}
+
+impl std::fmt::Debug for Pasted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Pasted")
+            .field("number", &self.number)
+            .field("width", &self.pixels.width)
+            .field("height", &self.pixels.height)
+            .finish()
+    }
+}
+
+impl PartialEq for Pasted {
+    fn eq(&self, other: &Self) -> bool {
+        self.number == other.number
+    }
+}
+
 /// A photograph open in a tab.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Editor {
+    /// The file, or nothing for a picture pasted and not yet saved.
     pub path: PathBuf,
+    /// The picture itself, while it has no file.
+    pub pasted: Option<Pasted>,
     /// How closely it is being looked at, and at which part.
     pub view: compare::View,
     /// Wheel movement not yet turned into a page. See [`NOTCH`].
@@ -49,6 +83,7 @@ impl Editor {
     pub fn open(path: PathBuf) -> Self {
         Self {
             path,
+            pasted: None,
             view: compare::View::FITTED,
             wheel: 0.0,
             cell: (1.0, 1.0),
@@ -56,12 +91,39 @@ impl Editor {
         }
     }
 
-    /// Whether the tab may close without asking. Always, for now: the editor
-    /// holds nothing that is not in the file. When it does, this is where
-    /// the question goes — and nowhere else, so that the cross on the tab,
-    /// the key and paging away all ask it the same way.
+    /// A tab for a picture that has no file.
+    pub fn pasted(pasted: Pasted) -> Self {
+        Self {
+            pasted: Some(pasted),
+            ..Self::open(PathBuf::new())
+        }
+    }
+
+    /// Whether the tab may close without asking: yes for a photograph from a
+    /// file, which holds nothing that is not in the file; no for a picture
+    /// that exists nowhere else yet. This is where the question goes — and
+    /// nowhere else, so that the cross on the tab, the key and paging away
+    /// all ask it the same way.
     pub fn can_close(&self) -> bool {
-        true
+        self.pasted.is_none()
+    }
+
+    /// What the tab is called: the file's name, or which pasted picture.
+    pub fn name(&self) -> String {
+        match &self.pasted {
+            Some(pasted) => t!("editor-pasted", number = pasted.number as i64),
+            None => self
+                .path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| self.path.to_string_lossy().into_owned()),
+        }
+    }
+
+    /// The picture has been saved: from now on it is that file.
+    pub fn saved_as(&mut self, path: PathBuf) {
+        self.path = path;
+        self.pasted = None;
     }
 
     /// Moves the tab on to another photograph. The view starts over: a
@@ -130,6 +192,25 @@ impl Tabs {
         self.active
     }
 
+    /// Opens a pasted picture in a tab of its own, in front.
+    pub fn open_pasted(&mut self, pasted: Pasted) -> usize {
+        self.editors.push(Editor::pasted(pasted));
+        self.active = self.editors.len();
+        self.active
+    }
+
+    /// Which tab holds this pasted picture.
+    pub fn of_pasted(&self, number: usize) -> Option<usize> {
+        self.editors
+            .iter()
+            .position(|editor| editor.pasted.as_ref().is_some_and(|p| p.number == number))
+            .map(|at| at + 1)
+    }
+
+    pub fn editor_mut(&mut self, tab: usize) -> Option<&mut Editor> {
+        self.editors.get_mut(tab.checked_sub(1)?)
+    }
+
     /// Closes a tab and says which photograph it held. The manager cannot be
     /// closed, and asking is answered with `None`.
     ///
@@ -171,14 +252,13 @@ pub fn strip(app: &mut App, ui: &mut egui::Ui, palette: &Palette, ctx: &egui::Co
         ui.spacing_mut().item_spacing.x = 2.0;
         let active = app.tabs.active();
         let names: Vec<(usize, String)> = std::iter::once((Tabs::MANAGER, t!("tab-manager")))
-            .chain(app.tabs.editors().iter().enumerate().map(|(at, editor)| {
-                let name = editor
-                    .path
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| editor.path.to_string_lossy().into_owned());
-                (at + 1, name)
-            }))
+            .chain(
+                app.tabs
+                    .editors()
+                    .iter()
+                    .enumerate()
+                    .map(|(at, editor)| (at + 1, editor.name())),
+            )
             .collect();
 
         for (tab, name) in names {
@@ -260,36 +340,44 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, palette: &Palette, ctx: &egui::Con
     ui.painter()
         .rect_filled(area, 0, theme::color(palette.well));
 
-    let image = looking::shown(app, &editor.path);
+    let image = match &editor.pasted {
+        Some(pasted) => (pasted.pixels.width as f32, pasted.pixels.height as f32),
+        None => looking::shown(app, &editor.path),
+    };
     let cell = (area.width(), area.height());
     let frame = compare::frame(cell, image, editor.view);
     let response = ui.interact(area, ui.id().with("editor"), Sense::click_and_drag());
 
     // Whatever is already decoded is drawn at once and replaced as
     // something better arrives, so the tab is never empty while the disk
-    // is being read.
+    // is being read. A pasted picture is there from the start.
     let chosen = [Want::Close, Want::Preview, Want::Thumb, Want::Quick]
         .into_iter()
         .map(|want| (editor.path.clone(), want))
-        .find(|key| app.texture(key).is_some());
-    match chosen {
-        Some(key) => {
-            if let Some(texture) = app.texture(&key) {
-                ui.painter().with_clip_rect(area).image(
-                    texture.id(),
-                    egui::Rect::from_min_size(
-                        area.min + Vec2::new(frame.target[0], frame.target[1]),
-                        Vec2::new(frame.target[2], frame.target[3]),
-                    ),
-                    egui::Rect::from_min_size(
-                        egui::pos2(frame.source[0], frame.source[1]),
-                        Vec2::new(frame.source[2], frame.source[3]),
-                    ),
-                    egui::Color32::WHITE,
-                );
-            }
+        .find(|key| editor.pasted.is_none() && app.texture(key).is_some());
+    let texture = match (&editor.pasted, &chosen) {
+        (Some(pasted), _) => Some(pasted.texture.id()),
+        (None, Some(key)) => app.texture(key).map(egui::TextureHandle::id),
+        (None, None) => None,
+    };
+    if let Some(key) = &chosen {
+        app.touch(key);
+    }
 
-            app.touch(&key);
+    match texture {
+        Some(texture) => {
+            ui.painter().with_clip_rect(area).image(
+                texture,
+                egui::Rect::from_min_size(
+                    area.min + Vec2::new(frame.target[0], frame.target[1]),
+                    Vec2::new(frame.target[2], frame.target[3]),
+                ),
+                egui::Rect::from_min_size(
+                    egui::pos2(frame.source[0], frame.source[1]),
+                    Vec2::new(frame.source[2], frame.source[3]),
+                ),
+                egui::Color32::WHITE,
+            );
         }
         None => {
             ui.painter().text(
@@ -306,12 +394,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, palette: &Palette, ctx: &egui::Con
     // two beside it — so that turning the page shows something at once and
     // the sharp version follows.
     let mut wanted_close = Vec::new();
-    if !app.has(&editor.path, Want::Close) {
+    if editor.pasted.is_none() && !app.has(&editor.path, Want::Close) {
         wanted_close.push(editor.path.clone());
     }
 
     let mut wanted_preview = Vec::new();
-    for by in [1, -1] {
+    for by in [1, -1].into_iter().filter(|_| editor.pasted.is_none()) {
         if let Some(neighbour) = app.neighbour_of(&editor.path, by)
             && !app.has(&neighbour, Want::Preview)
         {
@@ -382,7 +470,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, palette: &Palette, ctx: &egui::Con
         ui,
         egui::Rect::from_min_max(egui::pos2(full.min.x, area.max.y), full.max),
         palette,
-        &editor.path,
+        &editor,
         cell,
         image,
     );
@@ -395,7 +483,7 @@ fn beneath(
     ui: &mut egui::Ui,
     rect: egui::Rect,
     palette: &Palette,
-    path: &Path,
+    editor: &Editor,
     cell: (f32, f32),
     image: (f32, f32),
 ) {
@@ -405,19 +493,26 @@ fn beneath(
             .max_rect(rect)
             .layout(egui::Layout::left_to_right(egui::Align::Center)),
     );
-    let name = path
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
     bar.add_space(6.0);
-    bar.label(egui::RichText::new(name).color(theme::color(palette.text)));
+    bar.label(egui::RichText::new(editor.name()).color(theme::color(palette.text)));
 
     // Where it stands, in the order the manager shows the folder. Nothing
-    // when the folder has moved on without it.
-    let standing = app.position_of(path).map(|at| (at + 1, app.count()));
-    let said = match standing {
-        Some((at, count)) => t!("editor-position", at = at as i64, count = count as i64),
-        None => t!("editor-gone"),
+    // when the folder has moved on without it — and a pasted picture, which
+    // stands nowhere, says how large it is instead.
+    let said = match &editor.pasted {
+        Some(pasted) => t!(
+            "editor-pasted-size",
+            width = pasted.pixels.width as i64,
+            height = pasted.pixels.height as i64
+        ),
+        None => match app.position_of(&editor.path) {
+            Some(at) => t!(
+                "editor-position",
+                at = at as i64 + 1,
+                count = app.count() as i64
+            ),
+            None => t!("editor-gone"),
+        },
     };
     bar.label(egui::RichText::new(said).color(theme::color(palette.dim)));
 
