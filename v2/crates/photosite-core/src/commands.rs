@@ -387,14 +387,14 @@ pub const COMMANDS: &[Command] = &[
         scope: Scope::Manager,
     },
     // A quarter-turn either way, without re-encoding anything: the
-    // orientation tag changes and the pixels stay as they are. No keys yet
-    // — Zoner's Ctrl+L and Ctrl+R are the list view and the subfolders
-    // here.
+    // orientation tag changes and the pixels stay as they are. Zoner's keys,
+    // and v1's: somebody moving between them turns photographs by hand
+    // without thinking about which application is in front.
     Command {
         id: "photo.rotate_left",
         title_key: "command-photo-rotate-left",
         group: Group::Photo,
-        default_shortcut: None,
+        default_shortcut: Some("Ctrl+L"),
         toolbar: false,
         scope: Scope::Manager,
     },
@@ -402,7 +402,7 @@ pub const COMMANDS: &[Command] = &[
         id: "photo.rotate_right",
         title_key: "command-photo-rotate-right",
         group: Group::Photo,
-        default_shortcut: None,
+        default_shortcut: Some("Ctrl+R"),
         toolbar: false,
         scope: Scope::Manager,
     },
@@ -630,11 +630,13 @@ pub const COMMANDS: &[Command] = &[
         toolbar: false,
         scope: Scope::Manager,
     },
+    // S for subfolders. Ctrl+R turns a photograph right, as it does in
+    // Zoner.
     Command {
         id: "view.recursive",
         title_key: "command-view-recursive",
         group: Group::View,
-        default_shortcut: Some("Ctrl+R"),
+        default_shortcut: Some("Ctrl+Shift+S"),
         toolbar: false,
         scope: Scope::Manager,
     },
@@ -707,7 +709,8 @@ pub const COMMANDS: &[Command] = &[
         id: "view.as_list",
         title_key: "command-view-as-list",
         group: Group::View,
-        default_shortcut: Some("Ctrl+L"),
+        // With Shift, because Ctrl+L on its own turns a photograph left.
+        default_shortcut: Some("Ctrl+Shift+L"),
         toolbar: true,
         scope: Scope::Manager,
     },
@@ -1064,6 +1067,27 @@ mod tests {
                 bindings.command_for(&shortcut, Scope::Editor).unwrap().id,
                 editor,
                 "{text} in the editor"
+            );
+        }
+    }
+
+    /// Zoner's keys for turning a photograph, which somebody moving between
+    /// the two presses without thinking — and the views that had them before
+    /// still have keys of their own.
+    #[test]
+    fn ctrl_l_and_ctrl_r_turn_the_photograph_as_they_do_in_zoner() {
+        let bindings = Bindings::defaults();
+        for (text, id) in [
+            ("Ctrl+L", "photo.rotate_left"),
+            ("Ctrl+R", "photo.rotate_right"),
+            ("Ctrl+Shift+L", "view.as_list"),
+            ("Ctrl+Shift+S", "view.recursive"),
+        ] {
+            let shortcut: Shortcut = text.parse().unwrap();
+            assert_eq!(
+                bindings.command_for(&shortcut, Scope::Manager).unwrap().id,
+                id,
+                "{text}"
             );
         }
     }

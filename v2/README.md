@@ -6,7 +6,7 @@ A clean sheet. Rust, egui over wgpu, Windows / macOS / Linux from one source.
 cd v2
 cargo run --release -p photosite-ui              # the application
 cargo run --release -p photosite-cli -- doctor   # where everything lives
-cargo test --workspace                           # 639 tests, no window, no GPU
+cargo test --workspace                           # 640 tests, no window, no GPU
 ./packaging/pack.ps1                             # a Windows installer
 ```
 
@@ -546,7 +546,7 @@ same spot, and one box for the lot would say they were.
 
 ## Two views of one folder
 
-`Ctrl+L` turns the wall of tiles into a list of rows: name, when it was taken,
+`Ctrl+Shift+L` turns the wall of tiles into a list of rows: name, when it was taken,
 the camera, the frame, the size, and the stars, the label and the position mark
 in a column of their own. Both are virtualised the same way, so the number of
 photographs does not matter to either.
@@ -717,6 +717,9 @@ own commands, so the catalogue follows the file. Both are modal, so they wait
 one frame for our menu to leave the screen.
 
 ### Turning
+
+`Ctrl+L` and `Ctrl+R` turn left and right, as they do in Zoner; the list view
+is `Ctrl+Shift+L` and the subfolders `Ctrl+Shift+S` because of it.
 
 **A turn is the EXIF orientation tag and nothing else.** The pixels are never
 re-encoded, which is the whole of "lossless": every reader turns them on the

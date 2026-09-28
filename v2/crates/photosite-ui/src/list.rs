@@ -3,8 +3,8 @@
 //! v1 kept a details list beside the grid, in a panel of its own. This is the
 //! same folder seen the same way, but as a **switch** rather than a second
 //! panel: two views of one thing competing for the same width means both are
-//! too narrow, and nobody reads a table four columns wide. `Ctrl+L` goes back
-//! and forth, and the choice is remembered.
+//! too narrow, and nobody reads a table four columns wide. `Ctrl+Shift+L` goes
+//! back and forth, and the choice is remembered.
 //!
 //! Virtualised by hand, the same as the grid: only the rows on screen are
 //! drawn, so the number of photographs does not matter.
