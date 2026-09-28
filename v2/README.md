@@ -6,7 +6,7 @@ A clean sheet. Rust, egui over wgpu, Windows / macOS / Linux from one source.
 cd v2
 cargo run --release -p photosite-ui              # the application
 cargo run --release -p photosite-cli -- doctor   # where everything lives
-cargo test --workspace                           # 666 tests, no window, no GPU
+cargo test --workspace                           # 678 tests, no window, no GPU
 ./packaging/pack.ps1                             # a Windows installer
 ```
 
@@ -733,6 +733,20 @@ commands while a photograph is in front — is greyed rather than left out,
 so the menus keep their shape; switches such as the subfolders, the list and
 the panes are ticked. The keys are written beside every entry, from the same
 bindings the keyboard reads.
+
+**The keys are the platform's**, and the bar is drawn and driven here,
+because egui's own menus know nothing of the keyboard. On Windows and Linux
+every entry has an access key, underlined while Alt is held or while the
+keyboard has the menu: Alt and a letter opens a menu, Alt alone or F10
+lights the bar, the arrows walk it and step into submenus, Enter chooses,
+Escape steps back one level at a time, and a letter chooses its entry. The
+access keys are **worked out rather than translated**, as KDE does it — the
+titles with the fewest letters choose first, a word's first letter before
+any other, and none of the letters Alt already means something with (C and
+X) — so a translation that moves a word cannot make two entries share one.
+On the Mac there are no access keys and the shortcuts are written `⇧⌘S`.
+While the menu has the keyboard it has all of it: an arrow that walks a menu
+does not walk the gallery behind it too.
 
 ## A picture off the clipboard
 

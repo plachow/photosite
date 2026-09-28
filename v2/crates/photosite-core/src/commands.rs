@@ -990,6 +990,56 @@ pub fn command(id: &str) -> Option<&'static Command> {
     COMMANDS.iter().find(|command| command.id == id)
 }
 
+/// Chooses an access key for each title — the letter a menu underlines and
+/// that chooses the entry from the keyboard — no two the same, and none of
+/// `taken`. Answers where in each title (counted in characters) the letter
+/// stands, or nothing for a title left without one.
+///
+/// Worked out rather than written into the translations, the way KDE does
+/// it: a letter picked by hand in every language clashes the first time a
+/// translation moves a word, and nobody notices until a key opens the wrong
+/// thing. The titles with the fewest letters to choose from choose first, so
+/// that a short word is not left with nothing because a long one took its
+/// only letters; within a title, the first letter of a word goes first, the
+/// way somebody would choose, then any letter. Only letters and digits a
+/// keyboard types without help — an access key is pressed, not composed.
+pub fn access_keys(titles: &[String], taken: &[char]) -> Vec<Option<usize>> {
+    let letters: Vec<Vec<char>> = titles.iter().map(|title| title.chars().collect()).collect();
+    let choices = |letters: &[char]| {
+        let mut distinct: Vec<char> = letters
+            .iter()
+            .filter(|letter| letter.is_ascii_alphanumeric())
+            .map(char::to_ascii_lowercase)
+            .collect();
+        distinct.sort_unstable();
+        distinct.dedup();
+        distinct.len()
+    };
+    let mut order: Vec<usize> = (0..titles.len()).collect();
+    order.sort_by_key(|at| choices(&letters[*at]));
+
+    let mut used: Vec<char> = taken.iter().map(char::to_ascii_lowercase).collect();
+    let mut chosen: Vec<Option<usize>> = vec![None; titles.len()];
+    for title in order {
+        let letters = &letters[title];
+        let usable = |at: &usize| letters[*at].is_ascii_alphanumeric();
+        let starts_a_word = |at: &usize| *at == 0 || !letters[*at - 1].is_alphanumeric();
+        let free = |at: &usize, used: &[char]| !used.contains(&letters[*at].to_ascii_lowercase());
+
+        let found = (0..letters.len())
+            .filter(usable)
+            .filter(starts_a_word)
+            .find(|at| free(at, &used))
+            .or_else(|| (0..letters.len()).filter(usable).find(|at| free(at, &used)));
+        if let Some(at) = found {
+            used.push(letters[at].to_ascii_lowercase());
+        }
+        chosen[title] = found;
+    }
+
+    chosen
+}
+
 /// A keyboard shortcut, independent of any toolkit.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Shortcut {
@@ -1232,6 +1282,61 @@ mod tests {
                 "{text}"
             );
         }
+    }
+
+    fn keys_of(titles: &[&str], taken: &[char]) -> Vec<Option<char>> {
+        let titles: Vec<String> = titles.iter().map(|t| (*t).to_owned()).collect();
+        access_keys(&titles, taken)
+            .into_iter()
+            .zip(&titles)
+            .map(|(at, title)| at.map(|at| title.chars().nth(at).unwrap()))
+            .collect()
+    }
+
+    /// The menus along the bar, with the letters Alt+C and Alt+X already
+    /// spoken for: File, Edit, View, Go, Photo, Help as every program has
+    /// them, and Editor on its second letter because E is Edit's.
+    #[test]
+    fn the_menus_get_the_letters_everybody_expects() {
+        assert_eq!(
+            keys_of(
+                &["File", "Edit", "View", "Go", "Photo", "Editor", "Help"],
+                &['c', 'x']
+            ),
+            [
+                Some('F'),
+                Some('E'),
+                Some('V'),
+                Some('G'),
+                Some('P'),
+                Some('d'),
+                Some('H')
+            ]
+        );
+    }
+
+    /// A word's first letter before any other, and never one twice.
+    #[test]
+    fn a_letter_already_used_moves_to_the_next_word_then_anywhere() {
+        assert_eq!(
+            keys_of(&["Save", "Save as…", "Rename…"], &[]),
+            [Some('S'), Some('a'), Some('R')]
+        );
+        assert_eq!(
+            keys_of(&["S", "s"], &[]),
+            [Some('S'), None],
+            "one letter twice"
+        );
+    }
+
+    /// A short title chooses before a long one, or "List" is left with no
+    /// letter at all once "Larger tiles", "Info" and the rest have theirs.
+    #[test]
+    fn the_title_with_the_fewest_letters_chooses_first() {
+        assert_eq!(
+            keys_of(&["Larger tiles", "Info", "Smaller tiles", "List"], &[]),
+            [Some('t'), Some('I'), Some('S'), Some('L')]
+        );
     }
 
     #[test]

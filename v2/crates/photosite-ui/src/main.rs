@@ -544,6 +544,8 @@ pub struct App {
     quitting: bool,
     /// A picture being written into a file: the task, which picture, where.
     saving: Option<(u64, usize, PathBuf)>,
+    /// The menu bar: which menu is open, and whether the keyboard has it.
+    pub bar: menubar::Bar,
     /// The folder the tree on the left should scroll to. Set on opening, and
     /// taken by the tree straight away.
     pub scroll_tree_to: Option<PathBuf>,
@@ -776,6 +778,7 @@ impl App {
             close_after_save: None,
             quitting: false,
             saving: None,
+            bar: menubar::Bar::default(),
             scroll_tree_to: None,
             scroll_grid_to: None,
             tabs: editor::Tabs::default(),
@@ -2514,9 +2517,25 @@ impl App {
         }
     }
 
-    /// The key bound to a command, written the way a menu shows it.
+    /// The key bound to a command, written the way the platform writes one
+    /// in a menu: `Ctrl+Shift+S` on Windows and Linux, `⇧⌘S` on the Mac.
     pub fn shortcut_label(&self, id: &str) -> Option<String> {
-        self.bindings.shortcut(id).map(ToString::to_string)
+        let shortcut = self.bindings.shortcut(id)?;
+        if cfg!(target_os = "macos")
+            && let Some(key) = egui::Key::from_name(&shortcut.key)
+        {
+            let mut modifiers = egui::Modifiers::NONE;
+            modifiers.command = shortcut.ctrl;
+            modifiers.mac_cmd = shortcut.ctrl;
+            modifiers.shift = shortcut.shift;
+            modifiers.alt = shortcut.alt;
+            return Some(
+                egui::KeyboardShortcut::new(modifiers, key)
+                    .format(&egui::ModifierNames::SYMBOLS, true),
+            );
+        }
+
+        Some(shortcut.to_string())
     }
 
     /// The kind of file the menu is about: the one under the cursor.
@@ -3477,7 +3496,7 @@ impl App {
         // field had the keys is spent there and does not paste into the
         // gallery a frame later.
         let pasted = paste_key::take();
-        if ctx.egui_wants_keyboard_input() {
+        if ctx.egui_wants_keyboard_input() || self.bar.has_keyboard() {
             return;
         }
 
@@ -3702,6 +3721,8 @@ impl eframe::App for App {
         self.collect_disturbance();
         self.updates.poll();
         self.take_picked_folder();
+        // The menu first: while it has the keyboard, it has all of it.
+        menubar::keys(self, &ctx);
         self.shortcuts(&ctx);
 
         // The system may have switched to dark mode in the meantime.
