@@ -5386,6 +5386,26 @@ mod culling {
         );
     }
 
+    /// Ctrl+Shift+B makes the open folder a favourite, and pressed again
+    /// takes it off.
+    #[test]
+    fn ctrl_shift_b_makes_the_open_folder_a_favourite_and_back() {
+        let (mut app, _data, photos) = three();
+        let key = egui::Event::Key {
+            key: egui::Key::B,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::CTRL | egui::Modifiers::SHIFT,
+        };
+
+        keys_in_a_frame(&mut app, vec![key.clone()]);
+        assert!(app.settings.gallery.is_favourite(photos.path()));
+
+        keys_in_a_frame(&mut app, vec![key]);
+        assert!(app.settings.gallery.favourites.is_empty());
+    }
+
     /// A frame of the Copy to or Move to dialog with these events in it.
     fn a_frame_of_sending(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) {
         let input = egui::RawInput {

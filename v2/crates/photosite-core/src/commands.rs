@@ -343,13 +343,13 @@ pub const COMMANDS: &[Command] = &[
         menu: Menu::Item,
     },
     // A switch on the open folder: ticked, it stands among the favourites
-    // above the tree. No key, because a folder is made a favourite once and
-    // then gone to every day, and the keys are for the every day.
+    // above the tree. B for bookmark, as in a browser, with Shift because
+    // Ctrl+B alone is the batch.
     Command {
         id: "go.favourite",
         title_key: "command-go-favourite",
         group: Group::Go,
-        default_shortcut: None,
+        default_shortcut: Some("Ctrl+Shift+B"),
         toolbar: false,
         scope: Scope::Manager,
         menu: Menu::Section,
