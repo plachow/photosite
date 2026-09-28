@@ -1,6 +1,6 @@
 # PhotoSite
 
-PhotoManager for real life. Based on ideas of Zoner Photo Studio v15 (not its newer versions) in mixup with modern features like AI descriptions and ML face recognition.
+PhotoManager for real life. Based on ideas of Zoner Photo Studio v15 (not its newer versions) in mixup with modern features like AI image reading and describing or ML face recognition.
 
 The repository holds two implementations of it.
 
