@@ -1,9 +1,6 @@
 # PhotoSite
 
-A photo manager and editor built around one idea: nothing is written to your
-photographs until you say so. Browsing, rating, organising and editing all
-happen against a non-destructive recipe; the original file is only touched by
-an explicit save, export or batch run.
+PhotoManager for real life. Based on ideas of Zoner Photo Studio v15 (not its newer versions) in mixup with modern features like AI descriptions and ML face recognition.
 
 The repository holds two implementations of it.
 
