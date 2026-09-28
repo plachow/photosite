@@ -321,13 +321,43 @@ impl Node {
             .into_iter()
             .flatten()
             .flatten()
-            .filter(|entry| entry.file_type().map(|t| t.is_dir()).unwrap_or(false))
+            .filter(is_listed_folder)
             .map(|entry| Node::new(entry.path()))
-            .filter(|node| !node.name.starts_with('$'))
             .collect();
         found.sort_by_key(|a| a.name.to_lowercase());
         self.children = Some(found);
     }
+
+    /// Whether the tree offers to unfold it: when its folders are known,
+    /// whether there are any; when they are not, unless a look inside has
+    /// found none. Until somebody has looked it is offered — most folders do
+    /// have folders in them, and a plus that disappears is better than one
+    /// that appears late under the pointer.
+    pub fn expandable(&self, known: &HashMap<PathBuf, bool>) -> bool {
+        match &self.children {
+            Some(children) => !children.is_empty(),
+            None => known.get(&self.path) != Some(&false),
+        }
+    }
+}
+
+/// A folder the tree shows. Not the system's own `$Recycle.Bin` and the like,
+/// which are folders nobody keeps photographs in.
+fn is_listed_folder(entry: &std::fs::DirEntry) -> bool {
+    entry.file_type().is_ok_and(|kind| kind.is_dir())
+        && !entry.file_name().to_string_lossy().starts_with('$')
+}
+
+/// Whether a folder has a folder the tree would show in it. Stops at the
+/// first one: a folder of ten thousand photographs and one subfolder is
+/// answered as soon as the subfolder turns up. A folder that cannot be read
+/// has nothing to show, which is what unfolding it would say too.
+pub fn has_subfolder(path: &Path) -> bool {
+    std::fs::read_dir(path)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|entry| is_listed_folder(&entry))
 }
 
 pub struct App {
@@ -338,6 +368,12 @@ pub struct App {
     /// Whether a newer release is on its way. See [`updates`].
     updates: updates::Updates,
     images: jobs::Wishlist<Key, Pixels>,
+    /// Which of the folders on screen in the tree have folders in them,
+    /// found out alongside: on a network drive every look inside is a round
+    /// trip, and drawing the tree must not wait for them.
+    pub probing: jobs::Wishlist<PathBuf, bool>,
+    /// What the looks inside found, by folder.
+    pub subfolders: HashMap<PathBuf, bool>,
 
     /// The catalogue.
     ///
@@ -623,6 +659,17 @@ impl App {
             outcome
         });
 
+        // A handful of threads, so that one folder on a drive that has gone
+        // away and takes half a minute to say so does not hold up the rest.
+        let wake = waker.clone();
+        let probing = jobs::Wishlist::new(4, move |folder: &PathBuf| {
+            let answer = has_subfolder(folder);
+            if let Some(ctx) = wake.get() {
+                ctx.request_repaint();
+            }
+            Some(answer)
+        });
+
         // A catalogue that will not open must not take the application with
         // it: browsing still works, only nothing is remembered.
         let catalog = match Catalog::open(&paths.catalog()) {
@@ -651,6 +698,8 @@ impl App {
             tasks: jobs::Tasks::new(),
             updates,
             images,
+            probing,
+            subfolders: HashMap::new(),
             catalog,
             roots: roots(),
             folder: None,
@@ -4780,6 +4829,88 @@ mod tests {
         // And below the target we do not descend: what is inside it we learn
         // when somebody asks by clicking.
         assert!(!child(child(year, "summer"), "sea").expanded);
+    }
+
+    #[test]
+    fn a_folder_with_only_files_or_the_systems_own_has_no_subfolder() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.jpg"), b"x").unwrap();
+        assert!(!has_subfolder(dir.path()));
+
+        std::fs::create_dir(dir.path().join("$RECYCLE.BIN")).unwrap();
+        assert!(!has_subfolder(dir.path()), "the recycle bin counted");
+
+        std::fs::create_dir(dir.path().join("2026")).unwrap();
+        assert!(has_subfolder(dir.path()));
+
+        assert!(!has_subfolder(&dir.path().join("not there")));
+    }
+
+    /// The plus stays until somebody has looked, and goes when the look
+    /// found nothing.
+    #[test]
+    fn a_folder_is_offered_to_unfold_until_it_is_known_to_hold_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let node = Node::new(dir.path().to_path_buf());
+        let mut known = HashMap::new();
+        assert!(node.expandable(&known), "unknown, and not offered");
+
+        known.insert(dir.path().to_path_buf(), false);
+        assert!(!node.expandable(&known));
+
+        known.insert(dir.path().to_path_buf(), true);
+        assert!(node.expandable(&known));
+
+        let mut loaded = Node::new(dir.path().to_path_buf());
+        loaded.load_children();
+        assert!(
+            !loaded.expandable(&known),
+            "what was read wins over what was guessed"
+        );
+    }
+
+    /// The whole way round: the tree is drawn, the folders on it are looked
+    /// into alongside, and the one with nothing in it loses its plus.
+    #[test]
+    fn the_tree_finds_out_which_folders_hold_folders() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("years").join("2026")).unwrap();
+        std::fs::create_dir(dir.path().join("empty")).unwrap();
+
+        let (mut app, _data, _photos) = crate::culling::three();
+        let mut root = Node::new(dir.path().to_path_buf());
+        root.load_children();
+        root.expanded = true;
+        app.roots = vec![root];
+
+        let ctx = egui::Context::default();
+        let palette = *app.palette();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let (years, empty) = (dir.path().join("years"), dir.path().join("empty"));
+        while !(app.subfolders.contains_key(&years) && app.subfolders.contains_key(&empty)) {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::pos2(0.0, 0.0),
+                    egui::vec2(400.0, 800.0),
+                )),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| grid::tree(&mut app, ui, &palette));
+            out.textures_delta.clear();
+            assert!(
+                std::time::Instant::now() < deadline,
+                "never looked: {:?}",
+                app.subfolders
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        assert_eq!(app.subfolders.get(&years), Some(&true));
+        assert_eq!(app.subfolders.get(&empty), Some(&false));
+        let children = app.roots[0].children.as_ref().unwrap();
+        let of = |name: &str| children.iter().find(|child| child.name == name).unwrap();
+        assert!(of("years").expandable(&app.subfolders));
+        assert!(!of("empty").expandable(&app.subfolders));
     }
 
     #[test]

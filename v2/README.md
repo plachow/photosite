@@ -6,7 +6,7 @@ A clean sheet. Rust, egui over wgpu, Windows / macOS / Linux from one source.
 cd v2
 cargo run --release -p photosite-ui              # the application
 cargo run --release -p photosite-cli -- doctor   # where everything lives
-cargo test --workspace                           # 659 tests, no window, no GPU
+cargo test --workspace                           # 665 tests, no window, no GPU
 ./packaging/pack.ps1                             # a Windows installer
 ```
 
@@ -706,6 +706,17 @@ read from it would pass or fail by what they last copied.
 | copy here | `FileDrop`, `FileNameW`, `FileName` and drop effect 1 |
 | cut here | the same, drop effect 2, so Explorer moves rather than copies |
 | copy in Explorer, paste here | the file arrives in the open folder |
+
+## The folder tree
+
+Explorer's tree: a boxed plus or minus, a yellow folder, the open one's row
+lit — all drawn, since the default font has none of it. **A plus only where
+there is something to unfold.** Whether a folder has folders in it is found
+out on a thread alongside, for the folders on screen and nothing else, and
+the look stops at the first folder it meets; until the answer comes the plus
+is shown, because most folders do have folders in them. Drawing the tree
+never waits for a disk: on a network drive every look inside is a round
+trip, and a drive that has gone away takes half a minute to say so.
 
 ## The menu bar
 

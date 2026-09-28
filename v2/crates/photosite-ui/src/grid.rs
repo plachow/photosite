@@ -375,23 +375,44 @@ pub fn tree(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
             // cleared afterwards, it would clear the very one this tree just
             // created by being clicked.
             let scroll_to = app.scroll_tree_to.take();
+            for (folder, has) in app.probing.drain(256) {
+                app.subfolders.insert(folder, has);
+            }
+
             let mut roots = std::mem::take(&mut app.roots);
+            let mut unknown: Vec<PathBuf> = Vec::new();
             for root in &mut roots {
                 node(
                     ui,
                     root,
                     palette,
-                    current.as_deref(),
-                    scroll_to.as_deref(),
+                    Place {
+                        current: current.as_deref(),
+                        scroll_to: scroll_to.as_deref(),
+                        known: &app.subfolders,
+                    },
                     &mut pick,
+                    &mut unknown,
                 );
             }
 
             app.roots = roots;
+            app.probing.wish(vec![unknown]);
             if let Some(folder) = pick {
                 app.open(folder);
             }
         });
+}
+
+/// What every folder of the tree is drawn against.
+#[derive(Clone, Copy)]
+struct Place<'a> {
+    /// The folder open in the gallery.
+    current: Option<&'a Path>,
+    /// The folder to bring into view.
+    scroll_to: Option<&'a Path>,
+    /// Which folders have folders in them, as far as anybody has looked.
+    known: &'a std::collections::HashMap<PathBuf, bool>,
 }
 
 /// One folder of the tree, drawn the way Explorer draws one: a boxed plus
@@ -399,26 +420,38 @@ pub fn tree(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
 /// lit. Everything is painted rather than written — the default font has
 /// no glyph for any of it, and a folder that comes out as an empty box is
 /// not a folder.
+///
+/// A folder whose own folders are not known yet goes on `unknown`, to be
+/// looked into alongside.
 fn node(
     ui: &mut egui::Ui,
     node: &mut Node,
     palette: &Palette,
-    current: Option<&Path>,
-    scroll_to: Option<&Path>,
+    place: Place<'_>,
     pick: &mut Option<PathBuf>,
+    unknown: &mut Vec<PathBuf>,
 ) {
     const ROW: f32 = 18.0;
-    let is_current = current == Some(node.path.as_path());
+    let is_current = place.current == Some(node.path.as_path());
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 3.0;
 
-        // The expander. A folder whose children have not been looked at is
-        // given one, because most folders have folders in them and asking
-        // the disk about every one just to draw the tree is what makes a
-        // tree over a network drive take a minute to open. A folder known
-        // to be empty gets the space and no box.
+        // The expander. Whether a folder has folders in it is found out on
+        // a thread alongside, for the folders on screen, and until the
+        // answer comes the box is shown: most folders do have folders in
+        // them, and asking the disk while drawing is what makes a tree over
+        // a network drive take a minute to open. A folder known to have none
+        // gets the space and no box.
         let (rect, response) = ui.allocate_exact_size(Vec2::new(ROW, ROW), Sense::click());
-        let childless = node.children.as_ref().is_some_and(Vec::is_empty);
+        let childless = !node.expandable(place.known);
+        // Only what is on screen: a folder scrolled out of sight is not
+        // worth a trip to the disk yet.
+        if node.children.is_none()
+            && !place.known.contains_key(&node.path)
+            && ui.is_rect_visible(rect)
+        {
+            unknown.push(node.path.clone());
+        }
         if !childless {
             let tint = theme::color(if response.hovered() {
                 palette.text
@@ -499,7 +532,7 @@ fn node(
 
         // An expanded tree is not enough on its own: the open folder may sit
         // far below the edge of the pane, and then it is no use.
-        if scroll_to == Some(node.path.as_path()) {
+        if place.scroll_to == Some(node.path.as_path()) {
             response.scroll_to_me(Some(egui::Align::Center));
         }
 
@@ -515,7 +548,7 @@ fn node(
     {
         ui.indent(node.path.as_path(), |ui| {
             for child in children {
-                self::node(ui, child, palette, current, scroll_to, pick);
+                self::node(ui, child, palette, place, pick, unknown);
             }
         });
     }
