@@ -29,6 +29,9 @@
 use std::path::PathBuf;
 
 /// A program that says it opens a kind of file.
+///
+/// Made only where there is a shell to ask; elsewhere the list is empty.
+#[cfg_attr(not(windows), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Handler {
     /// What it is called on screen.
@@ -38,7 +41,9 @@ pub struct Handler {
     pub name: String,
 }
 
-/// What was chosen from the system menu.
+/// What was chosen from the system menu. Only Windows has one to choose
+/// from.
+#[cfg_attr(not(windows), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Chosen {
     /// Nothing at all, or something the system has already done.
@@ -69,6 +74,7 @@ pub fn one_folder(paths: &[PathBuf]) -> Vec<PathBuf> {
 }
 
 /// Which of our own commands does what the shell calls this verb.
+#[cfg_attr(not(windows), allow(dead_code))]
 fn ours(verb: &str) -> Option<&'static str> {
     match verb.to_ascii_lowercase().as_str() {
         "delete" => Some("file.delete"),
