@@ -5,8 +5,9 @@
 //! only way to start the application is `cargo run`; the moment it is
 //! installed, the icon is the whole of how somebody finds it again.
 //!
-//! The icon is the same drawing v1 rasterized, kept here so that the build
-//! script and the installer point at one file rather than at two copies that
+//! The icon is `assets/PhotoSite.ico`, rasterized from `assets/PhotoSite.svg`
+//! by `assets/make-icon.ps1`; the build script, the installer and the window
+//! (see `icon.rs`) all point at that one folder rather than at copies that
 //! will one day differ.
 
 fn main() {

@@ -22,6 +22,7 @@ mod editor;
 mod files;
 mod filter;
 mod grid;
+mod icon;
 mod info;
 mod list;
 mod menu;
@@ -212,7 +213,8 @@ fn main() -> Result<()> {
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size([settings.window.width as f32, settings.window.height as f32])
         .with_min_inner_size([900.0, 600.0])
-        .with_title("PhotoSite");
+        .with_title("PhotoSite")
+        .with_icon(icon::data());
     if let (Some(x), Some(y)) = (settings.window.x, settings.window.y) {
         viewport = viewport.with_position([x as f32, y as f32]);
     }
@@ -225,6 +227,7 @@ fn main() -> Result<()> {
         "PhotoSite",
         options,
         Box::new(move |cc| {
+            icon::adopt(cc);
             let mut app = App::new(paths, settings);
             app.selftest = selftest;
             app.shot = shot;

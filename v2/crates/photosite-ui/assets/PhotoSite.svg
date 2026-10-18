@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  PhotoSite's icon: a pile of prints, the top one a pastel landscape.
+
+  This file is the drawing. PhotoSite.ico (the executable, the installer,
+  Explorer) and PhotoSite.png (the window) are rasterized from it by
+  make-icon.ps1 in this folder; edit here, then run that, never the other
+  way round. The border of the top print is deliberately a hairline: at 16
+  pixels it has to vanish rather than turn into a grey smear.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#C3B4F2"/>
+      <stop offset="0.55" stop-color="#F3C3DA"/>
+      <stop offset="1" stop-color="#FFDDBC"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#FFF3C4" stop-opacity="0.95"/>
+      <stop offset="1" stop-color="#FFF3C4" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="picture"><rect x="46" y="54" width="180" height="180" rx="22"/></clipPath>
+  </defs>
+  <!-- Two prints underneath, fanned out from the bottom right corner. -->
+  <g transform="rotate(-18 214 228)">
+    <rect x="28" y="36" width="216" height="216" rx="34" fill="#D7F0E2" stroke="#B8D9C7" stroke-width="2"/>
+  </g>
+  <g transform="rotate(-9 214 228)">
+    <rect x="28" y="36" width="216" height="216" rx="34" fill="#FBE0EA" stroke="#E4BFCF" stroke-width="2"/>
+  </g>
+  <!-- The top print and its photograph: sun, sky, two hills. -->
+  <rect x="28" y="36" width="216" height="216" rx="34" fill="#FFFFFF" stroke="#CFC4DC" stroke-width="2"/>
+  <g clip-path="url(#picture)">
+    <rect x="46" y="54" width="180" height="180" fill="url(#sky)"/>
+    <circle cx="172" cy="118" r="56" fill="url(#glow)"/>
+    <circle cx="172" cy="118" r="27" fill="#FFE59C"/>
+    <path d="M46 196 C 76 166, 108 156, 140 178 S 200 208, 226 176 L226 234 L46 234Z" fill="#BFE6D0"/>
+    <path d="M46 218 C 68 192, 100 186, 128 206 S 184 230, 226 202 L226 234 L46 234Z" fill="#8FCFAC"/>
+  </g>
+</svg>
