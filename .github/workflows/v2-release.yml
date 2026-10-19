@@ -26,9 +26,15 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # Consecutive releases share the dependencies built in the release
+      # profile, under one key rather than one per job. It is a modest
+      # help and an honest one: the key also carries the toolchain and the
+      # lock file, and GitHub drops a cache nobody has read for a week, so
+      # it pays only for releases cut close together on the same Rust.
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: v2
+          shared-key: release
 
       # vpk is a .NET tool, and `dnx` is how .NET 10 runs one without
       # installing it. Nothing else here needs .NET.
@@ -46,16 +52,38 @@ jobs:
           "number=$version" >> $env:GITHUB_OUTPUT
           Write-Host "PhotoSite $version"
 
-      # The push builds run on all three; this one runs again because a
-      # release is the one build nobody gets to redo quietly.
-      - name: Tests
-        run: cargo test --workspace
+      # The tests are not run here again. The push build — `v2.yml`: fmt,
+      # clippy and the tests on Linux, macOS and Windows — has already run
+      # on this very commit, and three platforms are a stronger word than
+      # one more Windows run would be; they used to be repeated here all the
+      # same, at twenty minutes a time, nearly all of it compiling. What this
+      # step asks instead is that the build has finished, and finished
+      # green. Pressing the button before it has is the one mistake this
+      # guards against, and the message says so.
+      - name: The push build of this commit passed
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $runs = gh run list --workflow v2.yml --commit $env:GITHUB_SHA --json status,conclusion,url | ConvertFrom-Json
+          $green = @($runs | Where-Object { $_.status -eq 'completed' -and $_.conclusion -eq 'success' })
+          if ($green.Count -eq 0) {
+            $seen = @($runs | ForEach-Object { "  $($_.status) $($_.conclusion) $($_.url)" }) -join "`n"
+            if (-not $seen) { $seen = '  no v2 build of this commit at all' }
+            throw "The v2 build of $env:GITHUB_SHA has not passed yet; wait for it, or look at why:`n$seen"
+          }
+          Write-Host "Tested by $($green[0].url)"
 
       - name: Build
         run: cargo build --release -p photosite-ui -p photosite-cli
 
+      # The binary the step above built, run as it is. Not `cargo run`:
+      # asked for one package on its own, cargo resolves its features
+      # differently from the two built together, and spent ten minutes
+      # compiling seventy crates again to answer a question that takes a
+      # second.
       - name: The binary starts up
-        run: cargo run --release -p photosite-cli -- --data ci-data doctor
+        run: ./target/release/photosite-cli.exe --data ci-data doctor
 
       # So that this release can be a delta against the last one. It fails on
       # the first release, when there is nothing to be a delta against, and
