@@ -561,8 +561,10 @@ setting-updates-feed = Where the releases are
 
 ## Updates
 
-updates-ready = PhotoSite { $version } is downloaded
-updates-restart = Restart into it
+updates-ready = New version { $version } is ready
+updates-whats-new = What's new?
+updates-now = Update now
+updates-available = { $version } is out, waiting to be asked for
 diagnostics-updates = Updates
 updates-not-installed = not installed, so not asked
 updates-off = not asked

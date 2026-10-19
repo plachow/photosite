@@ -127,12 +127,14 @@ which is older than any version this will ever produce.
 
 An installed PhotoSite asks, five seconds after the window opens and off
 the main thread, whether the releases page holds a newer version. When it
-does, the package is downloaded into Velopack's `packages` folder while
-somebody goes on working; nothing on the screen changes until it is
-complete. Then the status row says *PhotoSite 2.0.1 is downloaded* beside a
-*Restart into it* button. Whoever does not click gets the new version the
-next time PhotoSite starts anyway, because `VelopackApp::run()` applies a
-downloaded package before anything else.
+does, the right-hand end of the status bar says *New version 2.1.0 is
+ready*, with a *What's new?* link to the release's page and an *Update now*
+button — and that is all. Nothing is downloaded and nothing is applied
+until the button is pressed; then the package is fetched, the status bar
+says so, and PhotoSite restarts into it. The download waits for the
+button on purpose: Velopack applies a package it finds downloaded the next
+time the application starts, whether anybody wanted that or not, so
+fetching ahead of time would mean an update nobody asked for.
 
 Two settings, both under `[updates]`: `check` (on by default) and `feed`,
 the repository whose releases page is asked. The feed is a setting rather
@@ -144,7 +146,7 @@ A build run from source is not installed — no `Update.exe` beside it, no
 package manifest — and the thread says so in the log and ends. That is the
 ordinary case on a development machine and it is not an error. The
 diagnostics window has an *updates* row that says what happened: asked,
-current, downloading, downloaded, or why not.
+current, out and waiting, downloading, downloaded, or why not.
 
 Unauthenticated, the GitHub API allows sixty requests an hour from one
 address. One check per start is well within that.

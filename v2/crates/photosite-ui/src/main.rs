@@ -3759,6 +3759,13 @@ impl eframe::App for App {
         self.collect_saving(&ctx);
         self.collect_disturbance();
         self.updates.poll();
+        if self.updates.should_restart() {
+            // The process ends inside `restart`, so `Drop` never runs:
+            // what it would have saved is saved here.
+            self.save_settings();
+            self.updates.restart();
+        }
+
         self.take_picked_folder();
         // The menu first: while it has the keyboard, it has all of it.
         menubar::keys(self, &ctx);
@@ -4345,13 +4352,8 @@ impl App {
             ui.separator();
 
             // What just happened is said in the status bar at the bottom,
-            // so the trail has the row to itself — less the offer of an
-            // update, when there is one.
-            let for_trail = if self.updates.ready.is_some() {
-                (ui.available_width() * 0.6).max(60.0)
-            } else {
-                ui.available_width()
-            };
+            // and so is a newer release; the trail has the row to itself.
+            let for_trail = ui.available_width();
 
             // The trail, outermost first. Each part opens the folder it names.
             let mut pick = None;
@@ -4396,27 +4398,6 @@ impl App {
                         });
                 },
             );
-
-            let mut restart = false;
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                // A downloaded release is offered here and nowhere louder.
-                // It waits: whoever does not click gets it on the next
-                // start anyway.
-                if let Some(ready) = self.updates.ready.as_ref() {
-                    restart = ui.button(t!("updates-restart")).clicked();
-                    ui.label(
-                        egui::RichText::new(t!("updates-ready", version = ready.version.as_str()))
-                            .color(theme::color(palette.accent)),
-                    );
-                }
-            });
-
-            if restart {
-                // The process ends inside `restart`, so `Drop` never runs:
-                // what it would have saved is saved here.
-                self.save_settings();
-                self.updates.restart();
-            }
 
             if let Some(folder) = pick {
                 self.open(folder);

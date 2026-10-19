@@ -477,11 +477,10 @@ impl Default for Ai {
 /// Keeping itself current.
 ///
 /// An installed PhotoSite asks, once per start and off the main thread,
-/// whether the feed holds a newer release, and downloads it in the
-/// background when it does. Nothing is applied while somebody is working:
-/// the new version is offered on the status row, and whoever ignores it gets
-/// it on the next start. A build run from source is never installed and so
-/// never asks.
+/// whether the feed holds a newer release. When it does, the new version is
+/// offered on the status bar and nothing more: it is downloaded and applied
+/// only when somebody asks for it there. A build run from source is never
+/// installed and so never asks.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Updates {
