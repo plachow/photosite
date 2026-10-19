@@ -30,6 +30,7 @@ mod menubar;
 mod paste_key;
 mod people;
 mod picker;
+mod settings;
 mod shell;
 mod startup;
 mod status;
@@ -44,7 +45,7 @@ use photosite_core::compare::Compare;
 use photosite_core::domain::{ColorLabel, Flag, Photo, PhotoId, Sort, SortField};
 use photosite_core::filter::{Facets, Filter};
 use photosite_core::history::History;
-use photosite_core::settings::{Gallery, Kind, Settings, TUNABLES, Tunable};
+use photosite_core::settings::{Gallery, Kind, Settings, TUNABLES};
 use photosite_core::transfer::Mode;
 use photosite_core::{
     Catalog, FileIdentity, Paths, commands, diagnostics, docks as layout, i18n, jobs, t,
@@ -473,6 +474,8 @@ pub struct App {
     /// stale answer flickers.
     fullscreen: bool,
     show_settings: bool,
+    /// Where somebody is in the settings window.
+    settings_view: settings::View,
     /// The dock layout, read from the settings. Written back as soon as
     /// somebody moves a splitter.
     pub layout: layout::Layout,
@@ -759,6 +762,7 @@ impl App {
             show_diagnostics: false,
             fullscreen: false,
             show_settings: false,
+            settings_view: settings::View::default(),
             layout: layout::parse_or_default(&settings_layout),
             hidden: layout::hidden(&settings_hidden),
             info_of: None,
@@ -3821,7 +3825,7 @@ impl eframe::App for App {
         }
 
         self.diagnostics_window(&ctx);
-        self.settings_window(&ctx);
+        settings::window(self, &ctx, &palette);
         people::window(self, &ctx, &palette);
         batch::window(self, &ctx, &palette);
         describe::window(self, &ctx, &palette);
@@ -4492,117 +4496,8 @@ impl App {
         self.show_diagnostics = open;
     }
 
-    /// The settings screen is assembled from the field descriptions, not
-    /// from hand-written controls. Adding an option means adding a line to
-    /// `TUNABLES`.
-    fn settings_window(&mut self, ctx: &egui::Context) {
-        if !self.show_settings {
-            return;
-        }
-
-        let mut open = true;
-        let mut changed = false;
-        let mut redress = false;
-        egui::Window::new(t!("settings-title"))
-            .open(&mut open)
-            .default_width(520.0)
-            .show(ctx, |ui| {
-                ui.separator();
-                egui::ScrollArea::vertical()
-                    .max_height(440.0)
-                    .show(ui, |ui| {
-                        for tunable in TUNABLES {
-                            // Window state is not a preference and does not
-                            // belong in the settings.
-                            if tunable.kind == Kind::State {
-                                continue;
-                            }
-
-                            if self.tunable_row(ui, tunable) {
-                                changed = true;
-                                redress |= tunable.path.starts_with("appearance.");
-                            }
-                        }
-                    });
-
-                ui.separator();
-                if ui.button(t!("settings-reset")).clicked() {
-                    self.settings.reset_all();
-                    changed = true;
-                    redress = true;
-                }
-            });
-
-        self.show_settings = open;
-        if redress {
-            self.dress(ctx);
-        }
-
-        if changed {
-            self.save_settings();
-        }
-    }
-
-    fn tunable_row(&mut self, ui: &mut egui::Ui, tunable: &Tunable) -> bool {
-        let label = i18n::t(tunable.label_key);
-        let mut changed = false;
-        ui.horizontal(|ui| {
-            ui.label(label);
-            ui.with_layout(
-                egui::Layout::right_to_left(egui::Align::Center),
-                |ui| match tunable.kind {
-                    Kind::Bool => {
-                        let mut value = self
-                            .settings
-                            .get(tunable.path)
-                            .and_then(|value| value.as_bool())
-                            .unwrap_or(false);
-                        if ui.checkbox(&mut value, "").changed() {
-                            changed = self.write(tunable.path, toml::Value::Boolean(value));
-                        }
-                    }
-                    Kind::Float { min, max } => {
-                        let mut value = self
-                            .settings
-                            .get(tunable.path)
-                            .and_then(|value| value.as_float())
-                            .unwrap_or(0.0);
-                        if ui.add(egui::Slider::new(&mut value, min..=max)).changed() {
-                            changed = self.write(tunable.path, toml::Value::Float(value));
-                        }
-                    }
-                    Kind::Int { min, max } => {
-                        let mut value = self
-                            .settings
-                            .get(tunable.path)
-                            .and_then(|value| value.as_integer())
-                            .unwrap_or(0);
-                        if ui.add(egui::Slider::new(&mut value, min..=max)).changed() {
-                            changed = self.write(tunable.path, toml::Value::Integer(value));
-                        }
-                    }
-                    Kind::Text | Kind::Choice(_) | Kind::Secret => {
-                        let mut value = self
-                            .settings
-                            .get(tunable.path)
-                            .and_then(|value| value.as_str().map(str::to_owned))
-                            .unwrap_or_default();
-                        let hidden = tunable.kind == Kind::Secret;
-                        if ui
-                            .add(egui::TextEdit::singleline(&mut value).password(hidden))
-                            .changed()
-                        {
-                            changed = self.write(tunable.path, toml::Value::String(value));
-                        }
-                    }
-                    Kind::State => {}
-                },
-            );
-        });
-
-        changed
-    }
-
+    /// Writes one setting, for the settings window. A path or a value the
+    /// settings refuse goes to the log and answers false.
     fn write(&mut self, path: &str, value: toml::Value) -> bool {
         match self.settings.set(path, value) {
             Ok(()) => true,
