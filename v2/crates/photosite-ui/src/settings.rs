@@ -129,14 +129,11 @@ pub fn window(app: &mut App, ctx: &egui::Context, palette: &Palette) {
                         reset_all = true;
                     }
 
-                    ui.with_layout(
-                        egui::Layout::right_to_left(egui::Align::Center),
-                        |ui| {
-                            if ui.button(t!("settings-close")).clicked() {
-                                close = true;
-                            }
-                        },
-                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button(t!("settings-close")).clicked() {
+                            close = true;
+                        }
+                    });
                 });
                 ui.add_space(4.0);
             });
@@ -146,23 +143,20 @@ pub fn window(app: &mut App, ctx: &egui::Context, palette: &Palette) {
                 .exact_size(SECTIONS_WIDTH)
                 .show(ui, |ui| {
                     ui.add_space(6.0);
-                    ui.with_layout(
-                        egui::Layout::top_down_justified(egui::Align::Min),
-                        |ui| {
-                            for (at, section) in SECTIONS.iter().enumerate() {
-                                // While searching no section is "the" one;
-                                // choosing one ends the search.
-                                let on = !searching && at == app.settings_view.section;
-                                if ui
-                                    .selectable_label(on, i18n::t(section.label_key))
-                                    .clicked()
-                                {
-                                    app.settings_view.section = at;
-                                    app.settings_view.search.clear();
-                                }
+                    ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
+                        for (at, section) in SECTIONS.iter().enumerate() {
+                            // While searching no section is "the" one;
+                            // choosing one ends the search.
+                            let on = !searching && at == app.settings_view.section;
+                            if ui
+                                .selectable_label(on, i18n::t(section.label_key))
+                                .clicked()
+                            {
+                                app.settings_view.section = at;
+                                app.settings_view.search.clear();
                             }
-                        },
-                    );
+                        }
+                    });
                 });
 
             egui::CentralPanel::default().show(ui, |ui| {
@@ -176,8 +170,7 @@ pub fn window(app: &mut App, ctx: &egui::Context, palette: &Palette) {
                                 let found: Vec<&Tunable> = TUNABLES
                                     .iter()
                                     .filter(|tunable| {
-                                        shown(tunable, section)
-                                            && matches(tunable, section, &query)
+                                        shown(tunable, section) && matches(tunable, section, &query)
                                     })
                                     .collect();
                                 if found.is_empty() {
