@@ -1,4 +1,0 @@
-<Solution>
-  <Project Path="src/PhotoSite.App/PhotoSite.App.csproj" />
-  <Project Path="tests/PhotoSite.SmokeTests/PhotoSite.SmokeTests.csproj" />
-</Solution>

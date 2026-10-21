@@ -44,7 +44,7 @@ they stay on the photograph. A copied selection is a piece of the
 photograph and carries no frame. Rejected synonyms: *border* (the thin line
 is the border), *canvas size*.
 
-**Tool** (v1: `EditTool`, `EditToolDialog`) — one entry of the editor menu
+**Tool** — one entry of the editor menu
 that opens a window: a settings record, `Apply(recipe)`, and a panel built
 from that record. Every tool opens in the same window, which owns the
 preset strip, the live preview through `ImageRenderer`, the Before toggle
@@ -53,13 +53,13 @@ recipe already holds and writes them back (levels, curves, exposure — it
 never stacks); a **filter tool** appends a `FilterStep` and opens on what
 was used last time. A **tool preset** is the settings record in JSON, kept
 in the `presets` table under `tool:<id>`; the **last used** settings are a
-setting under `tool_last_used:<id>`. Rejected synonyms: *dialog*, *effect
-window*, *plugin*.
+setting under `tool_last_used:<id>`. The editor is not ported yet; this is
+what it has to be. Rejected synonyms: *dialog*, *effect window*, *plugin*.
 
 **Record** (`PhotoRecord`) — one immutable row of the catalogue: the file's
 identity, its indexed metadata, and the organisation applied to it.
 
-**Tab** (v1: `MainViewModel.EditorTabs`; v2: `editor::Tabs`) — the strip
+**Tab** (`editor::Tabs`) — the strip
 above the window: one Manager tab plus one tab per open editor. A tab owns
 its photo's editor session, undo history included, so switching to Manager
 or to another tab never prompts to save; only closing a tab (its ✕, or Esc
@@ -128,26 +128,26 @@ is recognised by length, write time and metadata reader version.
 before anything is written so a summary can be shown and the user can still
 change their mind. Two collisions are decided in it and they are different:
 a name already on disk, and a name another photograph in the same plan is
-about to take. v2: `batch::Plan`, `batch::plan`. v1: `BatchPlan`,
-`ImportPlan`.
+about to take. `batch::Plan`, `batch::plan`.
 
 **Preset** — a named, stored set of batch or export settings, kept in the
 catalogue as text. Presets describe what to do, not where the user currently
-is. The starter set is handed out once ever: one deleted stays deleted. v2:
+is. The starter set is handed out once ever: one deleted stays deleted.
 `batch::Preset`, the `presets` table.
 
 **Outbox** — the transactional queue of photographs waiting to be written
 into. The catalogue is updated and the outbox row inserted in one
-transaction, so a crash cannot lose a rating. v1 queued the *change* and had
-exiftool write it; v2 queues the *photograph* and writes what the catalogue
-says at the moment of writing, itself, so a retry cannot write something
-since undone and the queue cannot disagree with the catalogue.
+transaction, so a crash cannot lose a rating. The queue holds the
+*photograph*, not the change, and what is written is what the catalogue
+says at the moment of writing — so a retry cannot write something since
+undone and the queue cannot disagree with the catalogue. (The retired
+implementation queued the change and had exiftool write it, which could.)
 
-**Face scan** (v2: `photosite-faces`, `faces::sweep`, the People window; v1:
-`FaceEngine`, `PeopleDialog`) — finding the faces in a folder with the local
-YuNet detector and describing each with an SFace embedding (OpenCV Zoo
-models; v2 keeps them in `models` beside the catalogue, v1 under
-`tools/models`; nothing leaves the machine). Faces live in the catalogue
+**Face scan** (`photosite-faces`, `faces::sweep`, the People window) —
+finding the faces in a folder with the local YuNet detector and describing
+each with an SFace embedding (OpenCV Zoo models, kept in `models` beside
+the catalogue and fetched from the People window when they are not there;
+nothing leaves the machine). Faces live in the catalogue
 (`faces`, `people`, `photo_people`, `face_scans`) keyed by the photograph's
 **number** rather than its path, so a rename carries them and a deleted
 photograph takes them with it; unnamed ones are grouped by embedding
@@ -163,8 +163,8 @@ neither the person nor the unnamed pool until the user answers yes or no in
 the People window; only a yes writes the name anywhere. Deciding a face either
 way always clears its suggestion.
 
-**Expression** (v2: `people::Expressions`, `people::SMILE_THRESHOLD`; v1:
-`FaceExpression`, `ExpressionSummary`) — two 0..1 scores the face scan
+**Expression** (`people::Expressions`, `people::SMILE_THRESHOLD`) — two
+0..1 scores the face scan
 attaches to every face: *smile* (FER+ happiness on the aligned crop) and
 *eyes open* (open-closed-eye-0001 per eye, the face keeps the weaker eye).
 Both models are optional files beside the other two; a face scanned without
@@ -179,8 +179,8 @@ pile. Rejected synonyms: *mood*, *emotion detection*.
 
 **Region** — a named face rectangle written into the file as an MWG region
 (`XMP-mwg-rs`, centre-based normalized areas plus the pixel dimensions), the
-format Lightroom, digiKam and Windows read face frames from. v2 writes them
-itself through the ordinary XMP merge (`meta::xmp::Regions`), with no
+format Lightroom, digiKam and Windows read face frames from. They are
+written through the ordinary XMP merge (`meta::xmp::Regions`), with no
 exiftool; they are rebuilt from the catalogue at the moment of writing, and
 *not knowing* is distinguished from *nobody is named* so that a photograph
 nobody has swept keeps whatever frames another program left in it. Being
@@ -189,16 +189,16 @@ frames follow the same leave-what-was-written policy as keywords only when
 nothing rewrites that photo again. The gallery can filter by person — the
 People chips are the one facet that composes by conjunction, because a
 photograph has any number of people — and the preview frames the named
-faces, each in that person's own colour (v1 framed the unnamed and the
-suggested ones too, in grey and amber). Each person keeps one stable colour
-(v2: `theme::person_color`; v1: `PersonBrushes`) keyed by id, across
+faces, each in that person's own colour — the named ones only (the retired
+implementation framed the unnamed and the suggested ones too, in grey and
+amber). Each person keeps one stable colour
+(`theme::person_color`) keyed by id, across
 thumbnail badges, filter chips and the frames over the preview. Removing a
 face from a person is the mirror of naming: the face returns to the unnamed
 pool, the keyword comes back out of that photo when no other face of the
 person remains on it, and the regions are rebuilt.
 
-**Describe** (v2: `photosite-ai`, the Describe window; v1:
-`OllamaVisionService`, `AiTagDialog`) — asking a vision model on a local
+**Describe** (`photosite-ai`, the Describe window) — asking a vision model on a local
 Ollama server to fill a photograph's title, description and keywords. The
 model receives a downscaled preview and must answer a fixed JSON schema.
 Results flow through the same catalogue-and-outbox path as a manual edit;
@@ -209,10 +209,9 @@ English, the same call also returns an **English description**, stored in
 the catalogue only (`description_en`) so search works in both languages —
 the file always carries just the primary-language description, and a re-scan
 never touches the English one. A photo with coordinates is first
-reverse-geocoded offline — v2 through a GeoNames extract held in memory
-(`gazetteer::Gazetteer`, a one-degree grid), v1 through the database bundled
-with exiftool (`ExifToolGeolocator`, one run per ~100 m grid cell, cached) —
-and the model receives the **verified place** as text — "in or near X", or
+reverse-geocoded offline, through a GeoNames extract held in memory
+(`gazetteer::Gazetteer`, a one-degree grid), and the model receives the
+**verified place** as text — "in or near X", or
 "about N km east of X" when the nearest catalogued place is far — never raw
 coordinates, which a local model would confidently mis-geocode. The resolved
 names also lead the keyword list deterministically (most specific first);

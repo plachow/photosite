@@ -1,9 +1,9 @@
 name: Release PhotoSite v2
 
-# Manual, like v1's, and for the same reason: a tag pushed for any other
-# purpose must not publish an installer. The version is not an input either —
-# it is read from `v2/Cargo.toml`, so cutting a release is a version bump, a
-# commit, and this button.
+# Manual, because a tag pushed for any other purpose must not publish an
+# installer. The version is not an input either — it is read from
+# `v2/Cargo.toml`, so cutting a release is a version bump, a commit, and this
+# button.
 on:
   workflow_dispatch:
 

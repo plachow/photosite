@@ -2,11 +2,9 @@
 
 PhotoManager for real life. Based on ideas of Zoner Photo Studio v15 (not its newer versions) in mixup with modern features like AI image reading and describing or ML face recognition.
 
-The repository holds two implementations of it.
-
-## [v2/](v2/README.md) — where the work is
-
-Rust, egui over wgpu, Windows / macOS / Linux from one source.
+Rust, egui over wgpu, Windows / macOS / Linux from one source. The
+application lives in [v2/](v2/README.md), which is also where the design is
+written down.
 
 ```bash
 cd v2
@@ -14,32 +12,20 @@ cargo run --release -p photosite-ui              # the application
 cargo test --workspace                           # no window, no GPU
 ```
 
-Everything v1 did **outside the editor** it does too: browsing, culling,
-organising, filtering, writing metadata into the files, comparing, file
-operations, RAW, faces and people, expressions, batch conversion, and
-descriptions from a vision model on the same machine. The editor is what is
-left.
+Browsing, culling, organising, filtering, writing metadata into the files,
+comparing, file operations, RAW, faces and people, expressions, batch
+conversion, and descriptions from a vision model on the same machine. The
+editor is what is left to build.
 
-## [v1/](v1/README.md) — frozen, kept for reference
-
-C# and WPF, Windows only. Feature-complete: manager, editor, batch, import,
-face recognition, AI descriptions. It is **no longer maintained** and no
-longer released; the tag `v1-final` marks the last state.
-
-It stays in the tree on purpose. Porting means answering "what did this
-actually do, and why was it done that way" a few hundred times, and the
-answer is usually in the source rather than in any document.
-
-```bash
-git show v1-final                                # the archive point
-```
+An earlier implementation in C# and WPF was retired once this one had
+caught up with it outside the editor; its last state is the tag
+`v1-final`, and nothing in the tree depends on it any more.
 
 ## Shared
 
-[`CONTEXT.md`](CONTEXT.md) is the vocabulary both versions speak. The type
-names in it are still v1's; the concepts are not, and each one gets its v2
-name as that part is ported.
+[`CONTEXT.md`](CONTEXT.md) is the vocabulary the code speaks: the terms,
+the synonyms deliberately not used, and the invariants.
 
 [`spikes/`](spikes/README.md) holds throwaway code kept only for the numbers
-it produced — including the thumbnail-grid benchmark that decided v2 would be
-drawn over the GPU rather than out of widgets.
+it produced — including the thumbnail-grid benchmark that decided the
+application would be drawn over the GPU rather than out of widgets.
