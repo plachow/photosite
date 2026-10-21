@@ -606,8 +606,17 @@ people-click-to-remove = Click a face that is not them
 people-and-more = + { $count } more
 people-nothing-to-name = No faces yet. Find faces to begin.
 people-scoring = Reading expressions
+people-fetch = Download them ({ $size } MB)
+people-fetch-optional = Smiles and blinks need two more models
+people-fetch-model = { $name } · { $source } · { $licence } · { $size } MB
+people-fetch-where =
+    Fetched once from where their authors publish them, checked against the
+    hashes they published, and kept in { $folder }. Photographs never leave this computer.
+people-fetching = Downloading { $name }
+people-fetched = The models are in place. Find faces to begin.
 
 task-faces = Looking for faces
+task-models = Downloading the face models
 people-swept =
     { $photos ->
         [one] { $photos } photograph
@@ -652,6 +661,13 @@ info-people-remove = Take { $name } off this photograph
 info-expression-smiling = { $count }/{ $of } smiling
 info-expression-eyes = { $count }/{ $of } eyes open
 
+cli-models-have = All four face models are in { $folder }
+cli-models-fetching =
+    { $count ->
+        [one] Fetching one model
+       *[other] Fetching { $count } models
+    } into { $folder }, { $size } MB
+cli-models-done = Done in { NUMBER($seconds, maximumFractionDigits: 0) } s
 cli-faces-done =
     { $photos ->
         [one] swept { $photos } photograph

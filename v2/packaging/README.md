@@ -102,7 +102,9 @@ else. The four ONNX models and the GeoNames extract are fetched on the
 machine that wants them, exactly as they are for a build from source: a
 hundred and fifty megabytes nobody has asked for yet does not belong in a
 first install, and a feature that has not been used has nothing to say about
-whether the install worked.
+whether the install worked. The models are a button in the People window,
+which offers them the first time it opens without them; the extract is
+still fetched by hand.
 
 That leaves the download at about 37 MB.
 

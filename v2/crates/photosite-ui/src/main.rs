@@ -3752,6 +3752,7 @@ impl eframe::App for App {
         let delivered = self.collect(&ctx);
         self.collect_indexing();
         self.collect_faces();
+        people::collect_fetch(self);
         self.collect_batch();
         self.collect_describing();
         self.collect_writing();

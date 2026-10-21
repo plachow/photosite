@@ -15,6 +15,10 @@
 //! would do all four jobs better: a photograph of somebody's children is not
 //! something to upload in exchange for a convenience.
 //!
+//! The one time this crate touches the network is to bring the models *in*
+//! — on request, from where their authors publish them, checked against
+//! their published hashes. See [`fetch`].
+//!
 //! ## Why tract rather than ONNX Runtime
 //!
 //! `ort` is faster and is what everybody reaches for. It is also a native
@@ -51,6 +55,7 @@ pub mod align;
 pub mod cluster;
 pub mod detect;
 pub mod expression;
+pub mod fetch;
 pub mod math;
 pub mod sweep;
 

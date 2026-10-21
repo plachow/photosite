@@ -19,8 +19,9 @@ use crate::{App, theme};
 use eframe::egui;
 use photosite_core::people::{Face, Person};
 use photosite_core::theme::Palette;
-use photosite_core::{Catalog, t};
-use photosite_faces::cluster;
+use photosite_core::{Catalog, TaskStatus, t};
+use photosite_faces::fetch::{self, Model};
+use photosite_faces::{Availability, cluster};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -74,6 +75,16 @@ pub struct People {
     pub summary: String,
     /// Why there is no sweep to be had.
     pub unavailable: Option<String>,
+    /// The running download of the models, if there is one.
+    pub fetching: Option<u64>,
+    /// Which of the four are not on disk, so the window can offer them.
+    pub missing: Vec<&'static Model>,
+    /// Whether the folder has been looked at since the window was opened
+    /// or the models last changed. Once, not every frame: four stats a
+    /// frame is not nothing on a network drive.
+    pub checked: bool,
+    /// Why the last download did not finish.
+    pub trouble: Option<String>,
 }
 
 /// Faces the arithmetic believes are one person.
@@ -198,6 +209,8 @@ enum Doing {
     Unname(i64),
     Scan,
     Stop,
+    Fetch,
+    StopFetch,
 }
 
 pub fn window(app: &mut App, ctx: &egui::Context, palette: &Palette) {
@@ -209,11 +222,23 @@ pub fn window(app: &mut App, ctx: &egui::Context, palette: &Palette) {
         refresh(app);
     }
 
+    // The first thing the window does is look for the models, so that a
+    // fresh install is told what is missing — and offered it — before
+    // anybody presses anything.
+    if !app.people.checked {
+        check(app);
+    }
+
     let mut open = true;
     let mut doing: Option<Doing> = None;
     let scanning = app
         .people
         .scanning
+        .and_then(|id| app.tasks.snapshot().into_iter().find(|task| task.id == id))
+        .filter(|task| !task.finished);
+    let fetching = app
+        .people
+        .fetching
         .and_then(|id| app.tasks.snapshot().into_iter().find(|task| task.id == id))
         .filter(|task| !task.finished);
 
@@ -239,7 +264,7 @@ pub fn window(app: &mut App, ctx: &egui::Context, palette: &Palette) {
                     );
                 }
                 None => {
-                    let ready = app.people.unavailable.is_none();
+                    let ready = app.people.unavailable.is_none() && fetching.is_none();
                     if ui
                         .add_enabled(ready, egui::Button::new(t!("people-scan")))
                         .clicked()
@@ -259,6 +284,10 @@ pub fn window(app: &mut App, ctx: &egui::Context, palette: &Palette) {
                 }
             });
 
+            if scanning.is_none() {
+                offer(app, ui, palette, fetching.as_ref(), &mut doing);
+            }
+
             ui.separator();
             egui::ScrollArea::vertical().show(ui, |ui| {
                 suggestions(app, ui, palette, &mut doing);
@@ -268,6 +297,12 @@ pub fn window(app: &mut App, ctx: &egui::Context, palette: &Palette) {
         });
 
     app.people.open = open;
+    if !open {
+        // Looked at again when it is next opened: the models may have
+        // been put there by hand in the meantime.
+        app.people.checked = false;
+    }
+
     if let Some(doing) = doing {
         act(app, doing);
     }
@@ -276,6 +311,88 @@ pub fn window(app: &mut App, ctx: &egui::Context, palette: &Palette) {
     // added to the wishlist by the same route the grid uses, so a face chip
     // and a tile compete for the same threads rather than for two sets.
     app.wanted_faces = app.people.wanted();
+}
+
+/// What is not on disk, and the button that fetches it — or, while it is
+/// being fetched, how far that has got.
+///
+/// The offer says what each file is, who publishes it, under what licence
+/// and how big it is, because seventy megabytes of somebody else's
+/// binaries is a thing to agree to rather than have happen. The two
+/// expression models are offered on their own when only they are missing:
+/// a sweep runs without them, and says so, but a smile it cannot read is a
+/// smile nobody gets to filter on.
+fn offer(
+    app: &App,
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    fetching: Option<&TaskStatus>,
+    doing: &mut Option<Doing>,
+) {
+    if let Some(task) = fetching {
+        ui.horizontal(|ui| {
+            if ui.button(t!("people-stop")).clicked() {
+                *doing = Some(Doing::StopFetch);
+            }
+
+            if let Some(fraction) = task.fraction() {
+                ui.add(egui::ProgressBar::new(fraction).desired_width(180.0));
+            }
+
+            ui.label(
+                egui::RichText::new(&task.message)
+                    .small()
+                    .color(theme::color(palette.dim)),
+            );
+        });
+        return;
+    }
+
+    if app.people.missing.is_empty() {
+        return;
+    }
+
+    if app.people.unavailable.is_none() {
+        ui.label(
+            egui::RichText::new(t!("people-fetch-optional"))
+                .small()
+                .color(theme::color(palette.dim)),
+        );
+    }
+
+    ui.horizontal(|ui| {
+        let size = fetch::megabytes(fetch::bytes_of(&app.people.missing));
+        if ui.button(t!("people-fetch", size = size)).clicked() {
+            *doing = Some(Doing::Fetch);
+        }
+
+        ui.label(
+            egui::RichText::new(t!(
+                "people-fetch-where",
+                folder = app.model_folder().to_string_lossy().into_owned()
+            ))
+            .small()
+            .color(theme::color(palette.dim)),
+        );
+    });
+
+    for model in &app.people.missing {
+        ui.label(
+            egui::RichText::new(t!(
+                "people-fetch-model",
+                name = model.name,
+                source = model.source,
+                licence = model.licence,
+                size = fetch::megabytes(model.bytes)
+            ))
+            .small()
+            .color(theme::color(palette.dim)),
+        );
+    }
+
+    if let Some(trouble) = &app.people.trouble {
+        ui.label(egui::RichText::new(trouble).color(theme::color(palette.warn)));
+    }
 }
 
 fn suggestions(app: &mut App, ui: &mut egui::Ui, palette: &Palette, doing: &mut Option<Doing>) {
@@ -542,6 +659,17 @@ fn act(app: &mut App, doing: Doing) {
 
             return;
         }
+        Doing::Fetch => {
+            start_fetch(app);
+            return;
+        }
+        Doing::StopFetch => {
+            if let Some(id) = app.people.fetching {
+                app.tasks.cancel(id);
+            }
+
+            return;
+        }
         Doing::Show(person) => {
             app.people.showing = person;
             app.people.stale = true;
@@ -680,6 +808,74 @@ fn with_catalog<T>(
     }
 }
 
+/// Looks for the models, so the window can say what is missing and offer
+/// it. What is on disk is the truth, whatever any task said: somebody may
+/// have put them there by hand, or a download may have stopped halfway
+/// with two of the four in place.
+fn check(app: &mut App) {
+    let folder = app.model_folder();
+    let availability = Availability::of(&folder);
+    app.people.missing = fetch::missing(&folder);
+    app.people.unavailable = (!availability.recognition).then(|| {
+        t!(
+            "people-no-models",
+            folder = folder.to_string_lossy().into_owned(),
+            missing = availability.missing.join(", ")
+        )
+    });
+    app.people.checked = true;
+}
+
+/// Starts fetching whichever models are not on disk.
+fn start_fetch(app: &mut App) {
+    let folder = app.model_folder();
+    let models = fetch::missing(&folder);
+    if models.is_empty() {
+        app.people.checked = false;
+        return;
+    }
+
+    app.people.trouble = None;
+    let waker = app.waker.clone();
+    app.people.fetching = Some(app.tasks.spawn(t!("task-models"), move |cancel, progress| {
+        fetch::fetch(&folder, &models, cancel, progress, |model| {
+            t!("people-fetching", name = model.name)
+        })?;
+        if let Some(ctx) = waker.get() {
+            ctx.request_repaint();
+        }
+
+        Ok(())
+    }));
+}
+
+/// Notices that a download has finished, and looks at the folder again
+/// rather than at the result: a download stopped halfway left the finished
+/// ones in place, and the offer shrinks to what is still missing.
+pub fn collect_fetch(app: &mut App) {
+    let Some(id) = app.people.fetching else {
+        return;
+    };
+
+    let Some(task) = app
+        .tasks
+        .snapshot()
+        .into_iter()
+        .find(|task| task.id == id && task.finished)
+    else {
+        return;
+    };
+
+    app.people.fetching = None;
+    app.people.checked = false;
+    app.people.trouble = task.error.clone();
+    if task.error.is_none() && !task.cancelled {
+        app.people.summary = t!("people-fetched");
+    }
+
+    app.tasks.forget_finished();
+}
+
 /// Starts the sweep over the folder in front of us.
 fn start(app: &mut App) {
     let Some(folder) = app.folder.clone() else {
@@ -687,18 +883,12 @@ fn start(app: &mut App) {
         return;
     };
 
-    let models = app.model_folder();
-    let availability = photosite_faces::Availability::of(&models);
-    if !availability.recognition {
-        app.people.unavailable = Some(t!(
-            "people-no-models",
-            folder = models.to_string_lossy().into_owned(),
-            missing = availability.missing.join(", ")
-        ));
+    check(app);
+    if app.people.unavailable.is_some() {
         return;
     }
 
-    app.people.unavailable = None;
+    let models = app.model_folder();
     let path = app.paths.catalog();
     let recursive = app.settings.gallery.recursive;
     let detect = app.settings.faces.detect_size.clamp(320, 8192) as u32;

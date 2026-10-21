@@ -66,6 +66,16 @@ enum Command {
         #[arg(long, value_name = "FOLDER")]
         models: Option<PathBuf>,
     },
+    /// Fetches the face models that are not there yet.
+    ///
+    /// The same four files the People window offers, from the same pinned
+    /// addresses, checked against the same hashes — for a machine with no
+    /// window, and for a runner that wants to measure a sweep.
+    Models {
+        /// Where they go. Without it, beside the catalogue.
+        #[arg(long, value_name = "FOLDER")]
+        into: Option<PathBuf>,
+    },
     /// Who the catalogue knows, and how many faces each of them has.
     People,
     /// Names the largest group of unnamed faces in a folder.
@@ -165,6 +175,7 @@ fn main() -> Result<()> {
             threads,
             models.as_deref(),
         ),
+        Command::Models { into } => models(&paths, into.as_deref()),
         Command::People => people(&paths),
         Command::Name {
             folder,
@@ -328,6 +339,58 @@ fn faces(
         }
     }
 
+    Ok(())
+}
+
+/// Fetches whichever of the four models are not on disk.
+fn models(paths: &Paths, into: Option<&Path>) -> Result<()> {
+    use photosite_faces::fetch;
+
+    let folder = into
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| paths.models());
+    let missing = fetch::missing(&folder);
+    if missing.is_empty() {
+        println!(
+            "{}",
+            t!("cli-models-have", folder = folder.display().to_string())
+        );
+        return Ok(());
+    }
+
+    println!(
+        "{}",
+        t!(
+            "cli-models-fetching",
+            count = missing.len() as i64,
+            folder = folder.display().to_string(),
+            size = fetch::megabytes(fetch::bytes_of(&missing))
+        )
+    );
+    for model in &missing {
+        println!(
+            "  {}",
+            t!(
+                "people-fetch-model",
+                name = model.name,
+                source = model.source,
+                licence = model.licence,
+                size = fetch::megabytes(model.bytes)
+            )
+        );
+    }
+
+    let tasks = jobs::Tasks::new();
+    let started = std::time::Instant::now();
+    tasks.here(t!("task-models"), |cancel, progress| {
+        fetch::fetch(&folder, &missing, cancel, progress, |model| {
+            t!("people-fetching", name = model.name)
+        })
+    })?;
+    println!(
+        "{}",
+        t!("cli-models-done", seconds = started.elapsed().as_secs_f64())
+    );
     Ok(())
 }
 

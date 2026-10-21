@@ -111,6 +111,9 @@ ureq = { version = "3", default-features = false }
 # JSON inside JSON; hand-writing a parser for that would be inventing a
 # worse serde_json.
 serde_json = "1"
+# Hashing a downloaded model against what its authors published. Already in
+# the tree through velopack, so this costs a line and no crate.
+sha2 = "0.11"
 clap = { version = "4", features = ["derive"] }
 jpeg-decoder = "0.3"
 # Writing metadata without shipping exiftool and a copy of Perl. little_exif

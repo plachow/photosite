@@ -17,6 +17,12 @@ thiserror.workspace = true
 tracing.workspace = true
 tract-onnx.workspace = true
 crossbeam-channel.workspace = true
+# The one place this crate speaks to the network: bringing the models in, on
+# request, from where their authors publish them. Certificates judged by the
+# operating system's own store, for the reason `photosite-ai` gives.
+ureq = { workspace = true, features = ["rustls", "platform-verifier"] }
+# Every model is checked against its published hash before it is kept.
+sha2.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -1007,11 +1007,17 @@ other facet widens as values are added because they are alternatives, but a
 photograph has any number of people and picking two means the shot they are
 both in.
 
-The models are not in git and not shipped — a hundred and fifty megabytes
-of somebody else's binaries — and go in `models` beside the catalogue,
-which `--data` moves like everything else. Without them the People window
-says which four are missing and where it looked, rather than that "the
-models are missing".
+The models are not in git and not shipped — seventy-odd megabytes of
+somebody else's binaries — and go in `models` beside the catalogue, which
+`--data` moves like everything else. A fresh install has none of them, so
+**the People window looks for them the moment it opens** and, finding them
+missing, says which four and where it looked and offers to fetch them: one
+button, with the size, the source and the licence of each said up front.
+They come from where their authors publish them, at addresses pinned to a
+commit and checked against their published hashes, and a download that
+hashes to anything else is thrown away with its reason. Nobody reads a
+README, so the window has to be the one that knows where they come from.
+`photosite-cli models` does the same without a window.
 
 ## Converting a lot of them at once
 
