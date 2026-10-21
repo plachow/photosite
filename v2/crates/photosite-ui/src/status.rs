@@ -133,8 +133,7 @@ fn offer(app: &App, ui: &mut egui::Ui, palette: &Palette, update: &mut bool) {
         }
         updates::State::Downloading(version) | updates::State::Ready(version) => {
             ui.hyperlink_to(t!("updates-whats-new"), updates::notes(feed, version));
-            egui::RichText::new(t!("updates-downloading", version = version.as_str()))
-                .color(accent)
+            egui::RichText::new(t!("updates-downloading", version = version.as_str())).color(accent)
         }
         updates::State::Failed(error) if app.updates.wanted => {
             egui::RichText::new(t!("updates-failed", error = error.as_str()))
@@ -144,7 +143,11 @@ fn offer(app: &App, ui: &mut egui::Ui, palette: &Palette, update: &mut bool) {
     };
 
     ui.label(said);
-    ui.label(egui::RichText::new("!").strong().color(theme::color(palette.warn)));
+    ui.label(
+        egui::RichText::new("!")
+            .strong()
+            .color(theme::color(palette.warn)),
+    );
     ui.separator();
 }
 

@@ -229,7 +229,10 @@ impl Updates {
 /// tags a release `v<version>`, and this is the one place that knowledge
 /// is needed outside it.
 pub fn notes(feed: &str, version: &str) -> String {
-    format!("{}/releases/tag/v{version}", feed.trim().trim_end_matches('/'))
+    format!(
+        "{}/releases/tag/v{version}",
+        feed.trim().trim_end_matches('/')
+    )
 }
 
 /// Says a word, and wakes the window so that it is seen.
