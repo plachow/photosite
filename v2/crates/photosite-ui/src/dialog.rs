@@ -39,7 +39,7 @@ pub fn window<'a>(
         .id(egui::Id::new(name))
         .pivot(egui::Align2::CENTER_CENTER)
         .default_pos(middle)
-        .frame(egui::Frame::window(&ctx.style()).inner_margin(egui::Margin::same(MARGIN)))
+        .frame(egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::same(MARGIN)))
 }
 
 /// Keeps where a dialog is, every frame it is shown, so that wherever it is
