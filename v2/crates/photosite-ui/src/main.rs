@@ -5363,8 +5363,10 @@ mod culling {
             .window
             .dialog_at("send-to")
             .expect("the place was not kept");
+        // Within a point and a half: egui puts a window on whole pixels,
+        // and the settings round the middle of an odd height once more.
         assert!(
-            (x - 600.0).abs() < 1.0 && (y - 400.0).abs() < 1.0,
+            (x - 600.0).abs() < 1.5 && (y - 400.0).abs() < 1.5,
             "not in the middle of the screen: {x} {y}"
         );
 
@@ -5376,9 +5378,8 @@ mod culling {
         for _ in 0..3 {
             a_frame_of_sending(&mut app, &ctx, Vec::new());
         }
-        // Within a point: egui puts a window on whole pixels.
         let near = |kept: Option<(f64, f64)>, wanted: (f64, f64)| {
-            kept.is_some_and(|(x, y)| (x - wanted.0).abs() < 1.0 && (y - wanted.1).abs() < 1.0)
+            kept.is_some_and(|(x, y)| (x - wanted.0).abs() < 1.5 && (y - wanted.1).abs() < 1.5)
         };
         assert!(near(
             app.settings.window.dialog_at("send-to"),
