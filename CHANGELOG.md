@@ -8,7 +8,13 @@ Every release's section becomes the notes of that GitHub release, which is
 the page the *What's new?* link on the status bar opens. A user-facing
 change lands here under **Unreleased** in the same commit that makes it.
 
+A version with a `-beta.N` suffix is a pre-release: published as one on
+GitHub, offered only to those already running a beta, and not yet whole.
+The plain version that follows is the release.
+
 ## [Unreleased]
+
+## [2.2.0-beta.1] - 2026-10-22
 
 ### Added
 
@@ -131,6 +137,7 @@ implementation stopped at 0.9.x and never shipped.
 - A Windows installer that updates itself, and a `photosite-cli` for the
   same work without a window.
 
-[Unreleased]: https://github.com/plachow/photosite/compare/v2.1.0...HEAD
+[Unreleased]: https://github.com/plachow/photosite/compare/v2.2.0-beta.1...HEAD
+[2.2.0-beta.1]: https://github.com/plachow/photosite/compare/v2.1.0...v2.2.0-beta.1
 [2.1.0]: https://github.com/plachow/photosite/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/plachow/photosite/releases/tag/v2.0.0

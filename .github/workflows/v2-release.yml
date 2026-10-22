@@ -48,8 +48,11 @@ jobs:
         run: |
           $meta = cargo metadata --format-version 1 --no-deps | ConvertFrom-Json
           $version = ($meta.packages | Where-Object name -eq 'photosite-ui').version
-          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "'$version' cannot be released." }
+          if ($version -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') { throw "'$version' cannot be released." }
           "number=$version" >> $env:GITHUB_OUTPUT
+          # A pre-release — `2.2.0-beta.1` — is published as one, so that
+          # whoever runs a plain release is not offered it.
+          "pre=$($version.Contains('-'))" >> $env:GITHUB_OUTPUT
           Write-Host "PhotoSite $version"
 
       # The tests are not run here again. The push build — `v2.yml`: fmt,
@@ -95,6 +98,7 @@ jobs:
           --repoUrl https://github.com/${{ github.repository }}
           --token ${{ secrets.GITHUB_TOKEN }}
           --outputDir artifacts/releases
+          --pre
 
       # What changed, cut out of CHANGELOG.md: the section of this very
       # version, which Velopack carries in the package and puts on the
@@ -138,6 +142,7 @@ jobs:
           --publish
           --releaseName "PhotoSite ${{ steps.version.outputs.number }}"
           --tag v${{ steps.version.outputs.number }}
+          ${{ steps.version.outputs.pre == 'True' && '--pre' || '' }}
 
       # Said twice on purpose. Velopack carries the notes in the package and
       # writes them on the release it creates; this makes sure the page says

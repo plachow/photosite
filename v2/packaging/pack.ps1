@@ -83,7 +83,9 @@ if (-not $Version) {
     $Version = ($meta.packages | Where-Object name -eq 'photosite-ui').version
 }
 
-if ($Version -notmatch '^\d+\.\d+\.\d+$') {
+# A pre-release suffix is allowed — `2.2.0-beta.1` — and Velopack orders it
+# before the plain `2.2.0`, as semver says.
+if ($Version -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') {
     throw "'$Version' is not a version this can release."
 }
 

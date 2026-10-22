@@ -128,6 +128,18 @@ because there is one PhotoSite and this is the next of it. Nothing can
 collide: v1 never released anything, and its own workflow would stamp 0.9.x,
 which is older than any version this will ever produce.
 
+### Betas
+
+A version with a pre-release suffix — `2.2.0-beta.1`, then `-beta.2`, and
+the plain `2.2.0` when it is whole — goes through the same five steps and
+is published as a *pre-release* on GitHub. That flag is what keeps the two
+audiences apart: an installed plain release asks only about plain
+releases and is never offered a beta, while an installed beta asks about
+pre-releases too and so is offered the next beta and, in the end, the
+release. Which of the two a binary is was decided when it was built, from
+its own version. Somebody who wants the betas installs one by hand from
+its release page.
+
 ## Updating itself
 
 An installed PhotoSite asks, five seconds after the window opens and off

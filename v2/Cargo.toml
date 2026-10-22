@@ -6,7 +6,12 @@ members = ["crates/*"]
 # Two, because this is PhotoSite — the second of it, not a different
 # application that happens to look like one. v1 stopped at 0.9.x and is
 # frozen; nothing will ever be released between the two.
-version = "2.1.0"
+#
+# `-beta.N` while it is not yet whole. A pre-release is published as one
+# on GitHub and reaches only those already running a beta; whoever has a
+# plain release installed is offered the next plain release and nothing
+# in between. Dropping the suffix is what makes a release final.
+version = "2.2.0-beta.1"
 edition = "2024"
 rust-version = "1.90"
 license = "MIT"

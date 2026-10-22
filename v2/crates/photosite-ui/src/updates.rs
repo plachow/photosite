@@ -248,7 +248,12 @@ fn say(tx: &Sender<Word>, waker: &OnceLock<egui::Context>, word: Word) {
 fn ask(feed: &str, tx: &Sender<Word>, waker: &OnceLock<egui::Context>) {
     std::thread::sleep(AFTER);
 
-    let manager = match UpdateManager::new(GithubSource::new(feed, None, false), None, None) {
+    // A beta is offered the next beta; a plain release is offered the next
+    // plain release and never a beta in between. Decided by the version
+    // this binary was built as, which is the one thing that cannot be
+    // misconfigured.
+    let beta = !env!("CARGO_PKG_VERSION_PRE").is_empty();
+    let manager = match UpdateManager::new(GithubSource::new(feed, None, beta), None, None) {
         Ok(manager) => manager,
         Err(velopack::Error::NotInstalled(why)) => {
             tracing::debug!(%why, "not installed, so not asking for updates");
