@@ -113,14 +113,17 @@ That leaves the download at about 37 MB.
 The version lives in `v2/Cargo.toml` and nowhere else. A release is:
 
 1. bump `[workspace.package] version`,
-2. commit and push,
-3. wait for the **v2** build of that commit to go green — fmt, clippy and
+2. in [`CHANGELOG.md`](../../CHANGELOG.md), rename **Unreleased** to that
+   version with today's date, and open a fresh **Unreleased** above it,
+3. commit and push,
+4. wait for the **v2** build of that commit to go green — fmt, clippy and
    the tests on Linux, macOS and Windows,
-4. run the **Release PhotoSite v2** workflow.
+5. run the **Release PhotoSite v2** workflow.
 
-It checks that the build in step 3 passed, builds, packs with the same
-script as above, and publishes a GitHub release tagged `v<version>` — so
-`v2.0.0`, and no prefix,
+It checks that the build in step 4 passed, builds, cuts the version's
+section out of the changelog as the release notes — and refuses to go on
+when there is none — packs with the same script as above, and publishes a
+GitHub release tagged `v<version>` — so `v2.0.0`, and no prefix,
 because there is one PhotoSite and this is the next of it. Nothing can
 collide: v1 never released anything, and its own workflow would stamp 0.9.x,
 which is older than any version this will ever produce.

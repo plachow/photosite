@@ -26,6 +26,12 @@
     Pack what is already in target/release. For trying the packaging itself
     without waiting four minutes for a build that has not changed.
 
+.PARAMETER ReleaseNotes
+    A Markdown file with what changed in this version. It travels in the
+    package and becomes the body of the GitHub release, which is the page
+    the application's *What's new?* link opens. CI cuts it out of
+    CHANGELOG.md; a local build may leave it out.
+
 .PARAMETER Fresh
     Empty the output directory first. Without it, packing a version that is
     already there fails — which is what a release build wants, because the
@@ -38,6 +44,7 @@ param(
     [string] $Version,
     [string] $OutputDir,
     [switch] $SkipBuild,
+    [string] $ReleaseNotes,
     [switch] $Fresh
 )
 
@@ -107,6 +114,12 @@ foreach ($exe in 'photosite.exe', 'photosite-cli.exe') {
     Copy-Item $from $stage
 }
 
+$notes = @()
+if ($ReleaseNotes) {
+    if (-not (Test-Path $ReleaseNotes)) { throw "$ReleaseNotes is not there." }
+    $notes = @('--releaseNotes', (Resolve-Path $ReleaseNotes).Path)
+}
+
 Invoke-Checked "Packing $PackTitle $Version" {
     dnx "vpk@$VpkVersion" --yes -- pack `
         --packId      $PackId `
@@ -116,7 +129,8 @@ Invoke-Checked "Packing $PackTitle $Version" {
         --packDir     $stage `
         --mainExe     'photosite.exe' `
         --icon        $icon `
-        --outputDir   $OutputDir
+        --outputDir   $OutputDir `
+        @notes
 }
 
 Write-Host ''

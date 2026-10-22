@@ -96,12 +96,38 @@ jobs:
           --token ${{ secrets.GITHUB_TOKEN }}
           --outputDir artifacts/releases
 
+      # What changed, cut out of CHANGELOG.md: the section of this very
+      # version, which Velopack carries in the package and puts on the
+      # GitHub release — the page the application's *What's new?* link
+      # opens. A version with no section is a release nobody has said
+      # anything about, and it stops here rather than publishing an empty
+      # page.
+      - name: Release notes
+        id: notes
+        shell: pwsh
+        run: |
+          $version = '${{ steps.version.outputs.number }}'
+          $lines = Get-Content ../CHANGELOG.md
+          $start = [array]::IndexOf($lines, ($lines | Where-Object { $_ -match "^## \[$([regex]::Escape($version))\]" } | Select-Object -First 1))
+          if ($start -lt 0) { throw "CHANGELOG.md has no section for $version. Rename Unreleased before releasing." }
+          $end = $lines.Length
+          for ($i = $start + 1; $i -lt $lines.Length; $i++) {
+            if ($lines[$i] -match '^## \[') { $end = $i; break }
+          }
+          if ($end -le $start + 1) { throw "The CHANGELOG.md section for $version is empty." }
+          $section = $lines[($start + 1)..($end - 1)] | Where-Object { $_ -notmatch '^\[.*\]: https?://' }
+          $body = ($section -join "`n").Trim()
+          if (-not $body) { throw "The CHANGELOG.md section for $version is empty." }
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          Set-Content -Path artifacts/release-notes.md -Value $body -Encoding utf8
+          Write-Host $body
+
       # The same script somebody runs on their own machine. The packaging is
       # defined once; CI adds only what a local build has no business doing —
-      # fetching the last release and publishing this one.
+      # fetching the last release, the notes, and publishing this one.
       - name: Pack
         shell: pwsh
-        run: ./packaging/pack.ps1 -SkipBuild
+        run: ./packaging/pack.ps1 -SkipBuild -ReleaseNotes artifacts/release-notes.md
 
       - name: Publish
         run: >
@@ -112,3 +138,15 @@ jobs:
           --publish
           --releaseName "PhotoSite ${{ steps.version.outputs.number }}"
           --tag v${{ steps.version.outputs.number }}
+
+      # Said twice on purpose. Velopack carries the notes in the package and
+      # writes them on the release it creates; this makes sure the page says
+      # the same whatever a future vpk does with them, since it is the page
+      # the application's *What's new?* link opens.
+      - name: Release notes on the page
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          gh release edit v${{ steps.version.outputs.number }}
+          --repo ${{ github.repository }}
+          --notes-file artifacts/release-notes.md

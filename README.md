@@ -4,7 +4,8 @@ PhotoManager for real life. Based on ideas of Zoner Photo Studio v15 (not its ne
 
 Rust, egui over wgpu, Windows / macOS / Linux from one source. The
 application lives in [v2/](v2/README.md), which is also where the design is
-written down.
+written down. What changed from one release to the next is in
+[`CHANGELOG.md`](CHANGELOG.md).
 
 ```bash
 cd v2
