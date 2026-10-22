@@ -17,6 +17,7 @@ mod batch;
 mod clipboard;
 mod compare;
 mod describe;
+mod dialog;
 mod docks;
 mod editor;
 mod files;
@@ -202,6 +203,13 @@ fn main() -> Result<()> {
 
     i18n::set_language(&i18n::negotiate(
         language.as_deref().or(Some(&settings.appearance.language)),
+    ));
+    // So that a finishing time reads as the clock on the wall and not as
+    // UTC. Asked once: a run that crosses a daylight-saving change gets its
+    // finishing time an hour out, which is a smaller wrong than asking the
+    // operating system about time zones on every frame.
+    photosite_core::time::set_local_offset(i64::from(
+        chrono::Local::now().offset().local_minus_utc(),
     ));
 
     // Not `with_maximized`, deliberately. eframe keeps the window hidden
@@ -2337,10 +2345,11 @@ impl App {
         }
 
         let mut choice: Option<Closing> = None;
-        egui::Window::new(t!("closing-title"))
+        let shown = dialog::window(ctx, &self.settings.window, "closing", t!("closing-title"))
             .collapsible(false)
             .resizable(false)
             .show(ctx, |ui| {
+                dialog::spacious(ui);
                 ui.label(t!(
                     "closing-question",
                     name = t!("editor-pasted", number = number as i64)
@@ -2362,6 +2371,7 @@ impl App {
                     choice = Some(Closing::Cancel);
                 }
             });
+        dialog::remember(&mut self.settings.window, "closing", &shown);
 
         if let Some(choice) = choice {
             self.answer_closing(ctx, choice);
@@ -4081,24 +4091,10 @@ impl App {
         let recent = self.settings.gallery.recent_destinations.clone();
         let palette = *self.palette();
 
-        // One window for both, so it stands in one place. Where it was left
-        // last time, even in a run before this one; the first time of all,
-        // in the middle. Placed by its middle every frame: a window placed by
-        // its middle one frame and by its corner the next jumps by half its
-        // size, and egui keeps whichever it was told last.
-        let middle = match (
-            self.settings.window.send_to_x,
-            self.settings.window.send_to_y,
-        ) {
-            (Some(x), Some(y)) => egui::pos2(x as f32, y as f32),
-            _ => ctx.content_rect().center(),
-        };
-        let window = egui::Window::new(title)
-            .id(egui::Id::new("send-to"))
+        // One window for both, so it stands in one place.
+        let window = dialog::window(ctx, &self.settings.window, "send-to", title)
             .collapsible(false)
-            .resizable(false)
-            .pivot(egui::Align2::CENTER_CENTER)
-            .default_pos(middle);
+            .resizable(false);
 
         let mut open = true;
         let mut go = false;
@@ -4106,6 +4102,7 @@ impl App {
         let mut browsing = false;
         let mut forget: Option<String> = None;
         let shown = window.open(&mut open).show(ctx, |ui| {
+            dialog::spacious(ui);
             ui.label(heading);
             ui.horizontal(|ui| {
                 let field = ui.add(
@@ -4191,13 +4188,7 @@ impl App {
             self.settings.gallery.forget_destination(&folder);
         }
 
-        // Kept every frame it is shown, so that wherever it is closed from,
-        // the next one opens there.
-        if let Some(shown) = shown {
-            let middle = shown.response.rect.center();
-            self.settings.window.send_to_x = Some(f64::from(middle.x));
-            self.settings.window.send_to_y = Some(f64::from(middle.y));
-        }
+        dialog::remember(&mut self.settings.window, "send-to", &shown);
 
         if !open || cancelled {
             self.sending = None;
@@ -4251,11 +4242,12 @@ impl App {
         // same thing, but egui already holds `open` while the contents are
         // drawn, so the button says so through a second flag.
         let mut cancelled = false;
-        egui::Window::new(title)
+        let shown = dialog::window(ctx, &self.settings.window, "ask-name", title)
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
             .show(ctx, |ui| {
+                dialog::spacious(ui);
                 ui.horizontal(|ui| {
                     ui.label(t!("ask-name"));
                     let field = ui.add(egui::TextEdit::singleline(&mut name).desired_width(260.0));
@@ -4279,6 +4271,7 @@ impl App {
                     }
                 });
             });
+        dialog::remember(&mut self.settings.window, "ask-name", &shown);
 
         if !open || cancelled {
             self.asking = None;
@@ -4468,13 +4461,19 @@ impl App {
             .unwrap_or(0);
 
         let mut open = true;
-        egui::Window::new(t!("diagnostics-title"))
-            .open(&mut open)
-            .show(ctx, |ui| {
-                for (label, value) in &rows {
-                    ui.monospace(format!("{label:width$}  {value}"));
-                }
-            });
+        let shown = dialog::window(
+            ctx,
+            &self.settings.window,
+            "diagnostics",
+            t!("diagnostics-title"),
+        )
+        .open(&mut open)
+        .show(ctx, |ui| {
+            for (label, value) in &rows {
+                ui.monospace(format!("{label:width$}  {value}"));
+            }
+        });
+        dialog::remember(&mut self.settings.window, "diagnostics", &shown);
         self.show_diagnostics = open;
     }
 
@@ -5352,20 +5351,18 @@ mod culling {
     fn the_dialog_opens_in_the_middle_and_then_where_it_was_left() {
         let (mut app, _data, _photos) = three();
         app.select_only(0);
-        assert_eq!(app.settings.window.send_to_x, None);
+        assert_eq!(app.settings.window.dialog_at("send-to"), None);
 
         app.run_for_test("file.copy_to");
         let ctx = egui::Context::default();
         for _ in 0..3 {
             a_frame_of_sending(&mut app, &ctx, Vec::new());
         }
-        let (x, y) = (
-            app.settings
-                .window
-                .send_to_x
-                .expect("the place was not kept") as f32,
-            app.settings.window.send_to_y.unwrap() as f32,
-        );
+        let (x, y) = app
+            .settings
+            .window
+            .dialog_at("send-to")
+            .expect("the place was not kept");
         assert!(
             (x - 600.0).abs() < 1.0 && (y - 400.0).abs() < 1.0,
             "not in the middle of the screen: {x} {y}"
@@ -5373,18 +5370,37 @@ mod culling {
 
         // Somewhere else, as a new run would read it from the settings.
         app.sending = None;
-        app.settings.window.send_to_x = Some(340.0);
-        app.settings.window.send_to_y = Some(260.0);
+        app.settings.window.remember_dialog("send-to", 340.0, 260.0);
         app.run_for_test("file.move_to");
         let ctx = egui::Context::default();
         for _ in 0..3 {
             a_frame_of_sending(&mut app, &ctx, Vec::new());
         }
         // Within a point: egui puts a window on whole pixels.
-        let near =
-            |kept: Option<f64>, wanted: f64| kept.is_some_and(|kept| (kept - wanted).abs() < 1.0);
-        assert!(near(app.settings.window.send_to_x, 340.0));
-        assert!(near(app.settings.window.send_to_y, 260.0));
+        let near = |kept: Option<(f64, f64)>, wanted: (f64, f64)| {
+            kept.is_some_and(|(x, y)| (x - wanted.0).abs() < 1.0 && (y - wanted.1).abs() < 1.0)
+        };
+        assert!(near(
+            app.settings.window.dialog_at("send-to"),
+            (340.0, 260.0)
+        ));
+
+        // Left somewhere that is no longer on the screen — a monitor that
+        // was unplugged — it comes back to the middle rather than opening
+        // where nobody can reach it.
+        app.sending = None;
+        app.settings
+            .window
+            .remember_dialog("send-to", 5000.0, 5000.0);
+        app.run_for_test("file.move_to");
+        let ctx = egui::Context::default();
+        for _ in 0..3 {
+            a_frame_of_sending(&mut app, &ctx, Vec::new());
+        }
+        assert!(near(
+            app.settings.window.dialog_at("send-to"),
+            (600.0, 400.0)
+        ));
     }
 
     /// The cross beside a recent folder takes it off the list.

@@ -50,6 +50,10 @@ pub struct Photo {
     /// description, in the language somebody asked for, and this is the
     /// second copy that makes searching work in both.
     pub description_en: Option<String>,
+    /// The title and the keywords in English, by the same rule: in the
+    /// catalogue for the search, never in the photograph.
+    pub title_en: Option<String>,
+    pub keywords_en: Vec<String>,
     /// Who is on it, named. Filled in for a whole folder at once, like the
     /// keywords — one query and not one per tile.
     pub people: Vec<crate::people::Tag>,
@@ -501,6 +505,8 @@ mod tests {
             lens: None,
             organisation: Organisation::default(),
             description_en: None,
+            title_en: None,
+            keywords_en: Vec::new(),
             people: Vec::new(),
             expressions: Default::default(),
             place: None,

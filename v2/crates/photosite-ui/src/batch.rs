@@ -11,7 +11,7 @@
 //! Recomputing it means asking the disk whether a name is taken, which is
 //! why it is **not** done every frame. It is done when something changes.
 
-use crate::{App, theme};
+use crate::{App, dialog, theme};
 use eframe::egui;
 use photosite_core::batch::{
     self, BATCH, Carry, Format, Naming, OnCollision, Plan, Preset, Resize,
@@ -116,10 +116,11 @@ pub fn window(app: &mut App, ctx: &egui::Context, palette: &Palette) {
         .and_then(|id| app.tasks.snapshot().into_iter().find(|task| task.id == id))
         .filter(|task| !task.finished);
 
-    egui::Window::new(t!("batch-title"))
+    let shown = dialog::window(ctx, &app.settings.window, "batch", t!("batch-title"))
         .open(&mut open)
-        .default_width(520.0)
+        .default_width(560.0)
         .show(ctx, |ui| {
+            dialog::spacious(ui);
             let preset = &mut app.batch.preset;
 
             // The presets, as a row of chips. Choosing one replaces the
@@ -146,71 +147,72 @@ pub fn window(app: &mut App, ctx: &egui::Context, palette: &Palette) {
 
             ui.separator();
             summary(app, ui, palette);
-            ui.separator();
-
-            ui.horizontal(|ui| match &running {
-                Some(task) => {
-                    if ui.button(t!("batch-stop")).clicked()
-                        && let Some(id) = app.batch.running
-                    {
-                        app.tasks.cancel(id);
-                    }
-
-                    if let Some(fraction) = task.fraction() {
-                        ui.add(egui::ProgressBar::new(fraction).desired_width(160.0));
-                    }
-
-                    ui.label(
-                        egui::RichText::new(&task.message)
-                            .small()
-                            .color(theme::color(palette.dim)),
-                    );
-                }
-                None => {
-                    let ready = app.batch.plan.writes() > 0;
-                    if ui
-                        .add_enabled(ready, egui::Button::new(t!("batch-run")))
-                        .clicked()
-                    {
-                        go = true;
-                    }
-
-                    match &app.batch.saving {
-                        Some(name) => {
-                            let mut name = name.clone();
-                            let field = ui.add(
-                                egui::TextEdit::singleline(&mut name)
-                                    .desired_width(160.0)
-                                    .hint_text(t!("batch-preset-name")),
-                            );
-                            field.request_focus();
-                            let entered = field.lost_focus()
-                                && ui.input(|input| input.key_pressed(egui::Key::Enter));
-                            if entered && !name.trim().is_empty() {
-                                save = true;
-                            }
-
-                            app.batch.saving = Some(name);
-                        }
-                        None => {
-                            if ui.button(t!("batch-save-preset")).clicked() {
-                                app.batch.saving = Some(app.batch.preset.name.clone());
-                            }
-                        }
-                    }
-
-                    if !app.batch.preset.name.trim().is_empty()
-                        && ui.button(t!("batch-delete-preset")).clicked()
-                    {
-                        delete = Some(app.batch.preset.name.clone());
-                    }
-                }
-            });
-
             if !app.batch.summary.is_empty() {
                 ui.label(egui::RichText::new(&app.batch.summary).color(theme::color(palette.text)));
             }
+
+            dialog::footer(ui, palette, |ui| match &running {
+                Some(task) => {
+                    ui.horizontal(|ui| {
+                        if ui.button(t!("batch-stop")).clicked()
+                            && let Some(id) = app.batch.running
+                        {
+                            app.tasks.cancel(id);
+                        }
+
+                        if let Some(fraction) = task.fraction() {
+                            ui.add(
+                                egui::ProgressBar::new(fraction)
+                                    .desired_width(ui.available_width().max(120.0)),
+                            );
+                        }
+                    });
+                    dialog::hint(ui, palette, task.message.clone());
+                }
+                None => {
+                    ui.horizontal(|ui| {
+                        let ready = app.batch.plan.writes() > 0;
+                        if dialog::primary(ui, palette, t!("batch-run"), ready).clicked() {
+                            go = true;
+                        }
+
+                        match &app.batch.saving {
+                            Some(name) => {
+                                let mut name = name.clone();
+                                let field = ui.add(
+                                    egui::TextEdit::singleline(&mut name)
+                                        .desired_width(160.0)
+                                        .hint_text(t!("batch-preset-name")),
+                                );
+                                field.request_focus();
+                                // Whether it has the keys now, not whether it
+                                // lost them: it is handed them back every
+                                // frame, so it never does.
+                                let entered = (field.has_focus() || field.lost_focus())
+                                    && ui.input(|input| input.key_pressed(egui::Key::Enter));
+                                if entered && !name.trim().is_empty() {
+                                    save = true;
+                                }
+
+                                app.batch.saving = Some(name);
+                            }
+                            None => {
+                                if ui.button(t!("batch-save-preset")).clicked() {
+                                    app.batch.saving = Some(app.batch.preset.name.clone());
+                                }
+                            }
+                        }
+
+                        if !app.batch.preset.name.trim().is_empty()
+                            && ui.button(t!("batch-delete-preset")).clicked()
+                        {
+                            delete = Some(app.batch.preset.name.clone());
+                        }
+                    });
+                }
+            });
         });
+    dialog::remember(&mut app.settings.window, "batch", &shown);
 
     app.batch.open = open;
     if let Some(preset) = load {

@@ -711,6 +711,8 @@ mod tests {
             lens: None,
             organisation: Organisation::default(),
             description_en: None,
+            title_en: None,
+            keywords_en: Vec::new(),
             people: Vec::new(),
             expressions: Default::default(),
             place: None,

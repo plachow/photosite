@@ -15,12 +15,13 @@
 //! because there is one catalogue and it is the one thing that cannot be
 //! done twice at once.
 
-use crate::{App, theme};
+use crate::{App, dialog, theme};
 use eframe::egui;
 use photosite_core::people::{Face, Person};
 use photosite_core::theme::Palette;
 use photosite_core::{Catalog, TaskStatus, t};
 use photosite_faces::fetch::{self, Model};
+use photosite_faces::sweep::Scope;
 use photosite_faces::{Availability, cluster};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -35,6 +36,13 @@ const GROUPS_SHOWN: usize = 40;
 
 /// How many faces of one group are drawn. The rest are counted.
 const FACES_PER_GROUP: usize = 12;
+
+/// The side of a face chip, and of the one clicked to be looked at.
+const CHIP: f32 = 96.0;
+const PEEK: f32 = 288.0;
+
+/// The side of the closer look that appears under the pointer.
+const HOVER: f32 = 256.0;
 
 /// How many of a person's faces the window shows, so a wrong match can be
 /// found and taken back.
@@ -85,6 +93,11 @@ pub struct People {
     pub checked: bool,
     /// Why the last download did not finish.
     pub trouble: Option<String>,
+    /// Look at every photograph again rather than only the ones no sweep
+    /// has seen. Not a setting: it is asked for a run, not for good.
+    pub rescan: bool,
+    /// The face drawn large, to be looked at. One at a time.
+    pub peek: Option<i64>,
 }
 
 /// Faces the arithmetic believes are one person.
@@ -242,61 +255,98 @@ pub fn window(app: &mut App, ctx: &egui::Context, palette: &Palette) {
         .and_then(|id| app.tasks.snapshot().into_iter().find(|task| task.id == id))
         .filter(|task| !task.finished);
 
-    egui::Window::new(t!("people-title"))
+    let scope_said = if app.selection.is_empty() {
+        t!("people-in-folder")
+    } else {
+        t!("people-in-selection", count = app.selection.len() as i64)
+    };
+
+    let shown = dialog::window(ctx, &app.settings.window, "people", t!("people-title"))
         .open(&mut open)
-        .default_width(720.0)
-        .default_height(600.0)
+        .default_size([760.0, 640.0])
+        .min_size([520.0, 360.0])
+        .vscroll(false)
         .show(ctx, |ui| {
-            ui.horizontal(|ui| match &scanning {
-                Some(task) => {
-                    if ui.button(t!("people-stop")).clicked() {
-                        doing = Some(Doing::Stop);
-                    }
+            dialog::spacious(ui);
 
-                    if let Some(fraction) = task.fraction() {
-                        ui.add(egui::ProgressBar::new(fraction).desired_width(180.0));
-                    }
+            // The footer first: a panel inside a window is laid out before
+            // whatever is left in the middle, and the piles scroll in what
+            // is left.
+            egui::Panel::bottom("people-footer")
+                .frame(egui::Frame::new())
+                .resizable(false)
+                .show_separator_line(false)
+                .show(ui, |ui| {
+                    dialog::footer(ui, palette, |ui| match &scanning {
+                        Some(task) => {
+                            ui.horizontal(|ui| {
+                                if ui.button(t!("people-stop")).clicked() {
+                                    doing = Some(Doing::Stop);
+                                }
 
-                    ui.label(
-                        egui::RichText::new(&task.message)
-                            .small()
-                            .color(theme::color(palette.dim)),
-                    );
-                }
-                None => {
-                    let ready = app.people.unavailable.is_none() && fetching.is_none();
-                    if ui
-                        .add_enabled(ready, egui::Button::new(t!("people-scan")))
-                        .clicked()
-                    {
-                        doing = Some(Doing::Scan);
-                    }
+                                if let Some(fraction) = task.fraction() {
+                                    ui.add(
+                                        egui::ProgressBar::new(fraction)
+                                            .desired_width(ui.available_width().max(120.0)),
+                                    );
+                                }
+                            });
+                            dialog::hint(ui, palette, task.message.clone());
+                        }
+                        None => {
+                            ui.horizontal_wrapped(|ui| {
+                                let ready = app.people.unavailable.is_none() && fetching.is_none();
+                                if dialog::primary(ui, palette, t!("people-scan"), ready).clicked()
+                                {
+                                    doing = Some(Doing::Scan);
+                                }
 
-                    if let Some(why) = &app.people.unavailable {
-                        ui.label(egui::RichText::new(why).color(theme::color(palette.warn)));
-                    } else if !app.people.summary.is_empty() {
-                        ui.label(
-                            egui::RichText::new(&app.people.summary)
-                                .small()
-                                .color(theme::color(palette.dim)),
-                        );
-                    }
-                }
-            });
+                                // Which photographs, and whether the ones
+                                // already seen are seen again — the same
+                                // two choices the Describe window offers.
+                                for again in [false, true] {
+                                    let label = if again {
+                                        t!("people-rescan")
+                                    } else {
+                                        t!("people-only-new")
+                                    };
+                                    if ui
+                                        .selectable_label(app.people.rescan == again, label)
+                                        .clicked()
+                                    {
+                                        app.people.rescan = again;
+                                    }
+                                }
+
+                                dialog::hint(ui, palette, scope_said.clone());
+                            });
+                        }
+                    });
+                });
+
+            if let Some(why) = &app.people.unavailable {
+                ui.label(egui::RichText::new(why).color(theme::color(palette.warn)));
+            } else if scanning.is_none() && !app.people.summary.is_empty() {
+                dialog::hint(ui, palette, app.people.summary.clone());
+            }
 
             if scanning.is_none() {
                 offer(app, ui, palette, fetching.as_ref(), &mut doing);
             }
 
             ui.separator();
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                suggestions(app, ui, palette, &mut doing);
-                groups(app, ui, palette, &mut doing);
-                known(app, ui, palette, &mut doing);
-            });
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    suggestions(app, ui, palette, &mut doing);
+                    groups(app, ui, palette, &mut doing);
+                    known(app, ui, palette, &mut doing);
+                });
         });
+    dialog::remember(&mut app.settings.window, "people", &shown);
 
     app.people.open = open;
+
     if !open {
         // Looked at again when it is next opened: the models may have
         // been put there by hand in the meantime.
@@ -401,6 +451,7 @@ fn suggestions(app: &mut App, ui: &mut egui::Ui, palette: &Palette, doing: &mut 
     }
 
     heading(ui, palette, &t!("people-suggestions"));
+    let mut peek = None;
     for (index, suggestion) in app.people.suggestions.iter().enumerate() {
         ui.horizontal(|ui| {
             ui.label(t!("people-is-this", name = suggestion.name.clone()));
@@ -413,8 +464,15 @@ fn suggestions(app: &mut App, ui: &mut egui::Ui, palette: &Palette, doing: &mut 
             }
         });
 
-        chips(app, ui, palette, &suggestion.faces, FACES_PER_GROUP);
+        if let Some(face) = chips(app, ui, palette, &suggestion.faces, FACES_PER_GROUP) {
+            peek = Some(face);
+        }
+
         ui.add_space(8.0);
+    }
+
+    if let Some(face) = peek {
+        toggle_peek(app, face);
     }
 
     ui.separator();
@@ -468,18 +526,10 @@ fn groups(app: &mut App, ui: &mut egui::Ui, palette: &Palette, doing: &mut Optio
                     Some((_, name)) => name.clone(),
                     None => String::new(),
                 };
-                let field = ui.add(
-                    egui::TextEdit::singleline(&mut name)
-                        .desired_width(160.0)
-                        .hint_text(t!("people-new-name")),
-                );
-                field.request_focus();
-                let entered =
-                    field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
-                if entered && !name.trim().is_empty() {
-                    *doing = Some(Doing::Name(index, name.clone()));
-                } else {
-                    app.people.naming = Some((index, name));
+                match name_box(ui, &mut name) {
+                    Typed::Entered => *doing = Some(Doing::Name(index, name)),
+                    Typed::Cancelled => app.people.naming = None,
+                    Typed::Typing => app.people.naming = Some((index, name)),
                 }
             } else if ui.button(t!("people-new-person")).clicked() {
                 app.people.naming = Some((index, String::new()));
@@ -490,7 +540,10 @@ fn groups(app: &mut App, ui: &mut egui::Ui, palette: &Palette, doing: &mut Optio
             }
         });
 
-        chips(app, ui, palette, &faces, FACES_PER_GROUP);
+        if let Some(face) = chips(app, ui, palette, &faces, FACES_PER_GROUP) {
+            toggle_peek(app, face);
+        }
+
         ui.add_space(10.0);
     }
 
@@ -515,18 +568,10 @@ fn known(app: &mut App, ui: &mut egui::Ui, palette: &Palette, doing: &mut Option
             match &app.people.renaming {
                 Some((id, name)) if *id == person.id => {
                     let mut name = name.clone();
-                    let field = ui.add(
-                        egui::TextEdit::singleline(&mut name)
-                            .desired_width(160.0)
-                            .hint_text(t!("people-new-name")),
-                    );
-                    field.request_focus();
-                    let entered =
-                        field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
-                    if entered && !name.trim().is_empty() {
-                        *doing = Some(Doing::Rename(person.id, name.clone()));
-                    } else {
-                        app.people.renaming = Some((person.id, name));
+                    match name_box(ui, &mut name) {
+                        Typed::Entered => *doing = Some(Doing::Rename(person.id, name)),
+                        Typed::Cancelled => app.people.renaming = None,
+                        Typed::Typing => app.people.renaming = Some((person.id, name)),
                     }
                 }
                 _ => {
@@ -574,12 +619,62 @@ fn heading(ui: &mut egui::Ui, palette: &Palette, title: &str) {
     );
 }
 
-/// A row of face thumbnails, cut out of the photographs they came from.
-fn chips(app: &App, ui: &mut egui::Ui, palette: &Palette, faces: &[Face], limit: usize) {
-    let _ = clickable_inner(app, ui, palette, faces, limit, false);
+/// What came of a name being typed.
+enum Typed {
+    Typing,
+    Entered,
+    Cancelled,
 }
 
-/// The same, but each one can be clicked. Returns which was.
+/// The box a name is typed into, with the two ways out of it: Enter or OK
+/// to name, Escape or Cancel to think better of it.
+fn name_box(ui: &mut egui::Ui, name: &mut String) -> Typed {
+    let field = ui.add(
+        egui::TextEdit::singleline(name)
+            .desired_width(160.0)
+            .hint_text(t!("people-new-name")),
+    );
+    field.request_focus();
+    // Whether it has the keys now, not whether it lost them: it is handed
+    // them back every frame, so it never does — which is exactly why Enter
+    // did nothing here for a while.
+    let entered = (field.has_focus() || field.lost_focus())
+        && ui.input(|input| input.key_pressed(egui::Key::Enter));
+    let confirmed = ui.button(t!("people-name-ok")).clicked();
+    let cancelled = ui.button(t!("people-cancel")).clicked()
+        || ui.input(|input| input.key_pressed(egui::Key::Escape));
+    if cancelled {
+        Typed::Cancelled
+    } else if (entered || confirmed) && !name.trim().is_empty() {
+        Typed::Entered
+    } else {
+        Typed::Typing
+    }
+}
+
+/// Draws one face large, or stops doing so.
+fn toggle_peek(app: &mut App, face: i64) {
+    app.people.peek = if app.people.peek == Some(face) {
+        None
+    } else {
+        Some(face)
+    };
+}
+
+/// A row of face thumbnails, cut out of the photographs they came from.
+/// Returns the one clicked, which the caller draws large.
+fn chips(
+    app: &App,
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    faces: &[Face],
+    limit: usize,
+) -> Option<i64> {
+    clickable_inner(app, ui, palette, faces, limit, false)
+}
+
+/// The same, where a click means something: taking the face off the
+/// person. Returns which was clicked.
 fn clickable(
     app: &App,
     ui: &mut egui::Ui,
@@ -596,27 +691,46 @@ fn clickable_inner(
     palette: &Palette,
     faces: &[Face],
     limit: usize,
-    clicks: bool,
+    removes: bool,
 ) -> Option<i64> {
-    let side = 64.0;
     let mut clicked = None;
     ui.horizontal_wrapped(|ui| {
         for face in faces.iter().take(limit) {
-            let (rect, response) = ui.allocate_exact_size(
-                egui::vec2(side, side),
-                if clicks {
-                    egui::Sense::click()
-                } else {
-                    egui::Sense::hover()
-                },
-            );
-            if clicks && response.clicked() {
+            let side = if !removes && app.people.peek == Some(face.id) {
+                PEEK
+            } else {
+                CHIP
+            };
+            let (rect, response) =
+                ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::click());
+            if response.clicked() {
                 clicked = Some(face.id);
             }
 
             match app.face_texture(face) {
                 Some((texture, uv)) => {
                     ui.painter().image(texture, rect, uv, egui::Color32::WHITE);
+                    // A closer look under the pointer, without clicking
+                    // anything: the face at a size a face can be seen at,
+                    // and which photograph it came from.
+                    response.on_hover_ui(|ui| {
+                        let (big, _) =
+                            ui.allocate_exact_size(egui::vec2(HOVER, HOVER), egui::Sense::hover());
+                        ui.painter().image(texture, big, uv, egui::Color32::WHITE);
+                        ui.label(
+                            face.path
+                                .file_name()
+                                .map(|name| name.to_string_lossy().into_owned())
+                                .unwrap_or_default(),
+                        );
+                        if !removes {
+                            ui.label(
+                                egui::RichText::new(t!("people-peek"))
+                                    .small()
+                                    .color(theme::color(palette.dim)),
+                            );
+                        }
+                    });
                 }
                 None => {
                     // Nothing to draw yet. A frame rather than a hole, so
@@ -624,10 +738,6 @@ fn clickable_inner(
                     ui.painter()
                         .rect_filled(rect, 2.0, theme::color(palette.panel));
                 }
-            }
-
-            if clicks {
-                response.on_hover_text(face.path.to_string_lossy());
             }
         }
 
@@ -894,6 +1004,23 @@ fn start(app: &mut App) {
     let detect = app.settings.faces.detect_size.clamp(320, 8192) as u32;
     let threads = app.worker_threads();
     let waker = app.waker.clone();
+    // The selection when there is one, the folder when there is not — the
+    // rule the Describe window follows, so the two windows mean the same
+    // thing by "these photographs".
+    let scope = if app.selection.is_empty() {
+        Scope::Folder {
+            folder: folder.clone(),
+            recursive,
+        }
+    } else {
+        Scope::Photos(
+            app.selection
+                .iter()
+                .filter_map(|at| app.photo(*at).cloned())
+                .collect(),
+        )
+    };
+    let again = app.people.rescan;
 
     app.people.scanning = Some(app.tasks.spawn(t!("task-faces"), move |cancel, progress| {
         let mut catalog = Catalog::open(&path)?;
@@ -902,8 +1029,8 @@ fn start(app: &mut App) {
         let mut report = photosite_faces::sweep::sweep(
             &mut catalog,
             &engine,
-            &folder,
-            recursive,
+            &scope,
+            again,
             detect,
             threads,
             now,

@@ -19,6 +19,7 @@ pub mod history;
 pub mod i18n;
 pub mod jobs;
 pub mod orientation;
+pub mod pace;
 pub mod paths;
 pub mod people;
 pub mod place;

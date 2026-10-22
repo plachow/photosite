@@ -2900,6 +2900,7 @@ version = "2.1.0"
 dependencies = [
  "anyhow",
  "arboard",
+ "chrono",
  "clipboard-win",
  "crossbeam-channel",
  "eframe",

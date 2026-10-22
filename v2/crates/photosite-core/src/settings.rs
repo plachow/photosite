@@ -59,12 +59,11 @@ pub struct Window {
     /// not a constant in the drawing layer — on a touch screen six points is
     /// not enough.
     pub splitter: f64,
-    /// Where the Copy to and Move to dialog was left: its middle, in points.
-    /// The middle and not a corner, because the dialog grows and shrinks
-    /// with the list of recent folders in it. Nothing until it has been
-    /// shown once, and then it opens in the middle of the window.
-    pub send_to_x: Option<f64>,
-    pub send_to_y: Option<f64>,
+    /// Where each dialog was left, so that it opens there next time: one
+    /// line, `name=x,y` separated by spaces, the middle of the window in
+    /// points. Nothing for a dialog that has never been shown, which then
+    /// opens in the middle of the application. See [`Window::dialog_at`].
+    pub dialogs: String,
 }
 
 impl Default for Window {
@@ -78,9 +77,38 @@ impl Default for Window {
             layout: crate::docks::DEFAULT.to_owned(),
             docks_hidden: String::new(),
             splitter: 6.0,
-            send_to_x: None,
-            send_to_y: None,
+            dialogs: String::new(),
         }
+    }
+}
+
+impl Window {
+    /// Where a dialog was left — the middle of it — or nothing, when it has
+    /// never been shown.
+    pub fn dialog_at(&self, name: &str) -> Option<(f64, f64)> {
+        self.dialogs
+            .split_whitespace()
+            .filter_map(|entry| entry.split_once('='))
+            .find(|(had, _)| *had == name)
+            .and_then(|(_, at)| {
+                let (x, y) = at.split_once(',')?;
+                Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
+            })
+    }
+
+    /// Remembers where a dialog is. Rounded to whole points: a position is
+    /// not a measurement, and a settings file full of `412.33333` is one
+    /// nobody can read.
+    pub fn remember_dialog(&mut self, name: &str, x: f64, y: f64) {
+        let mut entries: Vec<String> = self
+            .dialogs
+            .split_whitespace()
+            .filter(|entry| entry.split_once('=').is_none_or(|(had, _)| had != name))
+            .map(str::to_owned)
+            .collect();
+        entries.push(format!("{name}={:.0},{:.0}", x.round(), y.round()));
+        entries.sort();
+        self.dialogs = entries.join(" ");
     }
 }
 
@@ -797,13 +825,8 @@ pub const TUNABLES: &[Tunable] = &[
         kind: Kind::State,
     },
     Tunable {
-        path: "window.send_to_x",
-        label_key: "setting-send-to-x",
-        kind: Kind::State,
-    },
-    Tunable {
-        path: "window.send_to_y",
-        label_key: "setting-send-to-y",
+        path: "window.dialogs",
+        label_key: "setting-window-dialogs",
         kind: Kind::State,
     },
     Tunable {
@@ -1125,8 +1148,6 @@ pub fn paths_in_settings() -> Vec<String> {
     let mut probe = Settings::default();
     probe.window.x = Some(0.0);
     probe.window.y = Some(0.0);
-    probe.window.send_to_x = Some(0.0);
-    probe.window.send_to_y = Some(0.0);
     probe.gallery.last_folder = Some(String::new());
     probe.gallery.last_destination = Some(String::new());
     probe.gallery.last_copy_destination = Some(String::new());
@@ -1494,5 +1515,32 @@ tile_size = 'sto'
             settings.gallery.last_destination.as_deref(),
             Some("/piles/keep")
         );
+    }
+
+    #[test]
+    fn a_dialog_is_remembered_where_it_was_left_and_nowhere_else() {
+        let mut window = Window::default();
+        assert_eq!(window.dialog_at("describe"), None);
+
+        window.remember_dialog("describe", 640.4, 300.6);
+        window.remember_dialog("people", 100.0, 200.0);
+        assert_eq!(window.dialog_at("describe"), Some((640.0, 301.0)));
+        assert_eq!(window.dialog_at("people"), Some((100.0, 200.0)));
+        assert_eq!(window.dialog_at("batch"), None);
+
+        // Moved: one entry per dialog, not one per move.
+        window.remember_dialog("describe", 10.0, 20.0);
+        assert_eq!(window.dialog_at("describe"), Some((10.0, 20.0)));
+        assert_eq!(window.dialogs, "describe=10,20 people=100,200");
+    }
+
+    #[test]
+    fn a_damaged_dialog_entry_is_no_position_rather_than_a_panic() {
+        let window = Window {
+            dialogs: "describe=abc,2 people=5".to_owned(),
+            ..Window::default()
+        };
+        assert_eq!(window.dialog_at("describe"), None);
+        assert_eq!(window.dialog_at("people"), None);
     }
 }

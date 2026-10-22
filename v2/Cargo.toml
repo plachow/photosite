@@ -115,6 +115,13 @@ serde_json = "1"
 # the tree through velopack, so this costs a line and no crate.
 sha2 = "0.11"
 clap = { version = "4", features = ["derive"] }
+# The one question this application has about time zones: how far the
+# clock on the wall is from UTC, so a finishing time reads as the clock
+# does. Already in the tree through velopack, at this version; naming it
+# here adds a line and not a build.
+# `clock` and nothing else, which is how it is already resolved in the
+# lock: the defaults would pull wasm bindings nothing here can use.
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 jpeg-decoder = "0.3"
 # Writing metadata without shipping exiftool and a copy of Perl. little_exif
 # is the only pure-Rust crate that writes EXIF as well as reads it.

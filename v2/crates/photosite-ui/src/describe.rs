@@ -10,11 +10,11 @@
 //! over a folder is minutes to hours, and the only question anybody has
 //! while it goes is whether to wait or go and do something else.
 
-use crate::{App, theme};
+use crate::{App, dialog, theme};
 use eframe::egui;
 use photosite_ai::{Mode, Provider, Server, model_field, model_of};
 use photosite_core::theme::Palette;
-use photosite_core::{Catalog, Gazetteer, i18n, t};
+use photosite_core::{Catalog, Gazetteer, i18n, pace, t};
 use std::time::Duration;
 
 /// The window's state.
@@ -27,9 +27,6 @@ pub struct Describe {
     pub trouble: Option<String>,
     pub running: Option<u64>,
     pub summary: String,
-    /// What the last photograph came back with, so somebody watching can see
-    /// that the answers are worth having before leaving it running.
-    pub last: String,
 }
 
 pub fn open(app: &mut App) {
@@ -91,138 +88,163 @@ pub fn window(app: &mut App, ctx: &egui::Context, palette: &Palette) {
         .filter(|task| !task.finished);
     let waiting = chosen(app).len();
 
-    egui::Window::new(t!("ai-title"))
+    let shown = dialog::window(ctx, &app.settings.window, "describe", t!("ai-title"))
         .open(&mut open)
-        .default_width(520.0)
+        .default_width(560.0)
         .show(ctx, |ui| {
-            // Who is asked. Switching is a change of promise — the local
-            // model keeps the photographs at home, the others do not — so
-            // it sits first and is said in words.
-            ui.horizontal_wrapped(|ui| {
-                ui.label(t!("ai-provider"));
-                let chosen = Provider::from_id(&app.settings.ai.provider);
-                for provider in Provider::ALL {
-                    if ui
-                        .selectable_label(provider == chosen, i18n::t(provider.title_key()))
-                        .clicked()
-                        && provider != chosen
-                    {
-                        app.settings.ai.provider = provider.id().to_owned();
-                        app.describe.models.clear();
-                        app.describe.trouble = None;
-                        refresh = true;
-                    }
-                }
-            });
-
+            dialog::spacious(ui);
             let provider = Provider::from_id(&app.settings.ai.provider);
-            if provider.remote() {
-                ui.horizontal(|ui| {
+
+            dialog::form(ui, "describe-form", |ui| {
+                // Who is asked. Switching is a change of promise — the
+                // local model keeps the photographs at home, the others do
+                // not — so it sits first and is said in words.
+                ui.label(t!("ai-provider"));
+                ui.horizontal_wrapped(|ui| {
+                    for offered in Provider::ALL {
+                        if ui
+                            .selectable_label(offered == provider, i18n::t(offered.title_key()))
+                            .clicked()
+                            && offered != provider
+                        {
+                            app.settings.ai.provider = offered.id().to_owned();
+                            app.describe.models.clear();
+                            app.describe.trouble = None;
+                            refresh = true;
+                        }
+                    }
+                });
+                ui.end_row();
+
+                if provider.remote() {
                     ui.label(t!("ai-api-key"));
                     if ui
                         .add(
                             egui::TextEdit::singleline(&mut app.settings.ai.api_key)
                                 .password(true)
-                                .desired_width(220.0),
+                                .desired_width(260.0),
+                        )
+                        .lost_focus()
+                    {
+                        refresh = true;
+                    }
+                    ui.end_row();
+                }
+
+                ui.label(if provider.remote() {
+                    t!("ai-cloud-endpoint")
+                } else {
+                    t!("ai-endpoint")
+                });
+                ui.horizontal(|ui| {
+                    let endpoint = if provider.remote() {
+                        &mut app.settings.ai.cloud_endpoint
+                    } else {
+                        &mut app.settings.ai.endpoint
+                    };
+                    if ui
+                        .add(
+                            egui::TextEdit::singleline(endpoint)
+                                .hint_text(provider.default_endpoint())
+                                .desired_width(260.0),
                         )
                         .lost_focus()
                     {
                         refresh = true;
                     }
 
-                    ui.label(
-                        egui::RichText::new(t!("ai-api-key-hint"))
-                            .small()
-                            .color(theme::color(palette.dim)),
-                    );
+                    if ui.button(t!("ai-refresh")).clicked() {
+                        refresh = true;
+                    }
                 });
-            }
+                ui.end_row();
 
-            ui.horizontal(|ui| {
-                ui.label(if provider.remote() {
-                    t!("ai-cloud-endpoint")
-                } else {
-                    t!("ai-endpoint")
-                });
-                let endpoint = if provider.remote() {
-                    &mut app.settings.ai.cloud_endpoint
-                } else {
-                    &mut app.settings.ai.endpoint
-                };
-                if ui
-                    .add(
-                        egui::TextEdit::singleline(endpoint)
-                            .hint_text(provider.default_endpoint())
-                            .desired_width(220.0),
-                    )
-                    .lost_focus()
-                {
-                    refresh = true;
-                }
-
-                if ui.button(t!("ai-refresh")).clicked() {
-                    refresh = true;
-                }
-            });
-
-            ui.horizontal_wrapped(|ui| {
                 ui.label(t!("ai-model"));
-                let model = model_field(&mut app.settings.ai);
-                // A cloud provider lists everything it has, embeddings and
-                // all, by the dozen; there the box is where a name is
-                // typed and the chips narrow to what has been typed so far.
-                if app.describe.models.is_empty() || provider.remote() {
-                    ui.add(egui::TextEdit::singleline(model).desired_width(220.0));
-                }
-
-                let typed = model.trim().to_ascii_lowercase();
-                for name in &app.describe.models {
-                    let on = model == name;
-                    if provider.remote() && !on && !name.to_ascii_lowercase().contains(&typed) {
-                        continue;
+                ui.horizontal_wrapped(|ui| {
+                    let model = model_field(&mut app.settings.ai);
+                    // A cloud provider lists everything it has, embeddings
+                    // and all, by the dozen; there the box is where a name
+                    // is typed and the chips narrow to what has been typed
+                    // so far.
+                    if app.describe.models.is_empty() || provider.remote() {
+                        ui.add(egui::TextEdit::singleline(model).desired_width(260.0));
                     }
 
-                    if ui.selectable_label(on, name).clicked() {
-                        *model = name.clone();
+                    let typed = model.trim().to_ascii_lowercase();
+                    for name in &app.describe.models {
+                        let on = model == name;
+                        if provider.remote() && !on && !name.to_ascii_lowercase().contains(&typed) {
+                            continue;
+                        }
+
+                        if ui.selectable_label(on, name).clicked() {
+                            *model = name.clone();
+                        }
                     }
-                }
+                });
+                ui.end_row();
+
+                ui.label(t!("ai-language"));
+                ui.add(
+                    egui::TextEdit::singleline(&mut app.settings.ai.language).desired_width(160.0),
+                );
+                ui.end_row();
+
+                ui.label(t!("ai-already"));
+                ui.horizontal_wrapped(|ui| {
+                    for mode in [Mode::FillEmpty, Mode::Overwrite] {
+                        let on = app.settings.ai.overwrite == (mode == Mode::Overwrite);
+                        if ui.selectable_label(on, i18n::t(mode.title_key())).clicked() {
+                            app.settings.ai.overwrite = mode == Mode::Overwrite;
+                        }
+                    }
+                });
+                ui.end_row();
             });
 
             if let Some(trouble) = &app.describe.trouble {
                 ui.label(egui::RichText::new(trouble).color(theme::color(palette.warn)));
             }
 
-            ui.horizontal(|ui| {
-                ui.label(t!("ai-language"));
-                ui.add(
-                    egui::TextEdit::singleline(&mut app.settings.ai.language).desired_width(140.0),
-                );
-                for mode in [Mode::FillEmpty, Mode::Overwrite] {
-                    let on = app.settings.ai.overwrite == (mode == Mode::Overwrite);
-                    if ui.selectable_label(on, i18n::t(mode.title_key())).clicked() {
-                        app.settings.ai.overwrite = mode == Mode::Overwrite;
-                    }
-                }
-            });
+            ui.add_space(4.0);
+            if provider.remote() {
+                dialog::hint(ui, palette, t!("ai-api-key-hint"));
+            }
+
+            dialog::hint(ui, palette, t!("ai-language-hint"));
 
             // Whether there is a gazetteer, said plainly. A describer with
             // no places is a describer that will not name any, and finding
-            // that out from a hundred vague descriptions is the wrong way to
-            // learn it.
-            ui.label(
-                egui::RichText::new(match &app.places {
-                    Some(places) => t!("ai-places-from", source = places.source.clone()),
-                    None => t!(
-                        "ai-no-places",
-                        folder = app.paths.places().display().to_string()
-                    ),
-                })
-                .small()
-                .color(theme::color(palette.dim)),
-            );
+            // that out from a hundred vague descriptions is the wrong way
+            // to learn it. The folder is cut to fit, with the whole of it
+            // under the pointer.
+            match &app.places {
+                Some(places) => {
+                    dialog::hint(
+                        ui,
+                        palette,
+                        t!("ai-places-from", source = places.source.clone()),
+                    );
+                }
+                None => {
+                    let folder = app.paths.places().display().to_string();
+                    dialog::hint(
+                        ui,
+                        palette,
+                        t!("ai-no-places", folder = crate::menu::elided(&folder, 48)),
+                    )
+                    .on_hover_text(folder);
+                }
+            }
 
-            ui.separator();
-            match &running {
+            if !app.describe.summary.is_empty() {
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new(&app.describe.summary).color(theme::color(palette.text)),
+                );
+            }
+
+            dialog::footer(ui, palette, |ui| match &running {
                 Some(task) => {
                     ui.horizontal(|ui| {
                         if ui.button(t!("ai-stop")).clicked()
@@ -232,51 +254,29 @@ pub fn window(app: &mut App, ctx: &egui::Context, palette: &Palette) {
                         }
 
                         if let Some(fraction) = task.fraction() {
-                            ui.add(egui::ProgressBar::new(fraction).desired_width(200.0));
+                            ui.add(
+                                egui::ProgressBar::new(fraction)
+                                    .desired_width(ui.available_width().max(120.0)),
+                            );
                         }
                     });
-
-                    ui.label(
-                        egui::RichText::new(&task.message)
-                            .small()
-                            .color(theme::color(palette.dim)),
-                    );
+                    dialog::hint(ui, palette, task.message.clone());
                 }
                 None => {
                     ui.horizontal(|ui| {
                         let ready = waiting > 0
                             && !model_of(&app.settings.ai).trim().is_empty()
                             && Server::of(&app.settings.ai).admitted();
-                        if ui
-                            .add_enabled(ready, egui::Button::new(t!("ai-run")))
-                            .clicked()
-                        {
+                        if dialog::primary(ui, palette, t!("ai-run"), ready).clicked() {
                             go = true;
                         }
 
-                        ui.label(
-                            egui::RichText::new(t!("ai-waiting", count = waiting as i64))
-                                .small()
-                                .color(theme::color(palette.dim)),
-                        );
+                        dialog::hint(ui, palette, t!("ai-waiting", count = waiting as i64));
                     });
                 }
-            }
-
-            if !app.describe.summary.is_empty() {
-                ui.label(
-                    egui::RichText::new(&app.describe.summary).color(theme::color(palette.text)),
-                );
-            }
-
-            if !app.describe.last.is_empty() {
-                ui.label(
-                    egui::RichText::new(&app.describe.last)
-                        .small()
-                        .color(theme::color(palette.dim)),
-                );
-            }
+            });
         });
+    dialog::remember(&mut app.settings.window, "describe", &shown);
 
     app.describe.open = open;
     if refresh {
@@ -322,7 +322,6 @@ fn start(app: &mut App) {
     let waker = app.waker.clone();
 
     app.describe.summary.clear();
-    app.describe.last.clear();
     app.describe.running = Some(app.tasks.spawn(t!("task-describe"), move |cancel, progress| {
         let mut catalog = Catalog::open(&path)?;
         let total = photos.len() as u64;
@@ -344,7 +343,11 @@ fn start(app: &mut App) {
                 photo.organisation.description.as_deref(),
             ) {
                 skipped += 1;
-                progress.report(at as u64 + 1, Some(total), pace(started, attempted, total));
+                progress.report(
+                    at as u64 + 1,
+                    Some(total),
+                    pace::status(at as u64 + 1, total, attempted, started.elapsed()),
+                );
                 continue;
             }
 
@@ -365,7 +368,10 @@ fn start(app: &mut App) {
                     progress.report(
                         at as u64 + 1,
                         Some(total),
-                        format!("{} \u{b7} {said}", pace(started, attempted, total)),
+                        format!(
+                            "{} \u{b7} {said}",
+                            pace::status(at as u64 + 1, total, attempted, started.elapsed())
+                        ),
                     );
                 }
                 Err(error) => {
@@ -391,7 +397,10 @@ fn start(app: &mut App) {
 
         let mut said = vec![
             t!("ai-described", count = described as i64),
-            t!("ai-in", seconds = started.elapsed().as_secs_f64()),
+            t!(
+                "ai-in",
+                time = photosite_core::time::format_span(started.elapsed().as_secs_f64())
+            ),
         ];
         if skipped > 0 {
             said.push(t!("ai-skipped", count = skipped as i64));
@@ -463,19 +472,4 @@ fn one(
         .title
         .clone()
         .unwrap_or_else(|| insights.description.clone().unwrap_or_default()))
-}
-
-/// How fast it is going and when it will be done.
-///
-/// The one number anybody watching actually wants: a run of four hundred
-/// photographs at forty seconds each is four hours, and knowing that is the
-/// difference between waiting and going away.
-fn pace(started: std::time::Instant, attempted: u64, total: u64) -> String {
-    if attempted == 0 {
-        return String::new();
-    }
-
-    let each = started.elapsed().as_secs_f64() / attempted as f64;
-    let left = total.saturating_sub(attempted) as f64 * each;
-    t!("ai-pace", each = each, left = left / 60.0)
 }

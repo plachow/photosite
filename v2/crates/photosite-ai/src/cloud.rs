@@ -403,7 +403,8 @@ pub(crate) fn read_gemini(reply: &str) -> Result<Insights> {
 
 fn fields(english_too: bool) -> &'static str {
     if english_too {
-        "\"title\", \"description\", \"keywords\" and \"description_en\""
+        "\"title\", \"description\", \"keywords\", \"title_en\", \"description_en\" and \
+         \"keywords_en\""
     } else {
         "\"title\", \"description\" and \"keywords\""
     }

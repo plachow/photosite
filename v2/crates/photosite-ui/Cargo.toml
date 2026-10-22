@@ -36,6 +36,7 @@ rfd.workspace = true
 pollster.workspace = true
 velopack.workspace = true
 arboard.workspace = true
+chrono.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 clipboard-win.workspace = true

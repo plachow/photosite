@@ -290,8 +290,16 @@ pub fn apply(
         catalog.set_description_en(photo.id, Some(english))?;
     }
 
+    if let Some(english) = &insights.title_en {
+        catalog.set_title_en(photo.id, Some(english))?;
+    }
+
     if !insights.keywords.is_empty() {
         catalog.add_keywords(&[photo.id], &insights.keywords)?;
+    }
+
+    if !insights.keywords_en.is_empty() {
+        catalog.set_keywords_en(photo.id, &insights.keywords_en)?;
     }
 
     catalog.enqueue(&[photo.id], now)?;
@@ -434,6 +442,8 @@ mod tests {
             description: Some("Words.".to_owned()),
             keywords: vec!["hill".to_owned()],
             description_en: Some("Words in English.".to_owned()),
+            title_en: Some("From the model, in English".to_owned()),
+            keywords_en: vec!["hill".to_owned(), "sky".to_owned()],
         };
         apply(&mut catalog, &photo, &insights, Mode::FillEmpty, 5).unwrap();
         let after = catalog
@@ -443,6 +453,12 @@ mod tests {
         assert_eq!(after.organisation.title.as_deref(), Some("Typed by hand"));
         assert_eq!(after.organisation.description.as_deref(), Some("Words."));
         assert_eq!(after.description_en.as_deref(), Some("Words in English."));
+        assert_eq!(
+            after.title_en.as_deref(),
+            Some("From the model, in English"),
+            "the English title is not conditional on the mode: nobody typed it"
+        );
+        assert_eq!(after.keywords_en, ["hill", "sky"]);
         assert_eq!(catalog.keywords_of(id).unwrap(), ["hill"]);
         assert_eq!(catalog.outbox().unwrap().0, 1, "queued for the file");
 

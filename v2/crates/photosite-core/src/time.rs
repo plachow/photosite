@@ -12,6 +12,57 @@
 //! Anything else would shift every photograph by wherever the viewer happens
 //! to be sitting.
 
+use std::sync::atomic::{AtomicI64, Ordering};
+
+/// How far the clock on the wall is from UTC, in seconds. Zero until the
+/// application says otherwise, which it does once at startup — this crate
+/// has no business asking the operating system about time zones, and a
+/// headless run on a server is content with UTC.
+static LOCAL_OFFSET: AtomicI64 = AtomicI64::new(0);
+
+/// Tells this crate where the clock on the wall stands against UTC.
+pub fn set_local_offset(seconds: i64) {
+    LOCAL_OFFSET.store(seconds, Ordering::Relaxed);
+}
+
+pub fn local_offset() -> i64 {
+    LOCAL_OFFSET.load(Ordering::Relaxed)
+}
+
+/// The clock on the wall, as seconds that [`civil`] reads as local time.
+pub fn local_now() -> i64 {
+    let utc = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_secs() as i64)
+        .unwrap_or(0);
+    utc + local_offset()
+}
+
+/// `7:30 PM` — a time of day as the en-US interface says it, for a
+/// finishing time somebody glances at.
+pub fn format_clock(local_seconds: i64) -> String {
+    let (_, _, _, hour, minute, _) = civil(local_seconds);
+    let (shown, half) = match hour {
+        0 => (12, "AM"),
+        1..=11 => (hour, "AM"),
+        12 => (12, "PM"),
+        _ => (hour - 12, "PM"),
+    };
+    format!("{shown}:{minute:02} {half}")
+}
+
+/// `3:20:15`, or `5:12` under an hour: how long something took or has
+/// left, without units to read.
+pub fn format_span(seconds: f64) -> String {
+    let whole = seconds.max(0.0).round() as u64;
+    let (hours, minutes, rest) = (whole / 3600, whole % 3600 / 60, whole % 60);
+    if hours > 0 {
+        format!("{hours}:{minutes:02}:{rest:02}")
+    } else {
+        format!("{minutes}:{rest:02}")
+    }
+}
+
 /// `2024-07-14 09:30`, which is as much as anybody wants to see next to a
 /// photograph. Seconds are dropped: they matter for ordering, not for
 /// reading.
@@ -233,5 +284,22 @@ mod tests {
             let (_, _, day, read, _, _) = civil(midnight + hour * 3_600);
             assert_eq!((day, read), (14, hour as u32), "hour {hour}");
         }
+    }
+
+    #[test]
+    fn the_clock_reads_as_the_interface_says_it() {
+        let day = from_civil(2024, 7, 14, 0, 0, 0);
+        assert_eq!(format_clock(day), "12:00 AM");
+        assert_eq!(format_clock(day + 7 * 3600 + 5 * 60), "7:05 AM");
+        assert_eq!(format_clock(day + 12 * 3600), "12:00 PM");
+        assert_eq!(format_clock(day + 19 * 3600 + 30 * 60), "7:30 PM");
+    }
+
+    #[test]
+    fn a_span_shows_hours_only_when_there_are_any() {
+        assert_eq!(format_span(0.0), "0:00");
+        assert_eq!(format_span(312.4), "5:12");
+        assert_eq!(format_span(3.0 * 3600.0 + 20.0 * 60.0 + 15.0), "3:20:15");
+        assert_eq!(format_span(-4.0), "0:00");
     }
 }

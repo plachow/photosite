@@ -294,8 +294,11 @@ fn faces(
         let mut report = photosite_faces::sweep::sweep(
             &mut catalog,
             &engine,
-            folder,
-            recursive,
+            &photosite_faces::sweep::Scope::Folder {
+                folder: folder.to_path_buf(),
+                recursive,
+            },
+            false,
             detect,
             threads,
             now(),
@@ -636,7 +639,10 @@ fn describe(
     println!(
         "{}, {}",
         t!("ai-described", count = described),
-        t!("ai-in", seconds = started.elapsed().as_secs_f64())
+        t!(
+            "ai-in",
+            time = photosite_core::time::format_span(started.elapsed().as_secs_f64())
+        )
     );
     if skipped > 0 {
         println!("{}", t!("ai-skipped", count = skipped));

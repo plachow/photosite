@@ -27,10 +27,11 @@ pub fn window(app: &mut App, ctx: &egui::Context, palette: &Palette) {
     let facets = app.facets.clone();
     let (mut from, mut to) = (app.filter_from.clone(), app.filter_to.clone());
 
-    egui::Window::new(t!("filter-title"))
+    let shown = crate::dialog::window(ctx, &app.settings.window, "filter", t!("filter-title"))
         .open(&mut open)
         .default_width(380.0)
         .show(ctx, |ui| {
+            crate::dialog::spacious(ui);
             egui::ScrollArea::vertical()
                 .max_height(520.0)
                 .show(ui, |ui| {
@@ -195,6 +196,7 @@ pub fn window(app: &mut App, ctx: &egui::Context, palette: &Palette) {
                 });
             });
         });
+    crate::dialog::remember(&mut app.settings.window, "filter", &shown);
 
     // The dates live as text so a half-typed one does not keep clearing
     // itself; only a whole date reaches the filter.

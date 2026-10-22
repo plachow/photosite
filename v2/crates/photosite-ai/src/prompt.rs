@@ -18,6 +18,9 @@ pub struct Insights {
     /// carries one description, in the language somebody chose, and the
     /// second one is there so that searching works in both.
     pub description_en: Option<String>,
+    /// The title and the keywords in English, by the same rule.
+    pub title_en: Option<String>,
+    pub keywords_en: Vec<String>,
 }
 
 impl Insights {
@@ -110,7 +113,11 @@ pub fn build(language: &str, english_too: bool, place: Option<&str>) -> String {
     );
 
     if english_too {
-        prompt.push_str("- \"description_en\": the same description written in English.\n");
+        prompt.push_str(
+            "- \"title_en\": the same title in English.\n\
+             - \"description_en\": the same description written in English.\n\
+             - \"keywords_en\": the same keywords in English.\n",
+        );
     }
 
     prompt.push_str(&format!(
@@ -149,8 +156,11 @@ pub fn schema(english_too: bool, strict: bool) -> serde_json::Value {
     });
     let mut required = vec!["title", "description", "keywords"];
     if english_too {
+        properties["title_en"] = serde_json::json!({ "type": "string" });
         properties["description_en"] = serde_json::json!({ "type": "string" });
-        required.push("description_en");
+        properties["keywords_en"] =
+            serde_json::json!({ "type": "array", "items": { "type": "string" } });
+        required.extend(["title_en", "description_en", "keywords_en"]);
     }
 
     let mut schema = serde_json::json!({
@@ -220,26 +230,33 @@ pub fn read_object(inner: &serde_json::Value) -> anyhow::Result<Insights> {
             inner.get("description").and_then(serde_json::Value::as_str),
             4000,
         ),
-        keywords: clean_keywords(
-            inner
-                .get("keywords")
-                .and_then(serde_json::Value::as_array)
-                .map(|items| {
-                    items
-                        .iter()
-                        .filter_map(serde_json::Value::as_str)
-                        .map(str::to_owned)
-                        .collect()
-                })
-                .unwrap_or_default(),
-        ),
+        keywords: clean_keywords(strings(inner.get("keywords"))),
         description_en: text(
             inner
                 .get("description_en")
                 .and_then(serde_json::Value::as_str),
             4000,
         ),
+        title_en: line(
+            inner.get("title_en").and_then(serde_json::Value::as_str),
+            200,
+        ),
+        keywords_en: clean_keywords(strings(inner.get("keywords_en"))),
     })
+}
+
+/// A JSON array of strings, as a list; anything else is an empty one.
+fn strings(value: Option<&serde_json::Value>) -> Vec<String> {
+    value
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The models a server offers, vision-capable first.
@@ -296,8 +313,18 @@ pub fn with_place(insights: Insights, place: Option<&Nearby>, approximate: bool)
 
     let mut keywords = place.keywords(!approximate);
     keywords.extend(insights.keywords);
+    // The English list leads with the same names — a place is called the
+    // same in both — but only where there is an English list at all.
+    let keywords_en = if insights.keywords_en.is_empty() {
+        Vec::new()
+    } else {
+        let mut english = place.keywords(!approximate);
+        english.extend(insights.keywords_en);
+        clean_keywords(english)
+    };
     Insights {
         keywords: clean_keywords(keywords),
+        keywords_en,
         ..insights
     }
 }
@@ -448,6 +475,7 @@ mod tests {
         let with = build("Czech", true, Some("in or near Brno"));
         assert!(with.contains("Verified place: the photograph was taken in or near Brno"));
         assert!(with.contains("description_en"));
+        assert!(with.contains("title_en") && with.contains("keywords_en"));
         assert!(with.contains("Beyond the verified place"));
     }
 
@@ -476,6 +504,8 @@ mod tests {
         let body = ollama_request("qwen", b"x", "the prompt", true, false);
         assert!(body.get("think").is_none(), "an older server rejects it");
         assert!(body["format"]["properties"]["description_en"].is_object());
+        assert!(body["format"]["properties"]["title_en"].is_object());
+        assert_eq!(body["format"]["properties"]["keywords_en"]["type"], "array");
     }
 
     #[test]
@@ -484,7 +514,9 @@ mod tests {
             "title": "  Sunrise over the bay  ",
             "description": "A wide bay at first light.\nGulls on the water.",
             "keywords": ["sea", "sunrise", "SEA", "#gulls", "a;b"],
-            "description_en": "A wide bay at first light."
+            "description_en": "A wide bay at first light.",
+            "title_en": " Sunrise over the bay ",
+            "keywords_en": ["sea", "Sea", "gulls"]
         })
         .to_string();
 
@@ -493,6 +525,8 @@ mod tests {
         assert!(insights.description.unwrap().contains('\n'), "lines kept");
         assert_eq!(insights.keywords, ["sea", "sunrise", "gulls", "a b"]);
         assert!(insights.description_en.is_some());
+        assert_eq!(insights.title_en.as_deref(), Some("Sunrise over the bay"));
+        assert_eq!(insights.keywords_en, ["sea", "gulls"]);
     }
 
     #[test]
@@ -530,6 +564,7 @@ mod tests {
     fn the_place_names_lead_the_keywords() {
         let insights = Insights {
             keywords: vec!["sea".to_owned(), "Czechia".to_owned()],
+            keywords_en: vec!["sea".to_owned()],
             ..Default::default()
         };
         let with = with_place(insights, Some(&nearby("Brno", 1.0)), false);
@@ -543,6 +578,17 @@ mod tests {
                 "sea"
             ],
             "the known names should come first, and not twice"
+        );
+        assert_eq!(
+            with.keywords_en[0], "Brno",
+            "the English list leads with them too"
+        );
+        assert_eq!(with.keywords_en.last().map(String::as_str), Some("sea"));
+
+        let without_english = with_place(Insights::default(), Some(&nearby("Brno", 1.0)), false);
+        assert!(
+            without_english.keywords_en.is_empty(),
+            "no English list is made out of nothing"
         );
     }
 

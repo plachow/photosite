@@ -93,7 +93,7 @@ pub fn window(app: &mut App, ctx: &egui::Context, palette: &Palette) {
     let query = app.settings_view.search.trim().to_lowercase();
     let searching = !query.is_empty();
 
-    egui::Window::new(t!("settings-title"))
+    let shown = crate::dialog::window(ctx, &app.settings.window, "settings", t!("settings-title"))
         .open(&mut open)
         .default_size([780.0, 540.0])
         .min_size([560.0, 360.0])
@@ -208,6 +208,7 @@ pub fn window(app: &mut App, ctx: &egui::Context, palette: &Palette) {
                     });
             });
         });
+    crate::dialog::remember(&mut app.settings.window, "settings", &shown);
 
     if close {
         open = false;

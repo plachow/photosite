@@ -264,6 +264,7 @@ impl Filter {
         for extra in [
             organisation.title.as_deref(),
             organisation.description.as_deref(),
+            photo.title_en.as_deref(),
             photo.description_en.as_deref(),
         ]
         .into_iter()
@@ -273,7 +274,7 @@ impl Filter {
             haystack.push_str(&extra.to_lowercase());
         }
 
-        for keyword in &organisation.keywords {
+        for keyword in organisation.keywords.iter().chain(&photo.keywords_en) {
             haystack.push(' ');
             haystack.push_str(&keyword.to_lowercase());
         }
@@ -681,6 +682,8 @@ mod tests {
             lens: None,
             organisation: Organisation::default(),
             description_en: None,
+            title_en: None,
+            keywords_en: Vec::new(),
             people: Vec::new(),
             expressions: Default::default(),
             place: None,

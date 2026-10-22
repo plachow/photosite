@@ -15,8 +15,18 @@ use crate::{Engine, cluster, detect, math};
 use anyhow::Result;
 use photosite_core::people::Observation;
 use photosite_core::{Cancel, Catalog, FileIdentity, Photo, Progress};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
+
+/// Which photographs a sweep looks at.
+#[derive(Debug, Clone)]
+pub enum Scope {
+    /// A folder, and everything under it when `recursive`.
+    Folder { folder: PathBuf, recursive: bool },
+    /// These and no others — what somebody selected.
+    Photos(Vec<Photo>),
+}
 
 /// How far two rectangles must agree before one is taken to be the other.
 ///
@@ -50,20 +60,32 @@ pub struct Report {
 /// this one. That split is the whole shape of it — there is one catalogue
 /// and writing it twice at once is the one thing that cannot be done — and
 /// it is why the workers hand back observations rather than writing them.
+///
+/// Only what no sweep has seen is looked at, which is what makes a sweep of
+/// a library restartable; `again` looks at all of them regardless, for the
+/// day the models or the settings changed.
 #[allow(clippy::too_many_arguments)]
 pub fn sweep(
     catalog: &mut Catalog,
     engine: &Arc<Engine>,
-    folder: &Path,
-    recursive: bool,
+    scope: &Scope,
+    again: bool,
     detect: u32,
     threads: usize,
     now: i64,
     cancel: &Cancel,
     progress: &Progress,
 ) -> Result<Report> {
-    let photos = catalog.unscanned_faces(folder, recursive)?;
+    let photos = match (scope, again) {
+        (Scope::Folder { folder, recursive }, false) => {
+            catalog.unscanned_faces(folder, *recursive)?
+        }
+        (Scope::Folder { folder, recursive }, true) => catalog.all_for_faces(folder, *recursive)?,
+        (Scope::Photos(photos), false) => catalog.unscanned_among(photos)?,
+        (Scope::Photos(photos), true) => photos.clone(),
+    };
     let total = photos.len() as u64;
+    let started = Instant::now();
     let mut report = Report::default();
     if photos.is_empty() {
         return Ok(report);
@@ -195,14 +217,17 @@ pub fn sweep(
             }
 
             report.photographs += 1;
+            // How far, how fast and when it will be done: the one line
+            // anybody watching a sweep of ten thousand wants to read.
             progress.report(
                 report.photographs,
                 Some(total),
-                photo
-                    .path
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_default(),
+                photosite_core::pace::status(
+                    report.photographs,
+                    total,
+                    report.photographs,
+                    started.elapsed(),
+                ),
             );
         }
 

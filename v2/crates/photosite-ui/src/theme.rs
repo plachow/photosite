@@ -14,6 +14,22 @@ pub fn color(value: Color) -> Color32 {
     Color32::from_rgb(value.r, value.g, value.b)
 }
 
+/// What to write on the accent colour with: the window's own colour or the
+/// text's, whichever stands out more against it. A light theme has a dark
+/// accent and a dark theme a light one, and the words on a button have to
+/// be read on both.
+pub fn on_accent(palette: &Palette) -> Color32 {
+    let (window, text) = (
+        photosite_core::theme::contrast(palette.accent, palette.window),
+        photosite_core::theme::contrast(palette.accent, palette.text),
+    );
+    color(if window >= text {
+        palette.window
+    } else {
+        palette.text
+    })
+}
+
 /// Runs the palette through egui.
 ///
 /// **Every** colour slot egui has is set. Whatever is left alone the toolkit

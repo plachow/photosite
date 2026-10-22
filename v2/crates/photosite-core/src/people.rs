@@ -298,6 +298,45 @@ impl Catalog {
             .collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    /// Every photograph in a folder, swept or not — for a sweep asked to
+    /// look at all of them again.
+    pub fn all_for_faces(&self, folder: &Path, recursive: bool) -> Result<Vec<Photo>> {
+        let (folder, prefix, predicate) = under(folder, recursive);
+        let mut statement = self.connection().prepare(&format!(
+            "SELECT {columns} FROM photos p WHERE {predicate} ORDER BY p.path",
+            columns = crate::catalog::qualified_columns("p")
+        ))?;
+        let args = arguments(&folder, &prefix, recursive);
+        Ok(statement
+            .query_map(args.as_slice(), crate::catalog::read_photo)?
+            .collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Of these photographs, the ones no sweep has seen as they now are:
+    /// never swept, or changed on disk since. One question each, which is
+    /// fine for a selection and is not how a folder is asked about.
+    pub fn unscanned_among(&self, photos: &[Photo]) -> Result<Vec<Photo>> {
+        let mut statement = self.connection().prepare(
+            "SELECT 1 FROM face_scans
+             WHERE photo_id = ?1 AND file_size = ?2 AND modified_at = ?3",
+        )?;
+        let mut unscanned = Vec::new();
+        for photo in photos {
+            let swept = statement
+                .query_row(
+                    params![photo.id.0, photo.file_size as i64, photo.modified_at],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
+            if !swept {
+                unscanned.push(photo.clone());
+            }
+        }
+
+        Ok(unscanned)
+    }
+
     /// Replaces everything known about one photograph's faces, and stamps
     /// the scan — in one transaction, so a crash cannot leave a photograph
     /// marked as scanned with no faces on it.
@@ -1596,6 +1635,37 @@ mod tests {
         assert_eq!(
             catalog
                 .people_by_photo(Path::new(&root), true)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    /// A selection is swept photograph by photograph: the ones already
+    /// seen as they now are drop out, unless the sweep is asked for all of
+    /// them.
+    #[test]
+    fn a_selection_is_narrowed_to_what_no_sweep_has_seen() {
+        let mut catalog = catalog_with(&["/a/one.jpg", "/a/two.jpg"]);
+        let photos = catalog.in_folder(Path::new("/a"), false).unwrap();
+        assert_eq!(catalog.unscanned_among(&photos).unwrap().len(), 2);
+
+        let one = photos[0].id;
+        catalog
+            .replace_faces(one, &identity("/a/one.jpg"), &[], 7)
+            .unwrap();
+        let left = catalog.unscanned_among(&photos).unwrap();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].path, PathBuf::from("/a/two.jpg"));
+
+        // The same two, swept or not.
+        assert_eq!(
+            catalog.all_for_faces(Path::new("/a"), false).unwrap().len(),
+            2
+        );
+        assert_eq!(
+            catalog
+                .unscanned_faces(Path::new("/a"), false)
                 .unwrap()
                 .len(),
             1

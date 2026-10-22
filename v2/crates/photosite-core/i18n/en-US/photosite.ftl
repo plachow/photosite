@@ -90,8 +90,7 @@ setting-window-width = Window width
 setting-window-height = Window height
 setting-window-x = Window position, horizontal
 setting-window-y = Window position, vertical
-setting-send-to-x = Copy to dialog, horizontal
-setting-send-to-y = Copy to dialog, vertical
+setting-window-dialogs = Where the dialogs were left
 setting-window-maximized = Window maximised
 setting-window-layout = Dock layout
 setting-window-docks-hidden = Hidden docks
@@ -578,6 +577,17 @@ command-photo-people = People…
 people-title = People
 people-scan = Find faces
 people-stop = Stop
+people-only-new = Only new photographs
+people-rescan = All of them again
+people-in-selection =
+    { $count ->
+        [one] in { $count } selected photograph
+       *[other] in { $count } selected photographs
+    }
+people-in-folder = in the whole folder
+people-name-ok = OK
+people-cancel = Cancel
+people-peek = Click to see it larger
 people-no-folder = Open a folder first
 people-no-models =
     The face models are not in { $folder }. Missing: { $missing }
@@ -815,6 +825,8 @@ ai-no-key = This provider needs an API key
 ai-model = Model
 ai-refresh = Ask again
 ai-language = Language
+ai-language-hint = Written into the photographs. When it is not English, the catalogue also keeps the title, the description and the keywords in English, so a search finds the photograph in either.
+ai-already = Already described
 ai-fill-empty = Fill in the empty ones
 ai-overwrite = Write over what is there
 ai-no-models = The server answered, but offers no models
@@ -827,14 +839,12 @@ ai-waiting =
         [one] { $count } photograph
        *[other] { $count } photographs
     }
-ai-pace =
-    { NUMBER($each, maximumFractionDigits: 0) } s each, about { NUMBER($left, maximumFractionDigits: 0) } min left
 ai-described =
     { $count ->
         [one] described { $count } photograph
        *[other] described { $count } photographs
     }
-ai-in = in { NUMBER($seconds, maximumFractionDigits: 0) } s
+ai-in = in { $time }
 ai-skipped =
     { $count ->
         [one] { $count } already had one
@@ -847,6 +857,9 @@ ai-failed =
     }
 ai-all-failing = The first few all failed; check the address and the model.
 task-describe = Describing
+
+pace-starting = Processing { $done }/{ $total } ({ $percent }%)
+pace-status = Processing { $done }/{ $total } ({ $percent }%), avg. { $each } s/photo, remaining { $remaining }, ETA { $eta }
 
 diagnostics-models = Face models
 diagnostics-missing = missing: { $missing }

@@ -259,6 +259,23 @@ const MIGRATIONS: &[Migration] = &[
         ALTER TABLE metadata_outbox ADD COLUMN generation INTEGER NOT NULL DEFAULT 0;
     ",
     },
+    Migration {
+        name: "0010-english-title-and-keywords",
+        // The title and the keywords in English as well, beside the
+        // description that has been kept since 0008: the whole of what a
+        // describe run says, so that a library described in Czech is
+        // searchable in English word for word. Like the description, **they
+        // live here and never in the file** — the photograph carries one
+        // language, the one somebody chose.
+        sql: "
+        ALTER TABLE photos ADD COLUMN title_en TEXT;
+        CREATE TABLE keywords_en (
+            photo_id INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
+            keyword  TEXT    NOT NULL COLLATE NOCASE,
+            PRIMARY KEY (photo_id, keyword)
+        );
+    ",
+    },
 ];
 
 /// How many times a file is tried before it is left alone.
@@ -282,7 +299,8 @@ const SEPARATOR: char = std::path::MAIN_SEPARATOR;
 /// added to one query and not the other cannot happen.
 const COLUMNS: &str = "id, path, folder, file_size, modified_at, taken_at, width, height, \
                        orientation, camera, lens, rating, label, flag, title, description, \
-                       latitude, longitude, place_verdict, place_reason, description_en";
+                       latitude, longitude, place_verdict, place_reason, description_en, \
+                       title_en";
 
 /// The same list, each column under a table alias, for a query that joins.
 ///
@@ -623,6 +641,7 @@ impl Catalog {
         match found {
             Some(mut photo) => {
                 photo.organisation.keywords = self.keywords_of(photo.id)?;
+                photo.keywords_en = self.keywords_en_of(photo.id)?;
                 photo.people = self.people_of(photo.id)?;
                 photo.expressions = self.expressions_of(photo.id)?;
                 Ok(Some(photo))
@@ -686,6 +705,30 @@ impl Catalog {
             if let Some(mut keywords) = by_photo.remove(&photo.id.0) {
                 keywords.sort_by_key(|keyword| keyword.to_lowercase());
                 photo.organisation.keywords = keywords;
+            }
+        }
+
+        // The English keywords the same way, for the search.
+        let mut statement = self.conn.prepare(&format!(
+            "SELECT k.photo_id, k.keyword FROM keywords_en k
+             JOIN photos p ON p.id = k.photo_id
+             WHERE {}",
+            predicate.replace("folder", "p.folder")
+        ))?;
+        let mut english: std::collections::HashMap<i64, Vec<String>> =
+            std::collections::HashMap::new();
+        let rows = statement.query_map(args.as_slice(), |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (id, keyword) = row?;
+            english.entry(id).or_default().push(keyword);
+        }
+
+        for photo in &mut photos {
+            if let Some(mut keywords) = english.remove(&photo.id.0) {
+                keywords.sort_by_key(|keyword| keyword.to_lowercase());
+                photo.keywords_en = keywords;
             }
         }
 
@@ -1145,6 +1188,45 @@ impl Catalog {
         Ok(())
     }
 
+    /// The English copy of a title, by the same rule.
+    pub fn set_title_en(&mut self, photo: PhotoId, title: Option<&str>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE photos SET title_en = ?2 WHERE id = ?1",
+            params![photo.0, blank_to_none(title)],
+        )?;
+        Ok(())
+    }
+
+    /// The English copy of the keywords, replaced whole. Nobody types these,
+    /// so there is nothing of anybody's to keep.
+    pub fn set_keywords_en<S: AsRef<str>>(&mut self, photo: PhotoId, keywords: &[S]) -> Result<()> {
+        let keywords = tidy_keywords(keywords);
+        let transaction = self.conn.transaction()?;
+        transaction.execute(
+            "DELETE FROM keywords_en WHERE photo_id = ?1",
+            params![photo.0],
+        )?;
+        {
+            let mut insert = transaction
+                .prepare("INSERT OR IGNORE INTO keywords_en(photo_id, keyword) VALUES(?1, ?2)")?;
+            for keyword in &keywords {
+                insert.execute(params![photo.0, keyword])?;
+            }
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn keywords_en_of(&self, photo: PhotoId) -> Result<Vec<String>> {
+        let mut statement = self
+            .conn
+            .prepare("SELECT keyword FROM keywords_en WHERE photo_id = ?1 ORDER BY keyword")?;
+        let keywords = statement
+            .query_map(params![photo.0], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(keywords)
+    }
+
     pub fn set_description(&mut self, photos: &[PhotoId], description: Option<&str>) -> Result<()> {
         self.write_each(
             photos,
@@ -1330,7 +1412,7 @@ fn queue(
 }
 
 /// How many columns [`COLUMNS`] names, so a query can add its own after them.
-const COLUMN_COUNT: usize = 21;
+const COLUMN_COUNT: usize = 22;
 
 /// What gets written into the catalogue. No `id`, because the database
 /// hands that out.
@@ -1433,6 +1515,8 @@ pub(crate) fn read_photo(row: &rusqlite::Row<'_>) -> rusqlite::Result<Photo> {
         verdict: Verdict::from_number(row.get(18)?),
         reason: Reason::from_number(row.get(19)?),
         description_en: row.get(20)?,
+        title_en: row.get(21)?,
+        keywords_en: Vec::new(),
         organisation: Organisation {
             rating: row
                 .get::<_, i64>(11)?
@@ -2476,5 +2560,44 @@ mod tests {
         assert_eq!(catalog.count().unwrap(), 1);
         let photo = catalog.by_path(Path::new("/a/b.jpg")).unwrap().unwrap();
         assert!(photo.organisation.is_empty());
+    }
+
+    /// The title and the keywords in English, kept beside the description:
+    /// in the catalogue, searched, and never in the file.
+    #[test]
+    fn the_english_title_and_keywords_are_kept_and_searched() {
+        let mut catalog = Catalog::in_memory().unwrap();
+        let id = catalog.upsert(&sample("/a/one.jpg")).unwrap();
+        catalog.set_title(&[id], Some("Vychod slunce")).unwrap();
+        catalog.set_title_en(id, Some("Sunrise")).unwrap();
+        catalog
+            .set_keywords_en(id, &["sea", "Gulls", "sea"])
+            .unwrap();
+        catalog.add_keywords(&[id], &["more"]).unwrap();
+
+        let photo = catalog.by_path(Path::new("/a/one.jpg")).unwrap().unwrap();
+        assert_eq!(photo.organisation.title.as_deref(), Some("Vychod slunce"));
+        assert_eq!(photo.title_en.as_deref(), Some("Sunrise"));
+        assert_eq!(photo.keywords_en, ["Gulls", "sea"]);
+        assert_eq!(
+            photo.organisation.keywords,
+            ["more"],
+            "the English ones stay apart"
+        );
+
+        let folder = catalog.in_folder(Path::new("/a"), false).unwrap();
+        assert_eq!(folder[0].keywords_en, ["Gulls", "sea"]);
+
+        for words in ["sunrise", "gulls"] {
+            let filter = crate::Filter {
+                search: words.to_owned(),
+                ..Default::default()
+            };
+            assert!(filter.keeps(&photo), "{words} should be found");
+        }
+
+        // Replaced whole the next time, not added to.
+        catalog.set_keywords_en(id, &["hill"]).unwrap();
+        assert_eq!(catalog.keywords_en_of(id).unwrap(), ["hill"]);
     }
 }
