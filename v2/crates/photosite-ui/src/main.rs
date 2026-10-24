@@ -5452,10 +5452,15 @@ mod culling {
         let (mut app, _data, photos) = three();
         app.select_only(1);
         let chosen = app.photo(1).unwrap().path.clone();
+        // The real watcher is dropped: on Windows it reports the copy
+        // below before the test gets to ask, which re-arms the debounce
+        // and the test waits on nothing. The report is made by hand.
+        app.watcher = None;
 
         // A new file appears, and the watcher has been quiet about it for
         // longer than the debounce.
         std::fs::copy(photos.path().join("a.jpg"), photos.path().join("d.jpg")).unwrap();
+        app.disturbed.store(false, std::sync::atomic::Ordering::Relaxed);
         app.disturbed_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
         app.collect_disturbance();
 
