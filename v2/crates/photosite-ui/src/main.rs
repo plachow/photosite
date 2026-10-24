@@ -5460,7 +5460,8 @@ mod culling {
         // A new file appears, and the watcher has been quiet about it for
         // longer than the debounce.
         std::fs::copy(photos.path().join("a.jpg"), photos.path().join("d.jpg")).unwrap();
-        app.disturbed.store(false, std::sync::atomic::Ordering::Relaxed);
+        app.disturbed
+            .store(false, std::sync::atomic::Ordering::Relaxed);
         app.disturbed_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
         app.collect_disturbance();
 
