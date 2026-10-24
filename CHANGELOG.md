@@ -10,6 +10,13 @@ change lands here under **Unreleased** in the same commit that makes it.
 
 ## [Unreleased]
 
+### Fixed
+
+- The selection no longer vanishes every few seconds while something else
+  is changing the open folder, such as OneDrive syncing the photographs a
+  face sweep has just written names into. The folder is read again, but
+  whatever was selected stays selected.
+
 ## [2.2.0] - 2026-10-22
 
 ### Added

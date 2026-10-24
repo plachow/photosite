@@ -456,6 +456,10 @@ pub struct App {
     indexing: Option<u64>,
     /// The background pass writing what somebody said into the files.
     writing: Option<u64>,
+    /// When the last drain finished. The watcher reports our own writes a
+    /// moment after they are made, and a report arriving once the drain
+    /// is over would otherwise pass for somebody else's.
+    wrote_at: Option<std::time::Instant>,
 
     textures: HashMap<Key, egui::TextureHandle>,
     order: Vec<Key>,
@@ -730,6 +734,7 @@ impl App {
             facets: Facets::default(),
             show_filter: false,
             writing: None,
+            wrote_at: None,
             filter_from: String::new(),
             filter_to: String::new(),
             selected: None,
@@ -1047,8 +1052,13 @@ impl App {
 
         // Our own writing disturbs the folder, and rereading on the back of
         // it would mean a rescan for every star anybody presses. A copy or a
-        // move of our own is read again when it finishes, once.
-        if self.writing.is_some() || self.transferring.is_some() {
+        // move of our own is read again when it finishes, once. The last
+        // few reports of a drain arrive after the drain has finished, so
+        // a moment after it counts as during it.
+        let just_wrote = self
+            .wrote_at
+            .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(3));
+        if self.writing.is_some() || self.transferring.is_some() || just_wrote {
             self.disturbed_at = None;
             return;
         }
@@ -1058,10 +1068,38 @@ impl App {
         }
 
         self.disturbed_at = None;
-        if let Some(folder) = self.folder.clone() {
-            tracing::debug!(folder = %folder.display(), "the folder changed underneath us");
-            self.open(folder);
+        self.refresh();
+    }
+
+    /// Reads the open folder again because something else changed it.
+    ///
+    /// Not [`Self::open`]: that is somebody going somewhere, and it starts
+    /// afresh — nothing selected, the history told, the tree moved. This is
+    /// the same folder with a file more or a file changed, and whoever was
+    /// in the middle of something stays in the middle of it: the selection
+    /// follows the photographs by path, as it does through a filter. A
+    /// folder on OneDrive is touched for a long while after a thousand
+    /// names were written into it, and losing the selection every few
+    /// seconds for the duration made the gallery unusable.
+    fn refresh(&mut self) {
+        let Some(folder) = self.folder.clone() else {
+            return;
+        };
+
+        tracing::debug!(folder = %folder.display(), "the folder changed underneath us");
+        let files = walk(&folder, self.settings.gallery.recursive);
+        if let Some(catalog) = self.catalog.as_mut()
+            && let Err(error) = catalog.upsert_identities(&files)
+        {
+            tracing::error!(
+                error = %format!("{error:#}"),
+                "the folder could not be written to the catalogue"
+            );
         }
+
+        self.relist();
+        self.start_indexing();
+        self.start_writing();
     }
 
     /// The photographs the file operations act on.
@@ -3174,6 +3212,7 @@ impl App {
             .any(|task| task.id == id && task.finished)
         {
             self.writing = None;
+            self.wrote_at = Some(std::time::Instant::now());
             self.tasks.forget_finished();
         }
     }
@@ -5402,6 +5441,38 @@ mod culling {
             app.settings.window.dialog_at("send-to"),
             (600.0, 400.0)
         ));
+    }
+
+    /// Something else changing the folder must not take the selection
+    /// away: a folder on OneDrive is touched for minutes after a sweep has
+    /// written names into it, and losing the selection every few seconds
+    /// for the duration made the gallery unusable.
+    #[test]
+    fn the_folder_changing_underneath_keeps_the_selection() {
+        let (mut app, _data, photos) = three();
+        app.select_only(1);
+        let chosen = app.photo(1).unwrap().path.clone();
+
+        // A new file appears, and the watcher has been quiet about it for
+        // longer than the debounce.
+        std::fs::copy(photos.path().join("a.jpg"), photos.path().join("d.jpg")).unwrap();
+        app.disturbed_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
+        app.collect_disturbance();
+
+        assert_eq!(app.count(), 4, "the new file was not picked up");
+        assert_eq!(chosen_names(&app), ["b.jpg"], "the selection was lost");
+        let under_cursor = app
+            .selected
+            .and_then(|at| app.photo(at))
+            .map(|photo| photo.path.clone());
+        assert_eq!(under_cursor, Some(chosen));
+
+        // Right after our own drain, the watcher's late reports are ours
+        // and are let pass.
+        app.wrote_at = Some(std::time::Instant::now());
+        app.disturbed_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
+        app.collect_disturbance();
+        assert_eq!(app.disturbed_at, None, "the report was not swallowed");
     }
 
     /// The cross beside a recent folder takes it off the list.
