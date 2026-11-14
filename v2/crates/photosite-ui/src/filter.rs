@@ -403,7 +403,7 @@ fn month(
                     picked = Some(at);
                 }
 
-                if (blank + day) % 7 == 0 {
+                if (blank + day).is_multiple_of(7) {
                     ui.end_row();
                 }
             }
