@@ -557,7 +557,9 @@ pub enum Mark {
     /// The row of dots: who is on it.
     People,
     /// The face: somebody blinked, or somebody is not smiling.
-    Expression { blinking: bool },
+    Expression {
+        blinking: bool,
+    },
     /// The lines of text: it has a title and a description.
     Described,
     Rating(u8),
