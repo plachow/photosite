@@ -351,6 +351,16 @@ filter-any = Any
 filter-from = From
 filter-to = To
 filter-taken-range = this folder spans { $from } to { $to }
+# The names over the columns of the calendar under those two boxes, Monday
+# first, with a space between them.
+calendar-weekdays = Mo Tu We Th Fr Sa Su
+
+# Described means a title and a description: what a describe run leaves
+# behind, and what it looks for before it skips a photograph.
+filter-section-described = Description
+filter-described = Described
+filter-not-described = Not described
+badge-described = Described: it has a title and a description
 
 task-writing-metadata = Writing into the photographs
 diagnostics-unwritten = Waiting to be written
@@ -883,7 +893,7 @@ command-editor-zoom-in = Look closer
 command-editor-zoom-out = Step back
 tab-manager = Manager
 editor-position = { $at } / { $count }
-editor-hint = Wheel or PgUp / PgDn turns the page · Ctrl and the wheel looks closer · middle click or Ctrl+F fills the screen · Enter goes back to the tile · Esc closes
+editor-hint = Wheel or PgUp / PgDn turns the page · 1 to 5 rates · Ctrl and the wheel looks closer · middle click or Ctrl+F fills the screen · Enter goes back to the tile · Esc closes
 editor-gone = This photograph is no longer in the folder being shown
 editor-nothing-chosen = Pick a tile to open it
 

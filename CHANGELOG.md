@@ -10,7 +10,37 @@ change lands here under **Unreleased** in the same commit that makes it.
 
 ## [Unreleased]
 
+### Added
+
+- A photograph open in a tab of its own, full screen included, can be rated
+  there: `1` to `5` and `` ` `` land on the photograph being looked at, and
+  the row beneath it shows its stars, which can be clicked as well.
+- The stars in the details pane are preceded by a mark for no rating, so
+  taking the stars off no longer means knowing to click the last one again.
+- A tile carries a small mark when its photograph has a title and a
+  description, and the filter can show only the described photographs or
+  only the ones still to be described.
+- Resting the pointer on a mark on a tile says what the mark means.
+- Hover texts name the key that does the same thing: the stars, the labels,
+  the verdict and the toolbar.
+- Clicking into a date box of the filter opens a calendar under it. A date
+  can also be typed day first, as in `20.5.2025`, and one that cannot be
+  read is shown in red rather than quietly ignored.
+
+### Changed
+
+- The stars are drawn with smooth edges, and the stars not given are
+  outlines rather than grey stars.
+- The mark for a blink or a missing smile is a small face rather than a
+  bare arc.
+
 ### Fixed
+
+- On a keyboard whose row of digits types something else without Shift, a
+  Czech one for instance, every key of that row now rates and labels by
+  where it sits. The first key, which types `+`, used to do nothing.
+- The cross that takes a person off a photograph is a cross and no longer
+  an empty box.
 
 - The selection no longer vanishes every few seconds while something else
   is changing the open folder, such as OneDrive syncing the photographs a

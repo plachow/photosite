@@ -138,7 +138,10 @@ pub fn from_civil(year: i64, month: u32, day: u32, hour: u32, minute: u32, secon
 /// Lenient about what it is handed, because it sits under a text field
 /// somebody types into: nonsense is no date rather than an error, and the
 /// filter simply does not narrow by it. Separators other than `-` are
-/// accepted, since `2024/07/14` is what half of Europe types.
+/// accepted, since `2024/07/14` is what half of Europe types — and so is the
+/// day first, `14.7.2024`, which is what the other half types. Which end the
+/// year stands at is told by its four digits; a date with no such end is no
+/// date, rather than a guess at which of two numbers is the month.
 pub fn parse_date(text: &str) -> Option<i64> {
     let text = text.trim();
     if text.is_empty() {
@@ -153,9 +156,14 @@ pub fn parse_date(text: &str) -> Option<i64> {
         return None;
     }
 
-    let year: i64 = parts[0].parse().ok()?;
+    let (year, day) = match (parts[0].len(), parts[2].len()) {
+        (4, _) => (parts[0], parts[2]),
+        (_, 4) => (parts[2], parts[0]),
+        _ => return None,
+    };
+    let year: i64 = year.parse().ok()?;
     let month: u32 = parts[1].parse().ok()?;
-    let day: u32 = parts[2].parse().ok()?;
+    let day: u32 = day.parse().ok()?;
     if !(1..=12).contains(&month) || !(1..=31).contains(&day) || !(1826..=9999).contains(&year) {
         return None;
     }
@@ -177,6 +185,24 @@ pub fn parse_date_end(text: &str) -> Option<i64> {
 pub fn format_date(seconds: i64) -> String {
     let (year, month, day, ..) = civil(seconds);
     format!("{year:04}-{month:02}-{day:02}")
+}
+
+/// Which day of the week a moment falls on, Monday being nought — the way a
+/// calendar on a European wall starts its rows.
+pub fn weekday(seconds: i64) -> u32 {
+    // The epoch was a Thursday.
+    (seconds.div_euclid(86_400) + 3).rem_euclid(7) as u32
+}
+
+/// How many days a month has, the leap years included.
+pub fn days_in_month(year: i64, month: u32) -> u32 {
+    let (next_year, next_month) = if month >= 12 {
+        (year + 1, 1)
+    } else {
+        (year, month + 1)
+    };
+    let span = from_civil(next_year, next_month, 1, 0, 0, 0) - from_civil(year, month, 1, 0, 0, 0);
+    (span / 86_400) as u32
 }
 
 #[cfg(test)]
@@ -255,6 +281,39 @@ mod tests {
         for text in ["2024/07/14", "2024.07.14", " 2024-7-14 ", "2024 07 14"] {
             assert_eq!(parse_date(text), want, "{text}");
         }
+    }
+
+    /// `14.7.2024` is how a date is written in half of Europe, and a filter
+    /// that quietly ignored it looked like a filter that did not work.
+    #[test]
+    fn a_date_typed_day_first_is_the_same_date() {
+        let want = parse_date("2024-07-14");
+        for text in ["14.7.2024", "14. 7. 2024", "14/07/2024", "14-07-2024"] {
+            assert_eq!(parse_date(text), want, "{text}");
+        }
+
+        // Neither end is a year: no telling which number is the month.
+        assert_eq!(parse_date("14.7.24"), None);
+        // The 31st of February does not exist this way round either.
+        assert_eq!(parse_date("31.2.2023"), None);
+    }
+
+    #[test]
+    fn the_week_starts_on_a_monday() {
+        // The epoch was a Thursday, and the 14th of July 2024 a Sunday.
+        assert_eq!(weekday(0), 3);
+        assert_eq!(weekday(1_720_915_200), 6);
+        assert_eq!(weekday(1_720_915_200 + 86_400), 0);
+        assert_eq!(weekday(-1), 2, "the last second of a Wednesday");
+    }
+
+    #[test]
+    fn a_month_has_the_days_it_has() {
+        assert_eq!(days_in_month(2024, 2), 29);
+        assert_eq!(days_in_month(2023, 2), 28);
+        assert_eq!(days_in_month(1900, 2), 28);
+        assert_eq!(days_in_month(2024, 12), 31);
+        assert_eq!(days_in_month(2024, 4), 30);
     }
 
     #[test]

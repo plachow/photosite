@@ -165,19 +165,18 @@ pub fn caret(painter: &egui::Painter, centre: egui::Pos2, down: bool, fill: Colo
 ///
 /// Ten points around the centre, filled as a fan. A star is concave, so a
 /// convex polygon would fill it wrong.
+///
+/// A fan on its own has stairs for edges: the toolkit softens the outlines
+/// it draws and leaves a mesh exactly as it is handed over. So the fan stops
+/// half a pixel short and a hairline of the same colour goes round it, and
+/// that hairline is what the eye reads as the edge — sharp, and smooth.
 pub fn star(painter: &egui::Painter, centre: egui::Pos2, radius: f32, fill: Color32) {
-    use std::f32::consts::{FRAC_PI_2, PI};
-
+    let centre = egui::pos2(centre.x.round(), centre.y.round());
+    let points = star_points(centre, (radius - 0.5).max(1.0));
     let mut mesh = egui::Mesh::default();
     mesh.colored_vertex(centre, fill);
-    for point in 0..10 {
-        let angle = -FRAC_PI_2 + point as f32 * PI / 5.0;
-        let reach = if point % 2 == 0 {
-            radius
-        } else {
-            radius * 0.42
-        };
-        mesh.colored_vertex(centre + Vec2::angled(angle) * reach, fill);
+    for point in &points {
+        mesh.colored_vertex(*point, fill);
     }
 
     for point in 0..10u32 {
@@ -185,6 +184,35 @@ pub fn star(painter: &egui::Painter, centre: egui::Pos2, radius: f32, fill: Colo
     }
 
     painter.add(egui::Shape::mesh(mesh));
+    painter.add(egui::Shape::closed_line(points, Stroke::new(1.0, fill)));
+}
+
+/// The same star as an outline: a star that could be given and has not
+/// been. Hollow rather than grey, so that three stars out of five read as
+/// three and not as five in two colours.
+pub fn star_outline(painter: &egui::Painter, centre: egui::Pos2, radius: f32, colour: Color32) {
+    let centre = egui::pos2(centre.x.round(), centre.y.round());
+    let points = star_points(centre, (radius - 0.5).max(1.0));
+    painter.add(egui::Shape::closed_line(points, Stroke::new(1.0, colour)));
+}
+
+/// The ten corners of a star, from the top one round. Both callers put the
+/// centre on a whole point first: a star drawn a third of a pixel off is the
+/// same star smeared.
+fn star_points(centre: egui::Pos2, radius: f32) -> Vec<egui::Pos2> {
+    use std::f32::consts::{FRAC_PI_2, PI};
+
+    (0..10)
+        .map(|point| {
+            let angle = -FRAC_PI_2 + point as f32 * PI / 5.0;
+            let reach = if point % 2 == 0 {
+                radius
+            } else {
+                radius * 0.42
+            };
+            centre + Vec2::angled(angle) * reach
+        })
+        .collect()
 }
 
 /// A scrollbar that is always there, the way a file manager's is.
@@ -337,6 +365,10 @@ pub fn pin(painter: &egui::Painter, centre: egui::Pos2, radius: f32, fill: Color
 ///
 /// A tile nobody has said anything about gets nothing drawn at all, which is
 /// most tiles in most libraries.
+///
+/// What was drawn comes back with where it was drawn, so that the pointer
+/// resting on a mark can be told what the mark means. A mark nobody can
+/// read is a smudge on a photograph.
 pub fn badges(
     painter: &egui::Painter,
     well: Rect,
@@ -345,7 +377,9 @@ pub fn badges(
     verdict: Verdict,
     people: &[photosite_core::people::Tag],
     expressions: photosite_core::people::Expressions,
-) {
+) -> Vec<(Rect, Mark)> {
+    let mut marks = Vec::new();
+
     // A rejected photograph is still there — it only fades. Deleting is a
     // separate, deliberate step, and dimming is what says so.
     if organisation.flag == Flag::Rejected {
@@ -368,6 +402,7 @@ pub fn badges(
         );
         painter.rect_filled(spot, CornerRadius::same(2), Color32::from_black_alpha(120));
         pin(painter, spot.center(), size * 0.8, fill);
+        marks.push((spot, Mark::Position(verdict)));
     }
 
     // Who is on it, as a row of dots in their own colours. No names: at
@@ -398,11 +433,16 @@ pub fn badges(
                 Color32::from_rgb(colour.r, colour.g, colour.b),
             );
         }
+
+        marks.push((plate, Mark::People));
     }
 
     // A quiet mark for a photograph worth a second look: somebody blinked,
     // or somebody is not smiling. Nothing at all when everybody passes —
     // a badge on every good photograph is a badge that says nothing.
+    //
+    // It is a face, and not the bare arc it once was: an arc on its own is
+    // a mouth to whoever drew it and a telephone to everybody else.
     if expressions.worth_showing() {
         let side = size * 2.0;
         let spot = Rect::from_min_size(
@@ -414,15 +454,41 @@ pub fn badges(
         );
         painter.rect_filled(spot, CornerRadius::same(2), Color32::from_black_alpha(120));
         let amber = Color32::from_rgb(0xF2, 0xC5, 0x4E);
-        if expressions.anyone_blinking() {
-            closed_eye(painter, spot.center(), size * 0.75, amber);
-        } else {
-            frown(painter, spot.center(), size * 0.75, amber);
-        }
+        let blinking = expressions.anyone_blinking();
+        face(painter, spot.center(), size * 0.82, amber, blinking);
+        marks.push((spot, Mark::Expression { blinking }));
     }
 
     if organisation.is_empty() {
-        return;
+        return marks;
+    }
+
+    // Described: a title and a description, which is what a describe run
+    // leaves behind and what it looks for before it skips a photograph. A
+    // few lines of text in the middle of the bottom edge, the one place no
+    // other mark stands, and in white rather than a colour: it says that
+    // something is there, not that something is wrong.
+    if organisation.is_described() {
+        let side = size * 2.0;
+        let spot = Rect::from_min_size(
+            egui::pos2(well.center().x - side * 0.5, well.max.y - pad - side),
+            Vec2::splat(side),
+        );
+        painter.rect_filled(spot, CornerRadius::same(2), Color32::from_black_alpha(120));
+        let stroke = Stroke::new((size * 0.2).max(1.0), Color32::from_gray(225));
+        let centre = spot.center();
+        for (line, reach) in [(-1.0f32, 0.6f32), (0.0, 0.6), (1.0, 0.1)] {
+            let y = centre.y + line * size * 0.42;
+            painter.line_segment(
+                [
+                    egui::pos2(centre.x - size * 0.6, y),
+                    egui::pos2(centre.x + size * reach, y),
+                ],
+                stroke,
+            );
+        }
+
+        marks.push((spot, Mark::Described));
     }
 
     // One star with the number in it, rather than a row of five. Five stars
@@ -437,6 +503,7 @@ pub fn badges(
         );
         painter.rect_filled(plate, CornerRadius::same(2), Color32::from_black_alpha(120));
         rating_badge(painter, plate.center(), size * 0.95, organisation.rating);
+        marks.push((plate, Mark::Rating(organisation.rating)));
     }
 
     // The label goes in the corner as its own colour, never the palette's —
@@ -454,6 +521,7 @@ pub fn badges(
             CornerRadius::same(2),
             Color32::from_rgb(swatch.r, swatch.g, swatch.b),
         );
+        marks.push((spot, Mark::Label(organisation.label)));
     }
 
     if organisation.flag == Flag::Picked {
@@ -474,35 +542,56 @@ pub fn badges(
             ],
             Stroke::new((size * 0.28).max(1.5), color(palette.accent)),
         ));
+        marks.push((spot, Mark::Picked));
     }
+
+    marks
 }
 
-/// A shut eye: a shallow arc with two lashes under it.
+/// What a mark on a tile stands for. The words are the window's to choose —
+/// it knows the keys and the names — so this says only which mark it was.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mark {
+    /// The pin: a position worth a second look.
+    Position(Verdict),
+    /// The row of dots: who is on it.
+    People,
+    /// The face: somebody blinked, or somebody is not smiling.
+    Expression { blinking: bool },
+    /// The lines of text: it has a title and a description.
+    Described,
+    Rating(u8),
+    Label(photosite_core::domain::ColorLabel),
+    Picked,
+}
+
+/// A small face for a photograph worth a second look: its eyes shut when
+/// somebody blinked, and its mouth turned down when somebody is not smiling.
 ///
 /// Drawn rather than written, for the same reason the stars are — the
 /// default font has no such glyph, and a font that did would be a font to
 /// ship.
-fn closed_eye(painter: &egui::Painter, centre: egui::Pos2, size: f32, colour: Color32) {
-    let stroke = Stroke::new((size * 0.32).max(1.2), colour);
-    painter.add(egui::Shape::line(arc(centre, size, -0.35, false), stroke));
+fn face(painter: &egui::Painter, centre: egui::Pos2, radius: f32, colour: Color32, shut: bool) {
+    let stroke = Stroke::new((radius * 0.2).max(1.0), colour);
+    painter.circle_stroke(centre, radius, stroke);
     for side in [-1.0f32, 1.0] {
-        painter.line_segment(
-            [
-                egui::pos2(centre.x + side * size * 0.55, centre.y + size * 0.12),
-                egui::pos2(centre.x + side * size * 0.75, centre.y + size * 0.55),
-            ],
-            stroke,
-        );
+        let eye = centre + Vec2::new(side * radius * 0.36, -radius * 0.22);
+        if shut {
+            let lid = Vec2::new(radius * 0.22, 0.0);
+            painter.line_segment([eye - lid, eye + lid], stroke);
+        } else {
+            painter.circle_filled(eye, (radius * 0.14).max(0.8), colour);
+        }
     }
-}
 
-/// A mouth turned down.
-fn frown(painter: &egui::Painter, centre: egui::Pos2, size: f32, colour: Color32) {
-    let stroke = Stroke::new((size * 0.32).max(1.2), colour);
-    painter.add(egui::Shape::line(
-        arc(centre + Vec2::new(0.0, size * 0.35), size, 0.5, true),
-        stroke,
-    ));
+    let mouth = centre + Vec2::new(0.0, radius * 0.5);
+    if shut {
+        let half = Vec2::new(radius * 0.3, 0.0);
+        painter.line_segment([mouth - half, mouth + half], stroke);
+    } else {
+        let curve = arc(mouth, radius * 0.42, 0.45, true);
+        painter.add(egui::Shape::line(curve, stroke));
+    }
 }
 
 /// Points along a shallow parabola: `depth` says how far it bends and which

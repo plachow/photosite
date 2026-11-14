@@ -91,6 +91,19 @@ pub enum Expression {
     Anyone,
 }
 
+/// Whether a photograph has been described: a title and a description.
+///
+/// Both sides again, and for the same reason as [`Expression`]: "which of
+/// these still need describing" is the question before a describe run, and
+/// "which of these came back with words" is the one after it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PartialOrd, Ord)]
+pub enum Described {
+    #[default]
+    Any,
+    Yes,
+    No,
+}
+
 /// Everything the gallery can be narrowed by.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Filter {
@@ -121,6 +134,7 @@ pub struct Filter {
     pub people: BTreeSet<String>,
     pub smile: Expression,
     pub eyes: Expression,
+    pub described: Described,
     pub search: String,
     /// Drops the rejects whatever else is set, so a culling pass visibly
     /// shrinks the folder as it goes. It is its own switch and not a flag
@@ -142,6 +156,7 @@ impl Filter {
             || !self.people.is_empty()
             || self.smile != Expression::Any
             || self.eyes != Expression::Any
+            || self.described != Described::Any
             || self.taken_from.is_some()
             || self.taken_to.is_some()
             || self.hide_rejected
@@ -216,6 +231,13 @@ impl Filter {
             Expression::Any => {}
             Expression::All if !expressions.all_eyes_open() => return false,
             Expression::Anyone if !expressions.anyone_blinking() => return false,
+            _ => {}
+        }
+
+        match self.described {
+            Described::Any => {}
+            Described::Yes if !organisation.is_described() => return false,
+            Described::No if organisation.is_described() => return false,
             _ => {}
         }
 
@@ -359,6 +381,12 @@ impl Filter {
             }
         }
 
+        match self.described {
+            Described::Any => {}
+            Described::Yes => parts.push(t("filter-described")),
+            Described::No => parts.push(t("filter-not-described")),
+        }
+
         if self.taken_from.is_some() || self.taken_to.is_some() {
             parts.push(t("filter-date"));
         }
@@ -414,6 +442,12 @@ pub struct Facets {
     /// it the smile and eyes rows would be a heading over two buttons that
     /// can only ever empty the gallery.
     pub expressions: bool,
+    /// How many of the photographs here are described. The panel offers
+    /// the question only where it divides the folder: some are and some are
+    /// not.
+    pub described: usize,
+    /// How many photographs the folder holds, to measure that against.
+    pub photos: usize,
     /// The highest rating anything here carries. Offering "four stars and up"
     /// in a folder where nothing has more than two is offering an empty
     /// gallery.
@@ -435,6 +469,7 @@ impl Facets {
         let mut places = BTreeSet::new();
         let mut people = BTreeSet::new();
         let mut expressions = false;
+        let mut described = 0usize;
         let mut highest_rating = 0u8;
         let mut taken: Option<(i64, i64)> = None;
 
@@ -466,6 +501,7 @@ impl Facets {
             }
 
             expressions = expressions || photo.expressions.scored > 0;
+            described += usize::from(photo.organisation.is_described());
             highest_rating = highest_rating.max(photo.organisation.rating);
 
             if let Some(at) = photo.taken_at {
@@ -486,9 +522,17 @@ impl Facets {
             places: places.into_iter().collect(),
             people: people.into_iter().collect(),
             expressions,
+            described,
+            photos: photos.len(),
             highest_rating,
             taken,
         }
+    }
+
+    /// Whether "described" is a question worth offering here: only where
+    /// some photographs are and some are not.
+    pub fn divided_by_description(&self) -> bool {
+        self.described > 0 && self.described < self.photos
     }
 }
 
@@ -635,6 +679,34 @@ mod tests {
         let facets = Facets::of(&[photo("a.jpg"), photo("b.jpg")]);
         assert!(facets.people.is_empty());
         assert!(!facets.expressions);
+    }
+
+    /// Described means a title and a description, both with something in
+    /// them — and the question is offered only where it divides the folder.
+    #[test]
+    fn the_described_can_be_told_from_the_rest() {
+        let mut done = photo("done.jpg");
+        done.organisation.title = Some("A lake".to_owned());
+        done.organisation.description = Some("A lake at dawn.".to_owned());
+        let mut half = photo("half.jpg");
+        half.organisation.title = Some("A lake".to_owned());
+        half.organisation.description = Some("   ".to_owned());
+
+        let mut filter = Filter {
+            described: Described::Yes,
+            ..Default::default()
+        };
+        assert!(filter.is_active());
+        assert!(filter.keeps(&done));
+        assert!(!filter.keeps(&half), "a title alone is half of it");
+
+        filter.described = Described::No;
+        assert!(!filter.keeps(&done));
+        assert!(filter.keeps(&half));
+
+        assert!(Facets::of(&[done.clone(), half]).divided_by_description());
+        assert!(!Facets::of(&[done]).divided_by_description());
+        assert!(!Facets::of(&[photo("bare.jpg")]).divided_by_description());
     }
 
     /// The point of marking a doubtful position is being able to collect

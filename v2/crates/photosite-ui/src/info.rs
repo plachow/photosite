@@ -70,14 +70,16 @@ fn said(app: &mut App, ui: &mut egui::Ui, palette: &Palette, photo: &Photo, many
     let organisation = &photo.organisation;
 
     row(ui, palette, &t!("info-rating"), |ui| {
-        if let Some(stars) = rating(ui, palette, organisation.rating) {
+        let hint = |stars| app.rating_hint(stars);
+        if let Some(stars) = rating(ui, palette, organisation.rating, hint) {
             app.rate_from_panel(stars);
         }
     });
 
     row(ui, palette, &t!("info-label"), |ui| {
         for option in ColorLabel::ALL {
-            if swatch(ui, palette, option, organisation.label == option) {
+            let hint = app.label_hint(option);
+            if swatch(ui, palette, option, organisation.label == option, hint) {
                 app.label_from_panel(option);
             }
         }
@@ -89,7 +91,15 @@ fn said(app: &mut App, ui: &mut egui::Ui, palette: &Palette, photo: &Photo, many
             let text = egui::RichText::new(photosite_core::i18n::t(option.title_key())).color(
                 theme::color(if chosen { palette.accent } else { palette.dim }),
             );
-            if ui.selectable_label(chosen, text).clicked() {
+            let response = ui.selectable_label(chosen, text);
+            let clicked = response.clicked();
+            // Undecided has no key of its own, and a hover text that only
+            // repeats the word under the pointer is no hover text.
+            if option != Flag::None {
+                response.on_hover_text(app.flag_hint(option));
+            }
+
+            if clicked {
                 app.flag_from_panel(option);
             }
         }
@@ -169,8 +179,10 @@ fn people(app: &mut App, ui: &mut egui::Ui, palette: &Palette, photo: &Photo, ma
         if !many {
             for tag in &photo.people {
                 ui.label(egui::RichText::new(&tag.name).color(theme::color(palette.text)));
-                if ui
-                    .small_button("\u{2715}")
+                // The cross is drawn, as it is on a tab: the font has no ✕,
+                // and what it puts there instead is an empty box that says
+                // nothing about taking anybody off.
+                if crate::editor::cross(ui, palette)
                     .on_hover_text(t!("info-people-remove", name = tag.name.clone()))
                     .clicked()
                 {
@@ -261,24 +273,70 @@ fn place(app: &mut App, ui: &mut egui::Ui, palette: &Palette, photo: &Photo) {
     ui.add_space(4.0);
 }
 
-/// Five stars. Returns the one clicked, counting from one.
-fn rating(ui: &mut egui::Ui, palette: &Palette, rating: u8) -> Option<u8> {
+/// The stars, and before them the way back to none. Returns what was
+/// clicked: nought for the mark, otherwise the star, counting from one.
+///
+/// "No rating" is a thing to click for the same reason "no label" is: a
+/// row of five stars with nothing lit says there is no rating, and offers
+/// no way to say so. The stars given are gold and whole; the ones not
+/// given are outlines.
+///
+/// `hint` names a rating and its key, and is asked only for whatever the
+/// pointer is over.
+pub(crate) fn rating(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    rating: u8,
+    hint: impl Fn(u8) -> String,
+) -> Option<u8> {
     let mut clicked = None;
     let size = 18.0;
+
+    let (rect, response) = ui.allocate_exact_size(egui::Vec2::splat(size), egui::Sense::click());
+    let tint = theme::color(if rating == 0 {
+        palette.accent
+    } else if response.hovered() {
+        palette.text
+    } else {
+        palette.dim
+    });
+    // A ring with a stroke through it: nothing, as every road sign says it.
+    let centre = rect.center();
+    let reach = size * 0.3;
+    let stroke = egui::Stroke::new(1.5, tint);
+    ui.painter().circle_stroke(centre, reach, stroke);
+    let slant = egui::Vec2::splat(reach * std::f32::consts::FRAC_1_SQRT_2);
+    ui.painter()
+        .line_segment([centre - slant, centre + slant], stroke);
+    if response.clicked() {
+        clicked = Some(0);
+    }
+
+    if response.hovered() {
+        response.on_hover_text(hint(0));
+    }
+
     for star in 1..=Organisation::MAX_RATING {
         let (rect, response) =
             ui.allocate_exact_size(egui::Vec2::splat(size), egui::Sense::click());
-        let lit = star <= rating;
-        let fill = if lit {
-            egui::Color32::from_rgb(0xF2, 0xC5, 0x4E)
-        } else if response.hovered() {
-            theme::color(palette.text)
+        if star <= rating {
+            let gold = egui::Color32::from_rgb(0xF2, 0xC5, 0x4E);
+            theme::star(ui.painter(), rect.center(), size * 0.47, gold);
         } else {
-            theme::color(palette.dim)
-        };
-        theme::star(ui.painter(), rect.center(), size * 0.45, fill);
+            let tint = theme::color(if response.hovered() {
+                palette.text
+            } else {
+                palette.dim
+            });
+            theme::star_outline(ui.painter(), rect.center(), size * 0.47, tint);
+        }
+
         if response.clicked() {
             clicked = Some(star);
+        }
+
+        if response.hovered() {
+            response.on_hover_text(hint(star));
         }
     }
 
@@ -287,7 +345,14 @@ fn rating(ui: &mut egui::Ui, palette: &Palette, rating: u8) -> Option<u8> {
 
 /// One colour label to click. `None` is drawn as an outline, because "no
 /// label" has no colour to show and an empty gap would look like a bug.
-fn swatch(ui: &mut egui::Ui, palette: &Palette, label: ColorLabel, chosen: bool) -> bool {
+/// `hint` is its name and its key, for whoever stops over it.
+fn swatch(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    label: ColorLabel,
+    chosen: bool,
+    hint: String,
+) -> bool {
     let (rect, response) = ui.allocate_exact_size(egui::Vec2::splat(18.0), egui::Sense::click());
     let radius = egui::CornerRadius::same(3);
     match label.color() {
@@ -321,7 +386,7 @@ fn swatch(ui: &mut egui::Ui, palette: &Palette, label: ColorLabel, chosen: bool)
     }
 
     let clicked = response.clicked();
-    response.on_hover_text(photosite_core::i18n::t(label.title_key()));
+    response.on_hover_text(hint);
     clicked
 }
 

@@ -116,6 +116,20 @@ impl Organisation {
     pub fn is_empty(&self) -> bool {
         self == &Self::default()
     }
+
+    /// Has it been described — a title and a description, both with
+    /// something in them? Who wrote them is not recorded and does not
+    /// matter: this is the question a describe run asks before it skips a
+    /// photograph, so the tile, the filter and the run all agree on which
+    /// photographs are done.
+    pub fn is_described(&self) -> bool {
+        let said = |words: &Option<String>| {
+            words
+                .as_deref()
+                .is_some_and(|words| !words.trim().is_empty())
+        };
+        said(&self.title) && said(&self.description)
+    }
 }
 
 /// The Lightroom and Bridge colour labels.

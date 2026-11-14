@@ -181,7 +181,7 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
                         };
                         let people = photo.people.clone();
                         let expressions = photo.expressions;
-                        theme::badges(
+                        let marks = theme::badges(
                             ui.painter(),
                             well,
                             palette,
@@ -190,6 +190,18 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
                             &people,
                             expressions,
                         );
+
+                        // The pointer resting on a mark is somebody asking
+                        // what it means. Only the mark under the pointer
+                        // becomes something to hover: a widget per mark per
+                        // tile would be thousands nobody is pointing at.
+                        for (at, (spot, mark)) in marks.into_iter().enumerate() {
+                            if ui.rect_contains_pointer(spot) {
+                                let said = app.mark_hint(mark, &people);
+                                let id = ui.id().with((index, "mark", at));
+                                ui.interact(spot, id, Sense::hover()).on_hover_text(said);
+                            }
+                        }
                     }
                 }
             }

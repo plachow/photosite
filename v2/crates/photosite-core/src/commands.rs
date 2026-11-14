@@ -361,13 +361,17 @@ pub const COMMANDS: &[Command] = &[
     // The keys follow v1 exactly, purple included — it has none there
     // either, because 6..9 and 0 are five keys for five labels only if
     // clearing is not one of them.
+    //
+    // The stars reach the editor too: a photograph filling the screen is
+    // where somebody decides what it is worth. The labels do not — `0` is
+    // the editor's "fit", and a label is not decided at a hundred per cent.
     Command {
         id: "photo.rate_0",
         title_key: "command-photo-rate-0",
         group: Group::Photo,
         default_shortcut: Some("Backtick"),
         toolbar: false,
-        scope: Scope::Manager,
+        scope: Scope::Everywhere,
         menu: Menu::Under("menu-rating"),
     },
     Command {
@@ -376,7 +380,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Photo,
         default_shortcut: Some("1"),
         toolbar: false,
-        scope: Scope::Manager,
+        scope: Scope::Everywhere,
         menu: Menu::Under("menu-rating"),
     },
     Command {
@@ -385,7 +389,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Photo,
         default_shortcut: Some("2"),
         toolbar: false,
-        scope: Scope::Manager,
+        scope: Scope::Everywhere,
         menu: Menu::Under("menu-rating"),
     },
     Command {
@@ -394,7 +398,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Photo,
         default_shortcut: Some("3"),
         toolbar: false,
-        scope: Scope::Manager,
+        scope: Scope::Everywhere,
         menu: Menu::Under("menu-rating"),
     },
     Command {
@@ -403,7 +407,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Photo,
         default_shortcut: Some("4"),
         toolbar: false,
-        scope: Scope::Manager,
+        scope: Scope::Everywhere,
         menu: Menu::Under("menu-rating"),
     },
     Command {
@@ -412,7 +416,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Photo,
         default_shortcut: Some("5"),
         toolbar: false,
-        scope: Scope::Manager,
+        scope: Scope::Everywhere,
         menu: Menu::Under("menu-rating"),
     },
     Command {
@@ -1435,6 +1439,33 @@ mod tests {
         assert_eq!(
             bindings.conflicts(),
             vec!["Ctrl+Q".parse::<Shortcut>().unwrap()]
+        );
+    }
+
+    /// A photograph filling the screen is rated with the keys that rate a
+    /// tile — and the editor's own keys are still the editor's.
+    #[test]
+    fn the_stars_are_given_from_the_editor_too() {
+        let bindings = Bindings::defaults();
+        for (text, id) in [
+            ("Backtick", "photo.rate_0"),
+            ("1", "photo.rate_1"),
+            ("5", "photo.rate_5"),
+        ] {
+            let shortcut: Shortcut = text.parse().unwrap();
+            for place in [Scope::Manager, Scope::Editor] {
+                assert_eq!(
+                    bindings.command_for(&shortcut, place).unwrap().id,
+                    id,
+                    "{text}"
+                );
+            }
+        }
+
+        let zero: Shortcut = "0".parse().unwrap();
+        assert_eq!(
+            bindings.command_for(&zero, Scope::Editor).unwrap().id,
+            "editor.fit"
         );
     }
 

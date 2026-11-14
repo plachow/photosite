@@ -242,7 +242,9 @@ fn caption(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, palette: &Palette
         };
         let people = photo.people.clone();
         let expressions = photo.expressions;
-        theme::badges(
+        // What the marks mean is said over the gallery's tiles; here the
+        // pointer is busy looking closer.
+        let _ = theme::badges(
             ui.painter(),
             rect,
             palette,

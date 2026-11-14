@@ -16,7 +16,7 @@
 //! photograph, a zoom about the pointer, a drag that stays under the hand.
 //! One set of sums for both places a photograph is looked at closely.
 
-use crate::{App, Want, compare as looking, theme};
+use crate::{App, Want, compare as looking, info, theme};
 use eframe::egui;
 use egui::{Sense, Vec2};
 use photosite_core::compare;
@@ -500,22 +500,39 @@ fn beneath(
     // Where it stands, in the order the manager shows the folder. Nothing
     // when the folder has moved on without it — and a pasted picture, which
     // stands nowhere, says how large it is instead.
-    let said = match &editor.pasted {
-        Some(pasted) => t!(
+    let at = match &editor.pasted {
+        Some(_) => None,
+        None => app.position_of(&editor.path),
+    };
+    let said = match (&editor.pasted, at) {
+        (Some(pasted), _) => t!(
             "editor-pasted-size",
             width = pasted.pixels.width as i64,
             height = pasted.pixels.height as i64
         ),
-        None => match app.position_of(&editor.path) {
-            Some(at) => t!(
-                "editor-position",
-                at = at as i64 + 1,
-                count = app.count() as i64
-            ),
-            None => t!("editor-gone"),
-        },
+        (None, Some(at)) => t!(
+            "editor-position",
+            at = at as i64 + 1,
+            count = app.count() as i64
+        ),
+        (None, None) => t!("editor-gone"),
     };
     bar.label(egui::RichText::new(said).color(theme::color(palette.dim)));
+
+    // The stars, where the gallery holds the photograph: what the keys
+    // `1`..`5` have just done has to be seen somewhere, and with the
+    // photograph filling the screen this row is all there is. They are the
+    // details pane's stars, and are clicked the same way.
+    let stars = at
+        .and_then(|at| app.photo(at))
+        .map(|photo| photo.organisation.rating);
+    if let Some(stars) = stars {
+        bar.add_space(6.0);
+        let hint = |stars| app.rating_hint(stars);
+        if let Some(clicked) = info::rating(&mut bar, palette, stars, hint) {
+            app.rate_from_panel(clicked);
+        }
+    }
 
     let zoom = app
         .tabs

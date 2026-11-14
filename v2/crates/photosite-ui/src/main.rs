@@ -430,6 +430,8 @@ pub struct App {
     /// still typing it.
     pub filter_from: String,
     pub filter_to: String,
+    /// The calendar under one of those two, while one is open.
+    pub filter_calendar: Option<filter::Calendar>,
     /// The tile the preview and the details follow, and the one the keys
     /// move from. Always one of [`App::selection`] when there is one.
     pub selected: Option<usize>,
@@ -737,6 +739,7 @@ impl App {
             wrote_at: None,
             filter_from: String::new(),
             filter_to: String::new(),
+            filter_calendar: None,
             selected: None,
             anchor: None,
             grid_cols: 1,
@@ -2748,10 +2751,17 @@ impl App {
     /// Where in the gallery the next rating lands.
     ///
     /// The selection — unless a comparison is open, and then it is the one
-    /// photograph with the focus. The keys are the same keys; what they land
-    /// on is whatever is being looked at, which is the only thing anybody
-    /// pressing `3` ever means.
+    /// photograph with the focus, or a photograph is open in the editor, and
+    /// then it is that one. The keys are the same keys; what they land on is
+    /// whatever is being looked at, which is the only thing anybody pressing
+    /// `3` ever means. A photograph the gallery does not hold — one from
+    /// another folder, a pasted picture — is nowhere to land, and nothing
+    /// happens rather than the selection behind the tab being rated unseen.
     fn acting_on(&self) -> Vec<usize> {
+        if let Some(editor) = self.tabs.active_editor() {
+            return self.position_of(&editor.path).into_iter().collect();
+        }
+
         match &self.compare {
             Some(compare) => self.position_of(compare.focused()).into_iter().collect(),
             None => self.selection.iter().copied().collect(),
@@ -3517,16 +3527,80 @@ impl App {
         self.edit_place = place.typed();
     }
 
-    /// The stars, set from the details pane rather than the keyboard.
-    /// Clicking the star a photograph already has takes the rating off,
-    /// which is the only way to reach nought with the mouse.
+    /// The stars, set with the mouse rather than the keyboard — from the
+    /// details pane, or from the row beneath a photograph in the editor.
+    /// Clicking the star a photograph already has takes the rating off, as
+    /// the mark before the stars does without having to know that.
     pub fn rate_from_panel(&mut self, stars: u8) {
-        let already = self
-            .selected
+        let shown = match self.tabs.active_editor() {
+            Some(editor) => self.position_of(&editor.path),
+            None => self.selected,
+        };
+        let already = shown
             .and_then(|at| self.photo(at))
             .map(|photo| photo.organisation.rating == stars)
             .unwrap_or(false);
         self.rate(if already { 0 } else { stars });
+    }
+
+    /// A hover text with the key that does the same thing, when one is
+    /// bound. Whoever stops over a swatch to read what it is called is the
+    /// person about to want its key.
+    pub fn hint(&self, text: String, command: &str) -> String {
+        match self.bindings.shortcut(command) {
+            Some(shortcut) => format!("{text}  ({shortcut})"),
+            None => text,
+        }
+    }
+
+    /// What so many stars are called, and their key.
+    pub fn rating_hint(&self, stars: u8) -> String {
+        let id = format!("photo.rate_{stars}");
+        let title = commands::command(&id)
+            .map(|command| command.title())
+            .unwrap_or_default();
+        self.hint(title, &id)
+    }
+
+    pub fn label_hint(&self, label: ColorLabel) -> String {
+        let command = match label {
+            ColorLabel::None => "photo.label_none",
+            ColorLabel::Red => "photo.label_red",
+            ColorLabel::Yellow => "photo.label_yellow",
+            ColorLabel::Green => "photo.label_green",
+            ColorLabel::Blue => "photo.label_blue",
+            ColorLabel::Purple => "photo.label_purple",
+        };
+        self.hint(i18n::t(label.title_key()), command)
+    }
+
+    /// The verdict's name, with the key that gives it. Undecided has none:
+    /// it is reached by pressing the other two again.
+    pub fn flag_hint(&self, flag: Flag) -> String {
+        let title = i18n::t(flag.title_key());
+        match flag {
+            Flag::Picked => self.hint(title, "photo.pick"),
+            Flag::Rejected => self.hint(title, "photo.reject"),
+            Flag::None => title,
+        }
+    }
+
+    /// What a mark on a tile means, for whoever rests the pointer on it.
+    pub fn mark_hint(&self, mark: theme::Mark, people: &[photosite_core::people::Tag]) -> String {
+        match mark {
+            theme::Mark::Position(verdict) => i18n::t(verdict.title_key()),
+            theme::Mark::People => people
+                .iter()
+                .map(|tag| tag.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+            theme::Mark::Expression { blinking: true } => t!("filter-someone-blinking"),
+            theme::Mark::Expression { blinking: false } => t!("filter-someone-not-smiling"),
+            theme::Mark::Described => t!("badge-described"),
+            theme::Mark::Rating(stars) => self.rating_hint(stars),
+            theme::Mark::Label(label) => self.label_hint(label),
+            theme::Mark::Picked => self.flag_hint(Flag::Picked),
+        }
     }
 
     pub fn label_from_panel(&mut self, label: ColorLabel) {
@@ -3594,7 +3668,9 @@ impl App {
             alt: false,
             key: key.to_owned(),
         };
-        let mut pressed: Vec<Shortcut> = ctx.input(|input| {
+        // Each press as the layout names it and, for a bare key of the row
+        // with the digits, as the place it sits in. See [`key_in_the_row`].
+        let mut pressed: Vec<(Shortcut, Option<Shortcut>)> = ctx.input(|input| {
             input
                 .events
                 .iter()
@@ -3602,20 +3678,30 @@ impl App {
                     // The toolkit hands the clipboard's keys over as events
                     // of its own and never as keys. They are the keys again
                     // here, so that they can be bound like any other.
-                    egui::Event::Copy => Some(chord("C")),
-                    egui::Event::Cut => Some(chord("X")),
-                    egui::Event::Paste(_) => Some(chord("V")),
+                    egui::Event::Copy => Some((chord("C"), None)),
+                    egui::Event::Cut => Some((chord("X"), None)),
+                    egui::Event::Paste(_) => Some((chord("V"), None)),
                     egui::Event::Key {
                         key,
+                        physical_key,
                         pressed: true,
                         modifiers,
                         ..
-                    } => Some(Shortcut {
-                        ctrl: modifiers.command || modifiers.ctrl,
-                        shift: modifiers.shift,
-                        alt: modifiers.alt,
-                        key: key.name().to_owned(),
-                    }),
+                    } => {
+                        let written = Shortcut {
+                            ctrl: modifiers.command || modifiers.ctrl,
+                            shift: modifiers.shift,
+                            alt: modifiers.alt,
+                            key: key.name().to_owned(),
+                        };
+                        let placed = key_in_the_row(*key, *physical_key)
+                            .filter(|_| !(written.ctrl || written.shift || written.alt))
+                            .map(|key| Shortcut {
+                                key: key.name().to_owned(),
+                                ..written.clone()
+                            });
+                        Some((written, placed))
+                    }
                     // A key the toolkit has no name for — `*` above all,
                     // which the numeric keypad sends and egui knows only as
                     // typed text. Letters and digits come through as keys
@@ -3626,12 +3712,13 @@ impl App {
                                 .chars()
                                 .all(|c| c.is_alphanumeric() || c.is_whitespace()) =>
                     {
-                        Some(Shortcut {
+                        let typed = Shortcut {
                             ctrl: false,
                             shift: false,
                             alt: false,
                             key: text.clone(),
-                        })
+                        };
+                        Some((typed, None))
                     }
                     _ => None,
                 })
@@ -3639,12 +3726,21 @@ impl App {
         });
         // Heard by the hook as well as, sometimes, by the toolkit: one press
         // is one paste.
-        if pasted && !pressed.contains(&chord("V")) {
-            pressed.push(chord("V"));
+        if pasted && !pressed.iter().any(|(written, _)| *written == chord("V")) {
+            pressed.push((chord("V"), None));
         }
 
-        for shortcut in pressed {
+        for (written, placed) in pressed {
             let scope = self.scope();
+            // Where the key sits wins over what the layout prints on it, but
+            // only where that place means something here: a Czech `+` rates
+            // one star wherever one star can be given, and a French `-` on
+            // the `6` still looks further out in the editor, where `6` does
+            // nothing.
+            let shortcut = match placed {
+                Some(placed) if self.bindings.command_for(&placed, scope).is_some() => placed,
+                _ => written.clone(),
+            };
             // Shift over a key that moves through the gallery stretches the
             // selection instead of moving it, the way Explorer's arrows
             // work. One binding per movement, then, and Shift is read here
@@ -3669,8 +3765,9 @@ impl App {
             // Taken out of the input as well as acted on. Otherwise the
             // toolkit has its own use for the key afterwards — Tab moves
             // the focus to the search box while it is also moving the
-            // focus in the comparison, and both happen at once.
-            if let Some(key) = egui::Key::from_name(&shortcut.key) {
+            // focus in the comparison, and both happen at once. The key is
+            // taken out under the name the toolkit knows it by.
+            if let Some(key) = egui::Key::from_name(&written.key) {
                 ctx.input_mut(|input| {
                     input.consume_key(
                         egui::Modifiers {
@@ -3692,6 +3789,52 @@ impl App {
             }
         }
     }
+}
+
+/// A key of the row above the letters, named by where it sits rather than
+/// by what the layout prints on it.
+///
+/// The stars and the labels are on that row, and it is the one row that
+/// differs between keyboards: a Czech one types `+ěščř` where the digits
+/// are, a French one `&é"'(`. The toolkit names a key by what it types and
+/// falls back to its place only for a letter it has no name for — so `ě`
+/// already arrived as `2`, while `+` arrived as a plus and rated nothing.
+///
+/// Nothing for a key that already is what its place says, and nothing for
+/// the numeric keypad with Num Lock off: its keys sit where digits are and
+/// mean the arrows.
+fn key_in_the_row(key: egui::Key, physical: Option<egui::Key>) -> Option<egui::Key> {
+    use egui::Key;
+
+    let physical = physical?;
+    let in_the_row = matches!(
+        physical,
+        Key::Backtick
+            | Key::Num0
+            | Key::Num1
+            | Key::Num2
+            | Key::Num3
+            | Key::Num4
+            | Key::Num5
+            | Key::Num6
+            | Key::Num7
+            | Key::Num8
+            | Key::Num9
+    );
+    let moves = matches!(
+        key,
+        Key::ArrowDown
+            | Key::ArrowLeft
+            | Key::ArrowRight
+            | Key::ArrowUp
+            | Key::Home
+            | Key::End
+            | Key::PageUp
+            | Key::PageDown
+            | Key::Insert
+            | Key::Delete
+    );
+    (in_the_row && !moves && key != physical).then_some(physical)
 }
 
 /// The texture cache ceiling.
@@ -3968,8 +4111,10 @@ impl App {
     fn toolbar(&mut self, ui: &mut egui::Ui, palette: &palettes::Palette, ctx: &egui::Context) {
         ui.horizontal(|ui| {
             let mut recursive = self.settings.gallery.recursive;
+            let subfolders = self.hint(t!("command-view-recursive"), "view.recursive");
             if ui
                 .checkbox(&mut recursive, t!("toolbar-recursive"))
+                .on_hover_text(subfolders)
                 .changed()
             {
                 self.run("view.recursive", ctx);
@@ -4016,6 +4161,7 @@ impl App {
             } else {
                 t!("toolbar-sort-ascending")
             };
+            let way = self.hint(way, "sort.reverse");
             if response.on_hover_text(way).clicked() {
                 self.run("sort.reverse", ctx);
             }
@@ -4032,10 +4178,7 @@ impl App {
 
                 previous = Some(command.group);
                 let title = command.title();
-                let hint = match self.bindings.shortcut(command.id) {
-                    Some(shortcut) => format!("{title}  ({shortcut})"),
-                    None => title.clone(),
-                };
+                let hint = self.hint(title.clone(), command.id);
                 if ui.button(title).on_hover_text(hint).clicked() {
                     self.run(command.id, ctx);
                 }
@@ -5324,6 +5467,87 @@ mod culling {
         assert!(app.settings.gallery.favourites.is_empty());
     }
 
+    /// A key as a keyboard sends it whose row of digits types something
+    /// else: named for what it types, and for where it sits.
+    fn key_at(key: egui::Key, physical: egui::Key, modifiers: egui::Modifiers) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: Some(physical),
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }
+    }
+
+    /// A Czech keyboard types `+ěščř` where the digits are. The toolkit
+    /// hands `ě` over as the `2` it sits on and `+` as a plus — and that
+    /// plus is one star, because the first key of the row is what it is.
+    #[test]
+    fn the_row_of_digits_rates_whatever_the_layout_types_on_it() {
+        use egui::Key;
+
+        let bare = egui::Modifiers::default();
+        let (mut app, _data, _photos) = three();
+        app.select_only(1);
+
+        let plus = key_at(Key::Plus, Key::Num1, bare);
+        keys_in_a_frame(&mut app, vec![plus]);
+        assert_eq!(app.photo(1).unwrap().organisation.rating, 1);
+
+        let caron_e = key_at(Key::Num2, Key::Num2, bare);
+        keys_in_a_frame(&mut app, vec![caron_e]);
+        assert_eq!(app.photo(1).unwrap().organisation.rating, 2);
+
+        // And `;` sits where the backtick does, which takes the stars off.
+        let semicolon = key_at(Key::Semicolon, Key::Backtick, bare);
+        keys_in_a_frame(&mut app, vec![semicolon]);
+        assert_eq!(app.photo(1).unwrap().organisation.rating, 0);
+    }
+
+    /// The same key in the editor, where a plus would otherwise look
+    /// closer: the star wins, and the keypad's plus is still there to zoom.
+    #[test]
+    fn the_first_key_of_the_row_rates_in_the_editor_too() {
+        use egui::Key;
+
+        let (mut app, _data, _photos) = three();
+        app.edit(2);
+        let plus = key_at(Key::Plus, Key::Num1, egui::Modifiers::default());
+        keys_in_a_frame(&mut app, vec![plus]);
+        assert_eq!(app.photo(2).unwrap().organisation.rating, 1);
+    }
+
+    /// With Ctrl a key is what it types: Ctrl and `+` makes the tiles
+    /// larger on every keyboard, wherever its plus happens to sit.
+    #[test]
+    fn a_chord_is_read_by_what_the_key_types() {
+        use egui::Key;
+
+        let (mut app, _data, _photos) = three();
+        let before = app.settings.gallery.tile_size;
+        let chord = key_at(Key::Plus, Key::Num1, egui::Modifiers::CTRL);
+        keys_in_a_frame(&mut app, vec![chord]);
+        assert!(app.settings.gallery.tile_size > before);
+    }
+
+    /// The numeric keypad with Num Lock off sits where digits are and means
+    /// the arrows. Its `6` moves to the next tile; it does not label one.
+    #[test]
+    fn the_keypad_without_num_lock_still_moves() {
+        use egui::Key;
+
+        let (mut app, _data, _photos) = three();
+        app.select_only(0);
+        let right = key_at(Key::ArrowRight, Key::Num6, egui::Modifiers::default());
+        keys_in_a_frame(&mut app, vec![right]);
+        assert_eq!(app.selected, Some(1));
+        assert!(
+            app.all
+                .iter()
+                .all(|photo| photo.organisation.label == ColorLabel::None)
+        );
+    }
+
     /// A frame of the Copy to or Move to dialog with these events in it.
     fn a_frame_of_sending(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) {
         let input = egui::RawInput {
@@ -6283,6 +6507,48 @@ mod editing {
             Some(there)
         );
         assert_eq!(app.scroll_tree_to.as_deref(), Some(elsewhere.as_path()));
+    }
+
+    /// The keys that rate a tile rate the photograph filling the screen —
+    /// that one, and not whatever is selected behind the tab.
+    #[test]
+    fn the_stars_land_on_the_photograph_in_the_editor() {
+        let (mut app, _data, _photos) = culling::three();
+        app.select_only(0);
+        app.edit(0);
+        app.page_editor(1);
+        app.run_for_test("photo.rate_4");
+        assert_eq!(app.photo(1).unwrap().organisation.rating, 4);
+        assert_eq!(
+            app.photo(0).unwrap().organisation.rating,
+            0,
+            "the tile behind the tab was rated"
+        );
+
+        // From the row beneath it, the star it already has takes them off.
+        app.rate_from_panel(4);
+        assert_eq!(app.photo(1).unwrap().organisation.rating, 0);
+        app.rate_from_panel(3);
+        assert_eq!(app.photo(1).unwrap().organisation.rating, 3);
+    }
+
+    /// A photograph from another folder is not in the gallery, and the
+    /// stars meant for it must not land on the selection instead.
+    #[test]
+    fn a_photograph_the_gallery_does_not_hold_is_not_rated_by_proxy() {
+        let (mut app, _data, photos) = culling::three();
+        let elsewhere = photos.path().join("elsewhere");
+        std::fs::create_dir(&elsewhere).unwrap();
+        let there = elsewhere.join("d.jpg");
+        std::fs::write(&there, b"xxxx").unwrap();
+
+        app.select_only(0);
+        app.tabs.open(there);
+        app.run_for_test("photo.rate_5");
+        assert!(
+            app.all.iter().all(|photo| photo.organisation.rating == 0),
+            "the stars landed on a photograph nobody was looking at"
+        );
     }
 
     #[test]
