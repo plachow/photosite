@@ -45,6 +45,9 @@ change lands here under **Unreleased** in the same commit that makes it.
 - The marks along the bottom of a tile stand in one row on its bottom edge:
   the star, the dots for the people and the mark for a description. The
   dots used to sit a third of the way up the photograph.
+- The icon is darker and its colours stronger, drawn in flat shapes with
+  hard edges: a sunset in a dark frame on a pile of two prints. The pastel
+  one was hard to pick out on a taskbar.
 
 ### Removed
 
