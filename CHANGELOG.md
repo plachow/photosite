@@ -29,6 +29,12 @@ change lands here under **Unreleased** in the same commit that makes it.
 - With a photograph in a tab of its own, full screen included, the arrows
   turn the page: Down and Right to the next photograph, Up and Left to the
   previous. `Ctrl+PageDown` and `Ctrl+PageUp` go ten at a time.
+- `Shift+1` to `Shift+9` put a person on the photographs selected, or on
+  the one filling the screen, and take them off again: for somebody the
+  face scan did not find, turned away or far off. The nine places are the
+  names written in the settings under *People by key*, or the first nine
+  people by name when none are. The row beneath a photograph in a tab of
+  its own shows who is on it.
 
 ### Changed
 

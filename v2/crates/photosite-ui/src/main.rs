@@ -2058,6 +2058,15 @@ impl App {
             "photo.label_green" => self.label(ColorLabel::Green),
             "photo.label_blue" => self.label(ColorLabel::Blue),
             "photo.label_purple" => self.label(ColorLabel::Purple),
+            "people.quick_1" => self.toggle_quick_person(0),
+            "people.quick_2" => self.toggle_quick_person(1),
+            "people.quick_3" => self.toggle_quick_person(2),
+            "people.quick_4" => self.toggle_quick_person(3),
+            "people.quick_5" => self.toggle_quick_person(4),
+            "people.quick_6" => self.toggle_quick_person(5),
+            "people.quick_7" => self.toggle_quick_person(6),
+            "people.quick_8" => self.toggle_quick_person(7),
+            "people.quick_9" => self.toggle_quick_person(8),
             "photo.pick" => self.flag(Flag::Picked),
             "photo.reject" => self.flag(Flag::Rejected),
             "photo.select_all" => self.select_all(),
@@ -3372,6 +3381,116 @@ impl App {
         self.start_writing();
     }
 
+    /// Who holds the nine places `Shift+1` to `Shift+9` stand for: the names
+    /// in the settings, or with none written there, the first nine people
+    /// by name.
+    pub fn quick_people(&self) -> Vec<String> {
+        let written = self.settings.faces.quick_names();
+        if !written.is_empty() {
+            return written;
+        }
+
+        self.catalog
+            .as_ref()
+            .and_then(|catalog| catalog.people().ok())
+            .unwrap_or_default()
+            .into_iter()
+            .take(9)
+            .map(|person| person.name)
+            .collect()
+    }
+
+    /// Puts the person holding this place on what is being looked at, or
+    /// takes them off when they are on all of it already — the way `P`
+    /// works, and for the same reason: paging through a folder with one
+    /// hand on the keys, a wrong press has to be undone by pressing again.
+    ///
+    /// The rows on screen are changed rather than read back, and nothing is
+    /// filtered again: with a person chosen in the filter, taking them off
+    /// would slide the photograph out from under whoever just pressed the
+    /// key.
+    fn toggle_quick_person(&mut self, place: usize) {
+        let Some(name) = self.quick_people().into_iter().nth(place) else {
+            self.status = t!("people-quick-none", slot = (place + 1) as i64);
+            return;
+        };
+
+        let chosen = self.chosen();
+        if chosen.is_empty() {
+            self.status = t!("files-nothing-selected");
+            return;
+        }
+
+        let same = |tag: &photosite_core::people::Tag| tag.name.eq_ignore_ascii_case(&name);
+        let on_all = self
+            .acting_on()
+            .into_iter()
+            .filter_map(|at| self.photo(at))
+            .all(|photo| photo.people.iter().any(same));
+
+        let now = now();
+        let mut person: Option<(i64, String)> = None;
+        {
+            let (name, chosen, person) = (name.clone(), chosen.clone(), &mut person);
+            self.write_catalog(move |catalog| {
+                let id = catalog.person_named(&name)?;
+                // As the catalogue spells it: "filip" in the settings is
+                // the Filip already named.
+                let spelled = catalog
+                    .people()?
+                    .into_iter()
+                    .find(|known| known.id == id)
+                    .map_or(name, |known| known.name);
+                for photo in &chosen {
+                    if on_all {
+                        catalog.untag_person(*photo, id, now)?;
+                    } else {
+                        catalog.tag_person(*photo, id, now)?;
+                    }
+                }
+
+                *person = Some((id, spelled));
+                Ok(())
+            });
+        }
+
+        let Some((id, name)) = person else {
+            return;
+        };
+
+        for at in self.acting_on() {
+            if let Some(photo) = self.photo_mut(at) {
+                let keywords = &mut photo.organisation.keywords;
+                if on_all {
+                    photo.people.retain(|tag| tag.id != id);
+                    keywords.retain(|word| !word.eq_ignore_ascii_case(&name));
+                } else {
+                    if !photo.people.iter().any(|tag| tag.id == id) {
+                        photo.people.push(photosite_core::people::Tag {
+                            id,
+                            name: name.clone(),
+                        });
+                    }
+
+                    if !keywords.iter().any(|word| word.eq_ignore_ascii_case(&name)) {
+                        keywords.push(name.clone());
+                    }
+                }
+            }
+        }
+
+        // The panel shows the keywords it read before; it reads them again.
+        self.edit_of = None;
+        self.facets = Facets::of(&self.all);
+        let count = chosen.len() as i64;
+        self.status = if on_all {
+            t!("people-quick-removed", name = name, count = count)
+        } else {
+            t!("people-quick-added", name = name, count = count)
+        };
+        self.start_writing();
+    }
+
     /// Takes a person off the chosen photographs: the hand-written tag, and
     /// any face of theirs on them, which returns to the unnamed pool.
     pub fn untag_person_from_panel(&mut self, person: i64) {
@@ -3706,7 +3825,9 @@ impl App {
                             key: key.name().to_owned(),
                         };
                         let placed = key_in_the_row(*key, *physical_key)
-                            .filter(|_| !(written.ctrl || written.shift || written.alt))
+                            // With Shift too: a layout whose row types `!`
+                            // with Shift still means the first place by it.
+                            .filter(|_| !(written.ctrl || written.alt))
                             .map(|key| Shortcut {
                                 key: key.name().to_owned(),
                                 ..written.clone()
@@ -5557,6 +5678,87 @@ mod culling {
                 .iter()
                 .all(|photo| photo.organisation.label == ColorLabel::None)
         );
+    }
+
+    fn who(app: &App, at: usize) -> Vec<String> {
+        app.photo(at)
+            .map(|photo| photo.people.iter().map(|tag| tag.name.clone()).collect())
+            .unwrap_or_default()
+    }
+
+    /// Somebody the detector never framed is put on a photograph by one
+    /// key, and taken off by the same key — on a keyboard whose row types
+    /// the digit with Shift, and on one where it types `!`.
+    #[test]
+    fn shift_and_a_digit_puts_a_person_on_and_takes_them_off() {
+        use egui::Key;
+
+        let (mut app, _data, _photos) = three();
+        app.settings.faces.quick_people = "Filip, Tereza".to_owned();
+        app.select_only(0);
+        app.selection.insert(1);
+
+        let czech = key_at(Key::Num2, Key::Num2, egui::Modifiers::SHIFT);
+        keys_in_a_frame(&mut app, vec![czech.clone()]);
+        assert_eq!(who(&app, 0), ["Tereza"]);
+        assert_eq!(who(&app, 1), ["Tereza"]);
+        assert!(who(&app, 2).is_empty());
+        assert!(
+            app.photo(0)
+                .unwrap()
+                .organisation
+                .keywords
+                .contains(&"Tereza".to_owned()),
+            "the name is a keyword, as it is for a face"
+        );
+
+        let american = key_at(Key::Exclamationmark, Key::Num1, egui::Modifiers::SHIFT);
+        keys_in_a_frame(&mut app, vec![american]);
+        assert_eq!(who(&app, 0), ["Tereza", "Filip"]);
+
+        // What the screen says is what the catalogue says.
+        app.relist();
+        let mut read = who(&app, 0);
+        read.sort();
+        assert_eq!(read, ["Filip", "Tereza"]);
+
+        keys_in_a_frame(&mut app, vec![czech]);
+        assert_eq!(who(&app, 0), ["Filip"]);
+        assert_eq!(who(&app, 1), ["Filip"]);
+        assert!(who(&app, 2).is_empty());
+        app.relist();
+        assert_eq!(who(&app, 0), ["Filip"]);
+        assert_eq!(who(&app, 1), ["Filip"]);
+    }
+
+    /// With a photograph in front, the key lands on that photograph and not
+    /// on the selection behind the tab.
+    #[test]
+    fn in_the_editor_the_person_goes_on_the_photograph_in_front() {
+        use egui::Key;
+
+        let (mut app, _data, _photos) = three();
+        app.settings.faces.quick_people = "Filip".to_owned();
+        app.select_only(0);
+        app.edit(0);
+        app.page_editor(1);
+
+        let key = key_at(Key::Num1, Key::Num1, egui::Modifiers::SHIFT);
+        keys_in_a_frame(&mut app, vec![key]);
+        assert!(who(&app, 0).is_empty());
+        assert_eq!(who(&app, 1), ["Filip"]);
+    }
+
+    /// With no names written in the settings the places go to the people
+    /// there are, by name; a place nobody holds says so and does nothing.
+    #[test]
+    fn a_place_nobody_holds_does_nothing() {
+        let (mut app, _data, _photos) = three();
+        let ctx = egui::Context::default();
+        app.select_only(0);
+        app.run("people.quick_1", &ctx);
+        assert!(who(&app, 0).is_empty());
+        assert!(!app.status.is_empty());
     }
 
     /// A frame of the Copy to or Move to dialog with these events in it.

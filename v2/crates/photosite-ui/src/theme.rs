@@ -554,7 +554,7 @@ pub enum Mark {
 /// colour lighter towards the top left where the light falls, and a glint.
 /// A hint of relief and no more — the colour is what says who it is, and a
 /// dot shaded into a marble would be a different colour on every side.
-fn bead(painter: &egui::Painter, centre: egui::Pos2, radius: f32, colour: Color32) {
+pub fn bead(painter: &egui::Painter, centre: egui::Pos2, radius: f32, colour: Color32) {
     painter.circle_filled(
         centre + Vec2::new(0.0, radius * 0.16),
         radius,

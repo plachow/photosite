@@ -549,6 +549,7 @@ setting-cache-thumbnails = Keep tiles on disk
 ## Faces and people
 
 setting-face-models = Face models folder
+setting-quick-people = People by key (Shift+1 to Shift+9), names separated by commas
 setting-face-detect-size = Scan decode size (px)
 setting-face-crop-size = Face thumbnail decode size (px)
 setting-face-crop-margin = Face thumbnail margin
@@ -923,6 +924,25 @@ command-file-save = Save
 command-file-save-as = Save as…
 menu-rating = Rating
 menu-label = Label
+menu-quick-people = People by key
+command-people-quick-1 = The first person, on or off
+command-people-quick-2 = The second person, on or off
+command-people-quick-3 = The third person, on or off
+command-people-quick-4 = The fourth person, on or off
+command-people-quick-5 = The fifth person, on or off
+command-people-quick-6 = The sixth person, on or off
+command-people-quick-7 = The seventh person, on or off
+command-people-quick-8 = The eighth person, on or off
+command-people-quick-9 = The ninth person, on or off
+people-quick-none = Nobody holds place { $slot }. Name the people in Settings, under the people by key.
+people-quick-added = { $name } is on { $count ->
+        [one] this photograph
+       *[other] { $count } photographs
+    }
+people-quick-removed = { $name } is off { $count ->
+        [one] this photograph
+       *[other] { $count } photographs
+    }
 menu-sort-by = Sort by
 
 ## Pictures pasted as new images

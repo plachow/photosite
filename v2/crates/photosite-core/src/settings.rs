@@ -401,6 +401,25 @@ pub struct Faces {
     pub crop_margin: f64,
     /// Draw the face frames over the preview.
     pub show_frames: bool,
+    /// Who `Shift+1` to `Shift+9` put on a photograph, in that order: names
+    /// separated by commas. Empty means the first nine people by name —
+    /// which is right for somebody with two people and no wish to open the
+    /// settings, and wrong for anybody else, whose places would move the
+    /// day a tenth person is named.
+    pub quick_people: String,
+}
+
+impl Faces {
+    /// The names holding the nine places, as written, in order.
+    pub fn quick_names(&self) -> Vec<String> {
+        self.quick_people
+            .split(',')
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned)
+            .take(9)
+            .collect()
+    }
 }
 
 impl Default for Faces {
@@ -411,6 +430,7 @@ impl Default for Faces {
             crop_size: 640,
             crop_margin: 0.35,
             show_frames: true,
+            quick_people: String::new(),
         }
     }
 }
@@ -1061,6 +1081,11 @@ pub const TUNABLES: &[Tunable] = &[
         path: "faces.show_frames",
         label_key: "setting-face-frames",
         kind: Kind::Bool,
+    },
+    Tunable {
+        path: "faces.quick_people",
+        label_key: "setting-quick-people",
+        kind: Kind::Text,
     },
     Tunable {
         path: "ai.provider",

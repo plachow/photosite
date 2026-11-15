@@ -494,6 +494,93 @@ pub const COMMANDS: &[Command] = &[
         scope: Scope::Manager,
         menu: Menu::Item,
     },
+    // Somebody the detector did not frame — turned away, far off, seen from
+    // the side — said to be on the photograph by one key. Nine places, held
+    // by the names in `faces.quick_people`; a second press takes the person
+    // off again. With Shift, because the bare digits are the stars and the
+    // labels, and everywhere, because this is done paging through a folder
+    // with the photograph filling the screen.
+    Command {
+        id: "people.quick_1",
+        title_key: "command-people-quick-1",
+        group: Group::Photo,
+        default_shortcut: Some("Shift+1"),
+        toolbar: false,
+        scope: Scope::Everywhere,
+        menu: Menu::Under("menu-quick-people"),
+    },
+    Command {
+        id: "people.quick_2",
+        title_key: "command-people-quick-2",
+        group: Group::Photo,
+        default_shortcut: Some("Shift+2"),
+        toolbar: false,
+        scope: Scope::Everywhere,
+        menu: Menu::Under("menu-quick-people"),
+    },
+    Command {
+        id: "people.quick_3",
+        title_key: "command-people-quick-3",
+        group: Group::Photo,
+        default_shortcut: Some("Shift+3"),
+        toolbar: false,
+        scope: Scope::Everywhere,
+        menu: Menu::Under("menu-quick-people"),
+    },
+    Command {
+        id: "people.quick_4",
+        title_key: "command-people-quick-4",
+        group: Group::Photo,
+        default_shortcut: Some("Shift+4"),
+        toolbar: false,
+        scope: Scope::Everywhere,
+        menu: Menu::Under("menu-quick-people"),
+    },
+    Command {
+        id: "people.quick_5",
+        title_key: "command-people-quick-5",
+        group: Group::Photo,
+        default_shortcut: Some("Shift+5"),
+        toolbar: false,
+        scope: Scope::Everywhere,
+        menu: Menu::Under("menu-quick-people"),
+    },
+    Command {
+        id: "people.quick_6",
+        title_key: "command-people-quick-6",
+        group: Group::Photo,
+        default_shortcut: Some("Shift+6"),
+        toolbar: false,
+        scope: Scope::Everywhere,
+        menu: Menu::Under("menu-quick-people"),
+    },
+    Command {
+        id: "people.quick_7",
+        title_key: "command-people-quick-7",
+        group: Group::Photo,
+        default_shortcut: Some("Shift+7"),
+        toolbar: false,
+        scope: Scope::Everywhere,
+        menu: Menu::Under("menu-quick-people"),
+    },
+    Command {
+        id: "people.quick_8",
+        title_key: "command-people-quick-8",
+        group: Group::Photo,
+        default_shortcut: Some("Shift+8"),
+        toolbar: false,
+        scope: Scope::Everywhere,
+        menu: Menu::Under("menu-quick-people"),
+    },
+    Command {
+        id: "people.quick_9",
+        title_key: "command-people-quick-9",
+        group: Group::Photo,
+        default_shortcut: Some("Shift+9"),
+        toolbar: false,
+        scope: Scope::Everywhere,
+        menu: Menu::Under("menu-quick-people"),
+    },
     // A quarter-turn either way, without re-encoding anything: the
     // orientation tag changes and the pixels stay as they are. Zoner's keys,
     // and v1's: somebody moving between them turns photographs by hand
@@ -1334,6 +1421,22 @@ mod tests {
                 manager,
                 "{text} in the manager"
             );
+        }
+    }
+
+    /// The bare digits are the stars and the labels; with Shift they are
+    /// people, wherever somebody is.
+    #[test]
+    fn shift_and_a_digit_is_a_person_everywhere() {
+        let bindings = Bindings::defaults();
+        for place in 1..=9 {
+            let shortcut: Shortcut = format!("Shift+{place}").parse().unwrap();
+            for scope in [Scope::Manager, Scope::Editor] {
+                assert_eq!(
+                    bindings.command_for(&shortcut, scope).unwrap().id,
+                    format!("people.quick_{place}")
+                );
+            }
         }
     }
 

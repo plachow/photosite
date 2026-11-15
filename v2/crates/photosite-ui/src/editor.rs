@@ -534,6 +534,25 @@ fn beneath(
         }
     }
 
+    // Who is on it, each with the dot they wear on a tile. `Shift+1` puts
+    // somebody on and takes them off, and this is where that is seen.
+    let people = at
+        .and_then(|at| app.photo(at))
+        .map(|photo| photo.people.clone())
+        .unwrap_or_default();
+    for tag in &people {
+        bar.add_space(6.0);
+        let (dot, _) = bar.allocate_exact_size(egui::Vec2::splat(12.0), egui::Sense::hover());
+        let colour = photosite_core::theme::person_color(tag.id);
+        theme::bead(
+            bar.painter(),
+            dot.center(),
+            5.0,
+            egui::Color32::from_rgb(colour.r, colour.g, colour.b),
+        );
+        bar.label(egui::RichText::new(&tag.name).color(theme::color(palette.text)));
+    }
+
     let zoom = app
         .tabs
         .active_editor()

@@ -995,6 +995,18 @@ is no standard property for them and inventing one would be a private
 dialect nothing else reads — the same reasoning as the pick and reject
 verdict.
 
+### Somebody the scan did not find
+
+Turned away, seen from the side, far off: a person is on a photograph
+whether or not there is a face for the detector to frame. `Shift+1` to
+`Shift+9` say so by hand — on the selection in the manager, on the
+photograph in front in the editor — and the same key takes them off again.
+The nine places are the names in `faces.quick_people`, or the first nine
+people by name when nothing is written there. A person put on by hand has
+no rectangle, so the name goes into the keywords and no region is written;
+everywhere else — the dot on the tile, the details, the filter — the two
+are one thing.
+
 ### Where it shows
 
 A row of coloured dots on the tile, one per person, in **that person's own
