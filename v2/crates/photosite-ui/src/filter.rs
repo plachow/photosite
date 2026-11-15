@@ -493,6 +493,58 @@ mod tests {
         }
     }
 
+    /// Where a row of chips stood, with the pointer at rest over nothing or
+    /// resting on the first of them.
+    fn chips_stand(hovering: bool) -> Vec<egui::Rect> {
+        let ctx = egui::Context::default();
+        let theme = photosite_core::theme::resolve(&Default::default(), None);
+        theme::apply(&ctx, &theme.palette, theme.dark, 1.0);
+
+        let mut stood = Vec::new();
+        // A widget wears the state of the frame before, so a few frames.
+        for _ in 0..4 {
+            let at = if hovering {
+                stood
+                    .first()
+                    .map_or(egui::pos2(-50.0, -50.0), egui::Rect::center)
+            } else {
+                egui::pos2(-50.0, -50.0)
+            };
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::pos2(0.0, 0.0),
+                    egui::vec2(600.0, 400.0),
+                )),
+                events: vec![egui::Event::PointerMoved(at)],
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| {
+                crate::dialog::spacious(ui);
+                stood.clear();
+                ui.horizontal_wrapped(|ui| {
+                    for name in ["Alexandra", "Filip", "Tereza"] {
+                        stood.push(ui.selectable_label(false, name.to_owned()).rect);
+                    }
+                });
+            });
+            out.textures_delta.clear();
+        }
+
+        stood
+    }
+
+    /// A chip takes the same room whether the pointer is on it or not. It
+    /// did not: at rest it was a frame's width smaller all round, so the
+    /// pointer crossing a row pushed every chip after it along, the last of
+    /// them onto the next line, and the whole window up and down with it.
+    #[test]
+    fn a_chip_under_the_pointer_takes_the_room_it_took_at_rest() {
+        let at_rest = chips_stand(false);
+        let hovered = chips_stand(true);
+        assert_eq!(at_rest.len(), 3);
+        assert_eq!(at_rest, hovered);
+    }
+
     #[test]
     fn stepping_a_month_crosses_the_end_of_the_year_both_ways() {
         let mut calendar = showing(2025, 12);

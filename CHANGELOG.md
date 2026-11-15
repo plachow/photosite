@@ -53,6 +53,9 @@ change lands here under **Unreleased** in the same commit that makes it.
 
 ### Fixed
 
+- The filter no longer jumps about under the pointer. A value not chosen
+  grew a little when the pointer came onto it, pushing the ones after it
+  along and the last of the row onto the next line.
 - On a keyboard whose row of digits types something else without Shift, a
   Czech one for instance, every key of that row now rates and labels by
   where it sits. The first key, which types `+`, used to do nothing.

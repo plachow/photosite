@@ -94,6 +94,13 @@ pub fn apply(ctx: &egui::Context, palette: &Palette, dark: bool, scale: f32) {
         widget.bg_stroke = egui::Stroke::new(1.0, color(hrana));
         widget.fg_stroke = egui::Stroke::new(1.0, color(palette.text));
         widget.corner_radius = CornerRadius::same(3);
+        // As far out as the edge is wide, in every state. The toolkit takes
+        // the edge's width off a button's padding and gives the expansion
+        // back, and its own themes have neither at rest. Ours has an edge
+        // at rest and had no expansion, so a button that draws no frame
+        // until the pointer is on it — every chip in the filter — was an
+        // edge smaller all round at rest, and grew under the pointer.
+        widget.expansion = widget.bg_stroke.width;
     }
 
     // Into both slots, not only the active one.
