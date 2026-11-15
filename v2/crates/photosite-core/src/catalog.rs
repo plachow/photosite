@@ -276,6 +276,31 @@ const MIGRATIONS: &[Migration] = &[
         );
     ",
     },
+    Migration {
+        name: "0011-read-the-jpegs-again",
+        // Until now the pass that reads a folder looked for what a photograph
+        // says about itself in the first 128 kB of it and nowhere else. One
+        // phone writes a quarter of a megabyte of its own ahead of that, so
+        // stars given in another program were in the file and never taken.
+        // The pass finds them now, but it only visits what it has not read,
+        // and every one of those photographs counts as read.
+        //
+        // Clearing the mark sends it round again, once, a folder at a time
+        // as each is opened. It costs a header read per photograph and
+        // cannot lose anything: what a file says only ever fills a field
+        // nobody has filled here.
+        //
+        // Only what keeps its words inside itself. Anything else keeps them
+        // in a sidecar, which was always read whole. And not a photograph
+        // with a write still waiting: there the catalogue is ahead of the
+        // file, and the write will change the file and send the pass to it
+        // anyway.
+        sql: "
+        UPDATE photos SET indexed = 0
+         WHERE (path LIKE '%.jpg' OR path LIKE '%.jpeg')
+           AND id NOT IN (SELECT photo_id FROM metadata_outbox);
+    ",
+    },
 ];
 
 /// How many times a file is tried before it is left alone.
@@ -2560,6 +2585,47 @@ mod tests {
         assert_eq!(catalog.count().unwrap(), 1);
         let photo = catalog.by_path(Path::new("/a/b.jpg")).unwrap().unwrap();
         assert!(photo.organisation.is_empty());
+    }
+
+    /// A catalogue read before the pass could find a packet past the header
+    /// has its JPEGs read once more — and nothing else, and not one whose
+    /// write is still waiting.
+    #[test]
+    fn a_catalogue_from_before_0011_has_its_jpegs_read_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("c.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            for migration in &MIGRATIONS[..10] {
+                conn.execute_batch(migration.sql).unwrap();
+            }
+            conn.pragma_update(None, "user_version", 10).unwrap();
+            for (id, name) in [
+                (1, "one.jpg"),
+                (2, "TWO.JPEG"),
+                (3, "raw.nef"),
+                (4, "due.jpg"),
+            ] {
+                conn.execute(
+                    "INSERT INTO photos(id, path, folder, file_size, modified_at, indexed)
+                     VALUES(?1, ?2, '/a', 10, 20, 1)",
+                    params![id, format!("/a/{name}")],
+                )
+                .unwrap();
+            }
+            conn.execute(
+                "INSERT INTO metadata_outbox(photo_id, not_before) VALUES(4, 0)",
+                [],
+            )
+            .unwrap();
+        }
+
+        let catalog = Catalog::open(&path).unwrap();
+        assert_eq!(catalog.version().unwrap(), latest_version());
+        assert_eq!(
+            catalog.unindexed(Path::new("/a"), false).unwrap(),
+            [PathBuf::from("/a/TWO.JPEG"), PathBuf::from("/a/one.jpg")]
+        );
     }
 
     /// The title and the keywords in English, kept beside the description:

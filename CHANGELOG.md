@@ -70,6 +70,9 @@ change lands here under **Unreleased** in the same commit that makes it.
   are now taken from a photograph whose phone wrote so much of its own
   ahead of them that they sat past the part of the file a folder is read
   from. They were in the file and the photograph showed as unrated.
+  Every JPEG already in the catalogue is read once more, a folder at a
+  time as each is opened, so the ones missed until now are found; nothing
+  said here is overwritten.
 
 ## [2.2.0] - 2026-10-22
 
