@@ -218,8 +218,8 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
 
             // Rows above and below the viewport: prepared ahead, but not
             // counted as blank — nobody is looking at those.
-            let ahead_from = first.saturating_sub(margin) * cols;
-            let ahead_to = ((last + margin) * cols).min(count);
+            let ahead = ahead(first, last, margin, cols, count);
+            let (ahead_from, ahead_to) = (ahead.start, ahead.end);
             for index in ahead_from..ahead_to {
                 let Some(path) = app.photo(index).map(|photo| photo.path.clone()) else {
                     continue;
@@ -263,6 +263,29 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
                 crate::menu::attach(app, index, &response);
             }
         });
+}
+
+/// The tiles to have ready: the rows in view and `margin` rows either side
+/// of them, as a range of the photographs shown.
+///
+/// The rows come from where the grid is scrolled to, and that can be past
+/// the end. A filter that leaves forty photographs of five thousand shortens
+/// the grid under a viewport still far down it, and the toolkit only pulls
+/// the viewport back on the frame after. For that one frame the first row
+/// in view is beyond the last photograph, and a range that started there
+/// and ended at the count ran backwards: its length, taken by subtraction,
+/// stopped a debug build dead and was a number near the largest there is in
+/// a release one. So the start never passes the end, and the range is empty.
+fn ahead(
+    first: usize,
+    last: usize,
+    margin: usize,
+    cols: usize,
+    count: usize,
+) -> std::ops::Range<usize> {
+    let to = ((last + margin) * cols).min(count);
+    let from = (first.saturating_sub(margin) * cols).min(to);
+    from..to
 }
 
 pub fn preview(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
@@ -765,6 +788,32 @@ pub fn speed_wheel(ui: &mut egui::Ui, speed: f64) {
 mod tests {
     use super::*;
     use crate::{Paths, Settings, Startup};
+
+    /// A folder of five thousand, scrolled most of the way down, and then a
+    /// filter that leaves forty: for one frame the rows in view are past
+    /// the last photograph. That frame used to stop a debug build.
+    #[test]
+    fn a_grid_scrolled_past_what_a_filter_left_has_nothing_to_prepare() {
+        // Six to a row, forty left: seven rows. The viewport still shows
+        // rows 600 to 607, cut down to the seven there are.
+        let range = ahead(600, 7, 2, 6, 40);
+        assert!(range.is_empty(), "{range:?}");
+        assert!(range.end <= 40);
+
+        // With no rows loaded ahead, and a last row that is not full.
+        let range = ahead(7, 7, 0, 6, 40);
+        assert!(range.is_empty(), "{range:?}");
+    }
+
+    #[test]
+    fn the_rows_in_view_are_prepared_with_the_margin_either_side() {
+        // Rows 10 to 14 of a long folder, two rows ahead each way.
+        assert_eq!(ahead(10, 14, 2, 6, 5_000), 48..96);
+        // At the top there is nothing above to prepare.
+        assert_eq!(ahead(0, 4, 2, 6, 5_000), 0..36);
+        // At the bottom the range stops at the last photograph.
+        assert_eq!(ahead(5, 7, 2, 6, 40), 18..40);
+    }
 
     /// What a frame of the tree pane drew: every piece of text with where it
     /// stands, and every filled rectangle.
