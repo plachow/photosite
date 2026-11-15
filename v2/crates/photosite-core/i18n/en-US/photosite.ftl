@@ -549,7 +549,7 @@ setting-cache-thumbnails = Keep tiles on disk
 ## Faces and people
 
 setting-face-models = Face models folder
-setting-quick-people = People by key (Shift+1 to Shift+9), names separated by commas
+setting-quick-people = People by key (Alt+1 to Alt+9), names separated by commas
 setting-face-detect-size = Scan decode size (px)
 setting-face-crop-size = Face thumbnail decode size (px)
 setting-face-crop-margin = Face thumbnail margin

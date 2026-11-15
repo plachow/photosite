@@ -3381,7 +3381,7 @@ impl App {
         self.start_writing();
     }
 
-    /// Who holds the nine places `Shift+1` to `Shift+9` stand for: the names
+    /// Who holds the nine places `Alt+1` to `Alt+9` stand for: the names
     /// in the settings, or with none written there, the first nine people
     /// by name.
     pub fn quick_people(&self) -> Vec<String> {
@@ -3825,9 +3825,11 @@ impl App {
                             key: key.name().to_owned(),
                         };
                         let placed = key_in_the_row(*key, *physical_key)
-                            // With Shift too: a layout whose row types `!`
-                            // with Shift still means the first place by it.
-                            .filter(|_| !(written.ctrl || written.alt))
+                            // With Alt too: Alt and the first key of the
+                            // row is the first person on a keyboard whose
+                            // row types `+` there, as it is on one that
+                            // types `1`.
+                            .filter(|_| !(written.ctrl || written.shift))
                             .map(|key| Shortcut {
                                 key: key.name().to_owned(),
                                 ..written.clone()
@@ -5688,9 +5690,9 @@ mod culling {
 
     /// Somebody the detector never framed is put on a photograph by one
     /// key, and taken off by the same key — on a keyboard whose row types
-    /// the digit with Shift, and on one where it types `!`.
+    /// a digit there, and on one where the first key types `+`.
     #[test]
-    fn shift_and_a_digit_puts_a_person_on_and_takes_them_off() {
+    fn alt_and_a_digit_puts_a_person_on_and_takes_them_off() {
         use egui::Key;
 
         let (mut app, _data, _photos) = three();
@@ -5698,8 +5700,8 @@ mod culling {
         app.select_only(0);
         app.selection.insert(1);
 
-        let czech = key_at(Key::Num2, Key::Num2, egui::Modifiers::SHIFT);
-        keys_in_a_frame(&mut app, vec![czech.clone()]);
+        let second = key_at(Key::Num2, Key::Num2, egui::Modifiers::ALT);
+        keys_in_a_frame(&mut app, vec![second.clone()]);
         assert_eq!(who(&app, 0), ["Tereza"]);
         assert_eq!(who(&app, 1), ["Tereza"]);
         assert!(who(&app, 2).is_empty());
@@ -5712,8 +5714,8 @@ mod culling {
             "the name is a keyword, as it is for a face"
         );
 
-        let american = key_at(Key::Exclamationmark, Key::Num1, egui::Modifiers::SHIFT);
-        keys_in_a_frame(&mut app, vec![american]);
+        let czech = key_at(Key::Plus, Key::Num1, egui::Modifiers::ALT);
+        keys_in_a_frame(&mut app, vec![czech]);
         assert_eq!(who(&app, 0), ["Tereza", "Filip"]);
 
         // What the screen says is what the catalogue says.
@@ -5722,7 +5724,7 @@ mod culling {
         read.sort();
         assert_eq!(read, ["Filip", "Tereza"]);
 
-        keys_in_a_frame(&mut app, vec![czech]);
+        keys_in_a_frame(&mut app, vec![second]);
         assert_eq!(who(&app, 0), ["Filip"]);
         assert_eq!(who(&app, 1), ["Filip"]);
         assert!(who(&app, 2).is_empty());
@@ -5743,7 +5745,7 @@ mod culling {
         app.edit(0);
         app.page_editor(1);
 
-        let key = key_at(Key::Num1, Key::Num1, egui::Modifiers::SHIFT);
+        let key = key_at(Key::Num1, Key::Num1, egui::Modifiers::ALT);
         keys_in_a_frame(&mut app, vec![key]);
         assert!(who(&app, 0).is_empty());
         assert_eq!(who(&app, 1), ["Filip"]);

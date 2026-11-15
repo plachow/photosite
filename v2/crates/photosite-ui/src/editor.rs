@@ -534,7 +534,7 @@ fn beneath(
         }
     }
 
-    // Who is on it, each with the dot they wear on a tile. `Shift+1` puts
+    // Who is on it, each with the dot they wear on a tile. `Alt+1` puts
     // somebody on and takes them off, and this is where that is seen.
     let people = at
         .and_then(|at| app.photo(at))

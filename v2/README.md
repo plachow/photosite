@@ -998,8 +998,8 @@ verdict.
 ### Somebody the scan did not find
 
 Turned away, seen from the side, far off: a person is on a photograph
-whether or not there is a face for the detector to frame. `Shift+1` to
-`Shift+9` say so by hand — on the selection in the manager, on the
+whether or not there is a face for the detector to frame. `Alt+1` to
+`Alt+9` say so by hand — on the selection in the manager, on the
 photograph in front in the editor — and the same key takes them off again.
 The nine places are the names in `faces.quick_people`, or the first nine
 people by name when nothing is written there. A person put on by hand has

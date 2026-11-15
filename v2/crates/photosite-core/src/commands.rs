@@ -497,14 +497,14 @@ pub const COMMANDS: &[Command] = &[
     // Somebody the detector did not frame — turned away, far off, seen from
     // the side — said to be on the photograph by one key. Nine places, held
     // by the names in `faces.quick_people`; a second press takes the person
-    // off again. With Shift, because the bare digits are the stars and the
+    // off again. With Alt, because the bare digits are the stars and the
     // labels, and everywhere, because this is done paging through a folder
     // with the photograph filling the screen.
     Command {
         id: "people.quick_1",
         title_key: "command-people-quick-1",
         group: Group::Photo,
-        default_shortcut: Some("Shift+1"),
+        default_shortcut: Some("Alt+1"),
         toolbar: false,
         scope: Scope::Everywhere,
         menu: Menu::Under("menu-quick-people"),
@@ -513,7 +513,7 @@ pub const COMMANDS: &[Command] = &[
         id: "people.quick_2",
         title_key: "command-people-quick-2",
         group: Group::Photo,
-        default_shortcut: Some("Shift+2"),
+        default_shortcut: Some("Alt+2"),
         toolbar: false,
         scope: Scope::Everywhere,
         menu: Menu::Under("menu-quick-people"),
@@ -522,7 +522,7 @@ pub const COMMANDS: &[Command] = &[
         id: "people.quick_3",
         title_key: "command-people-quick-3",
         group: Group::Photo,
-        default_shortcut: Some("Shift+3"),
+        default_shortcut: Some("Alt+3"),
         toolbar: false,
         scope: Scope::Everywhere,
         menu: Menu::Under("menu-quick-people"),
@@ -531,7 +531,7 @@ pub const COMMANDS: &[Command] = &[
         id: "people.quick_4",
         title_key: "command-people-quick-4",
         group: Group::Photo,
-        default_shortcut: Some("Shift+4"),
+        default_shortcut: Some("Alt+4"),
         toolbar: false,
         scope: Scope::Everywhere,
         menu: Menu::Under("menu-quick-people"),
@@ -540,7 +540,7 @@ pub const COMMANDS: &[Command] = &[
         id: "people.quick_5",
         title_key: "command-people-quick-5",
         group: Group::Photo,
-        default_shortcut: Some("Shift+5"),
+        default_shortcut: Some("Alt+5"),
         toolbar: false,
         scope: Scope::Everywhere,
         menu: Menu::Under("menu-quick-people"),
@@ -549,7 +549,7 @@ pub const COMMANDS: &[Command] = &[
         id: "people.quick_6",
         title_key: "command-people-quick-6",
         group: Group::Photo,
-        default_shortcut: Some("Shift+6"),
+        default_shortcut: Some("Alt+6"),
         toolbar: false,
         scope: Scope::Everywhere,
         menu: Menu::Under("menu-quick-people"),
@@ -558,7 +558,7 @@ pub const COMMANDS: &[Command] = &[
         id: "people.quick_7",
         title_key: "command-people-quick-7",
         group: Group::Photo,
-        default_shortcut: Some("Shift+7"),
+        default_shortcut: Some("Alt+7"),
         toolbar: false,
         scope: Scope::Everywhere,
         menu: Menu::Under("menu-quick-people"),
@@ -567,7 +567,7 @@ pub const COMMANDS: &[Command] = &[
         id: "people.quick_8",
         title_key: "command-people-quick-8",
         group: Group::Photo,
-        default_shortcut: Some("Shift+8"),
+        default_shortcut: Some("Alt+8"),
         toolbar: false,
         scope: Scope::Everywhere,
         menu: Menu::Under("menu-quick-people"),
@@ -576,7 +576,7 @@ pub const COMMANDS: &[Command] = &[
         id: "people.quick_9",
         title_key: "command-people-quick-9",
         group: Group::Photo,
-        default_shortcut: Some("Shift+9"),
+        default_shortcut: Some("Alt+9"),
         toolbar: false,
         scope: Scope::Everywhere,
         menu: Menu::Under("menu-quick-people"),
@@ -1424,13 +1424,13 @@ mod tests {
         }
     }
 
-    /// The bare digits are the stars and the labels; with Shift they are
+    /// The bare digits are the stars and the labels; with Alt they are
     /// people, wherever somebody is.
     #[test]
-    fn shift_and_a_digit_is_a_person_everywhere() {
+    fn alt_and_a_digit_is_a_person_everywhere() {
         let bindings = Bindings::defaults();
         for place in 1..=9 {
-            let shortcut: Shortcut = format!("Shift+{place}").parse().unwrap();
+            let shortcut: Shortcut = format!("Alt+{place}").parse().unwrap();
             for scope in [Scope::Manager, Scope::Editor] {
                 assert_eq!(
                     bindings.command_for(&shortcut, scope).unwrap().id,

@@ -401,7 +401,7 @@ pub struct Faces {
     pub crop_margin: f64,
     /// Draw the face frames over the preview.
     pub show_frames: bool,
-    /// Who `Shift+1` to `Shift+9` put on a photograph, in that order: names
+    /// Who `Alt+1` to `Alt+9` put on a photograph, in that order: names
     /// separated by commas. Empty means the first nine people by name —
     /// which is right for somebody with two people and no wish to open the
     /// settings, and wrong for anybody else, whose places would move the
