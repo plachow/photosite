@@ -941,6 +941,26 @@ pub const COMMANDS: &[Command] = &[
         scope: Scope::Editor,
         menu: Menu::Item,
     },
+    // Ten at a time, for a folder too long to page through one by one. At
+    // either end it stops on the last photograph rather than doing nothing.
+    Command {
+        id: "editor.next_ten",
+        title_key: "command-editor-next-ten",
+        group: Group::Editor,
+        default_shortcut: Some("Ctrl+PageDown"),
+        toolbar: false,
+        scope: Scope::Editor,
+        menu: Menu::Item,
+    },
+    Command {
+        id: "editor.previous_ten",
+        title_key: "command-editor-previous-ten",
+        group: Group::Editor,
+        default_shortcut: Some("Ctrl+PageUp"),
+        toolbar: false,
+        scope: Scope::Editor,
+        menu: Menu::Item,
+    },
     // One pixel per point, and the whole photograph again: `*` and `0` on
     // the numeric keypad, as every viewer since ACDSee has had them. The
     // toolkit has no key called `*` — it arrives as typed text — and does
@@ -993,6 +1013,20 @@ pub const COMMANDS: &[Command] = &[
         scope: Scope::Everywhere,
         menu: Menu::Item,
     },
+];
+
+/// Keys that give a command besides the one written beside it in the menu.
+///
+/// A command has one shortcut to show and to rebind. These are the others
+/// a hand reaches for without looking: with a photograph filling the
+/// screen, the arrows turn the page as they do in every viewer. They are
+/// not rebound and not shown, and they count in the search for conflicts
+/// like any other.
+pub const ALSO: &[(&str, &str)] = &[
+    ("editor.next", "Down"),
+    ("editor.next", "Right"),
+    ("editor.previous", "Up"),
+    ("editor.previous", "Left"),
 ];
 
 impl Command {
@@ -1115,11 +1149,21 @@ impl fmt::Display for Shortcut {
 #[derive(Debug, Clone, Default)]
 pub struct Bindings {
     by_command: HashMap<&'static str, Shortcut>,
+    /// The keys of [`ALSO`].
+    also: Vec<(&'static str, Shortcut)>,
 }
 
 impl Bindings {
     pub fn defaults() -> Self {
         let mut by_command = HashMap::new();
+        let mut also = Vec::new();
+        for (id, text) in ALSO {
+            match text.parse::<Shortcut>() {
+                Ok(shortcut) => also.push((*id, shortcut)),
+                Err(error) => tracing::error!(command = id, %error, "bad second shortcut"),
+            }
+        }
+
         for command in COMMANDS {
             if let Some(text) = command.default_shortcut {
                 match text.parse::<Shortcut>() {
@@ -1136,7 +1180,16 @@ impl Bindings {
             }
         }
 
-        Self { by_command }
+        Self { by_command, also }
+    }
+
+    /// Every key and the command it gives: the one each command shows, and
+    /// the others of [`ALSO`].
+    fn bound(&self) -> impl Iterator<Item = (&'static str, &Shortcut)> {
+        self.by_command
+            .iter()
+            .map(|(id, shortcut)| (*id, shortcut))
+            .chain(self.also.iter().map(|(id, shortcut)| (*id, shortcut)))
     }
 
     pub fn shortcut(&self, id: &str) -> Option<&Shortcut> {
@@ -1148,8 +1201,7 @@ impl Bindings {
     /// The place matters: `Enter` opens the editor from the manager and
     /// leaves it from the editor, and both are right.
     pub fn command_for(&self, shortcut: &Shortcut, place: Scope) -> Option<&'static Command> {
-        self.by_command
-            .iter()
+        self.bound()
             .filter(|(_, bound)| *bound == shortcut)
             .filter_map(|(id, _)| command(id))
             .find(|command| command.scope.reaches(place))
@@ -1166,8 +1218,7 @@ impl Bindings {
     pub fn conflicts(&self) -> Vec<Shortcut> {
         let mut found: Vec<Shortcut> = Vec::new();
         let bound: Vec<(&Command, &Shortcut)> = self
-            .by_command
-            .iter()
+            .bound()
             .filter_map(|(id, shortcut)| command(id).map(|command| (command, shortcut)))
             .collect();
         for (at, (one, shortcut)) in bound.iter().enumerate() {
@@ -1255,6 +1306,43 @@ mod tests {
             bindings.command_for(&shortcut, Scope::Manager).unwrap().id,
             "file.open_folder"
         );
+    }
+
+    /// With a photograph in front the arrows turn the page, beside the keys
+    /// the menu shows; in the manager they still walk the gallery.
+    #[test]
+    fn the_arrows_turn_the_page_in_the_editor() {
+        let bindings = Bindings::defaults();
+        for (text, editor, manager) in [
+            ("Down", "editor.next", "nav.down"),
+            ("Right", "editor.next", "nav.right"),
+            ("Up", "editor.previous", "nav.up"),
+            ("Left", "editor.previous", "nav.left"),
+            ("PageDown", "editor.next", "nav.page_down"),
+            ("Ctrl+PageDown", "editor.next_ten", ""),
+            ("Ctrl+PageUp", "editor.previous_ten", ""),
+        ] {
+            let shortcut: Shortcut = text.parse().unwrap();
+            assert_eq!(
+                bindings.command_for(&shortcut, Scope::Editor).unwrap().id,
+                editor,
+                "{text} in the editor"
+            );
+            let there = bindings.command_for(&shortcut, Scope::Manager);
+            assert_eq!(
+                there.map(|command| command.id).unwrap_or(""),
+                manager,
+                "{text} in the manager"
+            );
+        }
+    }
+
+    #[test]
+    fn every_second_key_belongs_to_a_command() {
+        for (id, text) in ALSO {
+            assert!(command(id).is_some(), "{id}");
+            assert!(text.parse::<Shortcut>().is_ok(), "{text}");
+        }
     }
 
     /// The same key, two places, two meanings — and neither is a conflict.

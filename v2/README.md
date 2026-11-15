@@ -879,7 +879,8 @@ to change it. For now the tab is a viewer; the editor grows into it.
 
 | in the editor | |
 |---|---|
-| the wheel, `PageDown`, `PageUp` | the next or the previous photograph, in the order the manager shows the folder — the same tab, retargeted, not a tab per page |
+| the wheel, `PageDown`, `PageUp`, the arrows | the next or the previous photograph, in the order the manager shows the folder — the same tab, retargeted, not a tab per page |
+| `Ctrl+PageDown`, `Ctrl+PageUp` | ten photographs on or back, stopping on the last one at either end |
 | `Ctrl` and the wheel, a drag | closer, and moved about; the same sums as the comparison |
 | a middle click, `Ctrl+F` | fills the screen and gives it back; the strip of tabs goes with it |
 | `Enter` | back to the manager, standing on this photograph: the folder opened if it has to be, the tree unfolded to it, the tile chosen and scrolled into view |

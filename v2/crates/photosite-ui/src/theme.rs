@@ -460,7 +460,8 @@ pub fn badges(
                 plate.min.x + pad * 0.3 + dot / 2.0 + index as f32 * step,
                 plate.center().y,
             );
-            painter.circle_filled(
+            bead(
+                painter,
                 centre,
                 dot / 2.0,
                 Color32::from_rgb(colour.r, colour.g, colour.b),
@@ -547,6 +548,29 @@ pub enum Mark {
     Rating(u8),
     Label(photosite_core::domain::ColorLabel),
     Picked,
+}
+
+/// A person's dot, raised a little off the plate: a shadow under it, the
+/// colour lighter towards the top left where the light falls, and a glint.
+/// A hint of relief and no more — the colour is what says who it is, and a
+/// dot shaded into a marble would be a different colour on every side.
+fn bead(painter: &egui::Painter, centre: egui::Pos2, radius: f32, colour: Color32) {
+    painter.circle_filled(
+        centre + Vec2::new(0.0, radius * 0.16),
+        radius,
+        Color32::from_black_alpha(130),
+    );
+    painter.circle_filled(centre, radius, colour.lerp_to_gamma(Color32::BLACK, 0.16));
+    painter.circle_filled(
+        centre - Vec2::splat(radius * 0.1),
+        radius * 0.86,
+        colour.lerp_to_gamma(Color32::WHITE, 0.08),
+    );
+    painter.circle_filled(
+        centre - Vec2::new(radius * 0.3, radius * 0.34),
+        radius * 0.34,
+        Color32::from_white_alpha(90),
+    );
 }
 
 /// Draws the slide and returns the rectangle the photograph belongs in.

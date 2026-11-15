@@ -26,9 +26,14 @@ change lands here under **Unreleased** in the same commit that makes it.
 - Clicking into a date box of the filter opens a calendar under it. A date
   can also be typed day first, as in `20.5.2025`, and one that cannot be
   read is shown in red rather than quietly ignored.
+- With a photograph in a tab of its own, full screen included, the arrows
+  turn the page: Down and Right to the next photograph, Up and Left to the
+  previous. `Ctrl+PageDown` and `Ctrl+PageUp` go ten at a time.
 
 ### Changed
 
+- The dots for the people on a tile are raised a little, with a shadow and
+  a glint, rather than flat discs.
 - The stars are drawn with smooth edges, and the stars not given are
   outlines rather than grey stars.
 - The marks along the bottom of a tile stand in one row on its bottom edge:

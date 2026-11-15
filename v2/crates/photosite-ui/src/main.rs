@@ -1912,6 +1912,8 @@ impl App {
             }
             "editor.next" => self.page_editor(1),
             "editor.previous" => self.page_editor(-1),
+            "editor.next_ten" => self.page_editor(10),
+            "editor.previous_ten" => self.page_editor(-10),
             // One pixel per point, about the middle of what is on screen —
             // and the whole of it again. The editor remembers the size of
             // its cell from the last frame, which is what the zoom is
@@ -2892,17 +2894,28 @@ impl App {
         }
     }
 
-    /// Turns the page in the editor: the same tab, the next photograph
-    /// along in the gallery's order. Nothing happens at either end, and
-    /// nothing happens for a photograph the gallery has moved on without.
+    /// Turns the page in the editor: the same tab, the photograph so many
+    /// places along in the gallery's order. Nothing happens at either end,
+    /// and nothing happens for a photograph the gallery has moved on
+    /// without. A jump of several that would run past an end stops on the
+    /// last photograph there is: ten on with four left means the last one,
+    /// not a key that does nothing.
     pub fn page_editor(&mut self, by: isize) {
         let Some(path) = self.tabs.active_editor().map(|editor| editor.path.clone()) else {
             return;
         };
 
+        let next = self.position_of(&path).and_then(|at| {
+            let last = self.count().checked_sub(1)?;
+            let to = at.saturating_add_signed(by).min(last);
+            (to != at)
+                .then(|| self.photo(to).map(|photo| photo.path.clone()))
+                .flatten()
+        });
+
         // The tab is retargeted, not a new one opened: paging through a
         // folder must not leave a tab per photograph behind.
-        if let Some(next) = self.neighbour_of(&path, by)
+        if let Some(next) = next
             && let Some(editor) = self.tabs.active_editor_mut()
             && editor.can_close()
         {
@@ -6456,6 +6469,20 @@ mod editing {
         app.page_editor(-1);
         assert_eq!(shown(&app), Some("b.jpg".to_owned()));
         // The same tab throughout, not one per photograph.
+        assert_eq!(app.tabs.count(), 2);
+    }
+
+    #[test]
+    fn a_jump_of_ten_past_the_end_stops_on_the_last_photograph() {
+        let (mut app, _data, _photos) = culling::three();
+        let ctx = egui::Context::default();
+        app.edit(0);
+        app.run("editor.next_ten", &ctx);
+        assert_eq!(shown(&app), Some("c.jpg".to_owned()));
+        app.run("editor.next_ten", &ctx);
+        assert_eq!(shown(&app), Some("c.jpg".to_owned()), "the end is the end");
+        app.run("editor.previous_ten", &ctx);
+        assert_eq!(shown(&app), Some("a.jpg".to_owned()));
         assert_eq!(app.tabs.count(), 2);
     }
 
