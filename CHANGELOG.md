@@ -66,6 +66,10 @@ change lands here under **Unreleased** in the same commit that makes it.
   is changing the open folder, such as OneDrive syncing the photographs a
   face sweep has just written names into. The folder is read again, but
   whatever was selected stays selected.
+- A rating, a title, a description and keywords given in another program
+  are now taken from a photograph whose phone wrote so much of its own
+  ahead of them that they sat past the part of the file a folder is read
+  from. They were in the file and the photograph showed as unrated.
 
 ## [2.2.0] - 2026-10-22
 

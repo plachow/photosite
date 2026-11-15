@@ -124,6 +124,85 @@ pub fn xmp(raw: &[u8]) -> Option<String> {
     Some(String::from_utf8_lossy(body).into_owned())
 }
 
+/// Whether these bytes are the front of a JPEG that stop before its scan.
+///
+/// A header that reaches the scan has shown every segment the file has, and
+/// one with no packet in it has none. A header that stops short has said
+/// nothing about what follows, and [`xmp_in_file`] is how to ask.
+pub fn stops_short(raw: &[u8]) -> bool {
+    segments(raw).is_some_and(|segments| segments.iter().all(|found| found.marker != SOS))
+}
+
+/// The XMP packet, for a file that keeps it past the header.
+///
+/// The header we read is 128 kB and the packet is nearly always in it — but
+/// only nearly. A phone that writes four 64 kB blocks of its own ahead of
+/// everything else pushes the packet a quarter of a megabyte in, and then a
+/// rating given in another program was in the file and never seen here.
+///
+/// So when the header stops before the scan without a packet, the file is
+/// walked for one — by seeking from segment to segment rather than reading it
+/// in. It costs a handful of seeks, and only for the files that need it.
+pub fn xmp_in_file(path: &std::path::Path) -> Option<String> {
+    use std::io::{Read as _, Seek as _, SeekFrom};
+
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut two = [0u8; 2];
+    file.read_exact(&mut two).ok()?;
+    if two != [0xFF, 0xD8] {
+        return None;
+    }
+
+    // A generous bound rather than none: a corrupt file must not be walked
+    // for ever, and no real JPEG has this many segments before its scan.
+    for _ in 0..4_096 {
+        let mut marker = [0u8; 2];
+        file.read_exact(&mut marker).ok()?;
+        if marker[0] != 0xFF {
+            return None;
+        }
+
+        let kind = marker[1];
+        // Padding: the second byte may be the `0xFF` that opens a marker.
+        if kind == 0xFF {
+            file.seek(SeekFrom::Current(-1)).ok()?;
+            continue;
+        }
+
+        // The markers that carry no body.
+        if matches!(kind, 0x01 | 0xD0..=0xD9) {
+            continue;
+        }
+
+        // Past the start of the image data there are no more markers.
+        if kind == SOS {
+            return None;
+        }
+
+        let mut length = [0u8; 2];
+        file.read_exact(&mut length).ok()?;
+        let body = (u16::from_be_bytes(length) as usize).checked_sub(2)?;
+
+        if kind == APP1 && body >= XMP_HEADER.len() {
+            let mut opening = [0u8; XMP_HEADER.len()];
+            file.read_exact(&mut opening).ok()?;
+            let rest = body - XMP_HEADER.len();
+            if opening[..] == *XMP_HEADER {
+                let mut packet = vec![0u8; rest];
+                file.read_exact(&mut packet).ok()?;
+                return Some(String::from_utf8_lossy(&packet).into_owned());
+            }
+
+            file.seek(SeekFrom::Current(rest as i64)).ok()?;
+            continue;
+        }
+
+        file.seek(SeekFrom::Current(body as i64)).ok()?;
+    }
+
+    None
+}
+
 /// The Photoshop block a photograph carries, header included, if it carries
 /// one. The IPTC record is in there — see [`crate::iptc`].
 pub fn app13(raw: &[u8]) -> Option<&[u8]> {
@@ -381,6 +460,56 @@ mod tests {
             with_xmp(header, PACKET).is_err(),
             "a header must never be written back as a file"
         );
+    }
+
+    /// The same file with four 64 kB blocks ahead of everything else, the
+    /// way one phone writes them: whatever follows is past the header.
+    fn behind_a_phones_own_blocks(raw: &[u8]) -> Vec<u8> {
+        let mut out = raw[..2].to_vec();
+        for marker in 0xE6..=0xE9u8 {
+            out.extend_from_slice(&[0xFF, marker, 0xFF, 0x7E]);
+            out.extend_from_slice(&[0u8; 0xFF7C]);
+        }
+
+        out.extend_from_slice(&raw[2..]);
+        out
+    }
+
+    /// A rating given in another program sat a quarter of a megabyte into
+    /// the file, and the header we read stops at 128 kB.
+    #[test]
+    fn a_packet_past_the_header_is_found_in_the_file() {
+        let raw = behind_a_phones_own_blocks(&jpeg(true, Some(PACKET)));
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("phone.jpg");
+        std::fs::write(&path, &raw).unwrap();
+
+        let header = &raw[..photosite_image::exif::HEADER_BYTES];
+        assert_eq!(xmp(header), None, "nothing to guard");
+        assert!(stops_short(header));
+        assert_eq!(xmp_in_file(&path).as_deref(), Some(PACKET));
+
+        // The whole file says the same, and has nothing more to be asked.
+        assert_eq!(xmp(&raw).as_deref(), Some(PACKET));
+        assert!(!stops_short(&raw));
+    }
+
+    #[test]
+    fn a_file_with_no_packet_anywhere_has_none_to_find() {
+        let raw = behind_a_phones_own_blocks(&jpeg(true, None));
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("phone.jpg");
+        std::fs::write(&path, &raw).unwrap();
+
+        assert!(stops_short(&raw[..photosite_image::exif::HEADER_BYTES]));
+        assert_eq!(xmp_in_file(&path), None);
+
+        // Nor is anything that is not a JPEG walked for one.
+        let other = dir.path().join("other.jpg");
+        std::fs::write(&other, b"this is not a jpeg at all").unwrap();
+        assert!(!stops_short(b"this is not a jpeg at all"));
+        assert_eq!(xmp_in_file(&other), None);
+        assert_eq!(xmp_in_file(&dir.path().join("missing.jpg")), None);
     }
 
     #[test]

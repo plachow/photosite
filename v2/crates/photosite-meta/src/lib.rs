@@ -118,10 +118,19 @@ pub fn read(path: &Path) -> Xmp {
 /// unsaid: a library catalogued in Windows, or in Zoner before it wrote XMP,
 /// carries its titles, its comments and its stars there and nowhere else,
 /// and the IPTC record is where such a library keeps its keywords.
+///
+/// The header is nearly always enough, and when it is not it says so: it
+/// stops before the scan with no packet in it. Then the file is asked — see
+/// [`jpeg::xmp_in_file`].
 pub fn read_from_header(path: &Path, header: &[u8], exif: &photosite_image::exif::Said) -> Xmp {
     match target_for(path) {
         Target::Embedded => {
-            let mut said = match jpeg::xmp(header) {
+            let packet = jpeg::xmp(header).or_else(|| {
+                jpeg::stops_short(header)
+                    .then(|| jpeg::xmp_in_file(path))
+                    .flatten()
+            });
+            let mut said = match packet {
                 Some(packet) => xmp::read(&packet),
                 None => Xmp::default(),
             };
@@ -927,6 +936,33 @@ mod tests {
         );
         assert!(jpeg::app13(&raw).is_none());
         assert!(read(&path).is_empty());
+    }
+
+    /// One phone writes a quarter of a megabyte of its own blocks ahead of
+    /// the packet. Three stars given in another program were in the file and
+    /// the scan, which reads 128 kB, never saw them.
+    #[test]
+    fn the_scan_reads_a_packet_that_sits_past_the_header() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("phone.jpg");
+        let mut three_stars = Xmp::default();
+        three_stars.rating = Some(3);
+        let packet = xmp::merge(None, &three_stars);
+        let spoken = jpeg::with_xmp(&jpeg_bytes(), &packet).unwrap();
+        let mut raw = spoken[..2].to_vec();
+        for marker in 0xE6..=0xE9u8 {
+            raw.extend_from_slice(&[0xFF, marker, 0xFF, 0x7E]);
+            raw.extend_from_slice(&[0u8; 0xFF7C]);
+        }
+        raw.extend_from_slice(&spoken[2..]);
+        std::fs::write(&path, &raw).unwrap();
+
+        let header = &raw[..photosite_image::exif::HEADER_BYTES];
+        assert_eq!(jpeg::xmp(header), None, "nothing to guard");
+
+        let (_, said) = scan(&path).expect("the file was not scanned");
+        assert_eq!(said.rating, Some(3));
+        assert_eq!(said, read(&path), "the scan and the whole file disagree");
     }
 
     /// A library catalogued in Windows, or in something older than XMP,
