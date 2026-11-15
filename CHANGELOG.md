@@ -10,6 +10,8 @@ change lands here under **Unreleased** in the same commit that makes it.
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-11-15
+
 ### Added
 
 - A photograph open in a tab of its own, full screen included, can be rated
@@ -200,7 +202,8 @@ implementation stopped at 0.9.x and never shipped.
 - A Windows installer that updates itself, and a `photosite-cli` for the
   same work without a window.
 
-[Unreleased]: https://github.com/plachow/photosite/compare/v2.2.0...HEAD
+[Unreleased]: https://github.com/plachow/photosite/compare/v2.3.0...HEAD
+[2.3.0]: https://github.com/plachow/photosite/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/plachow/photosite/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/plachow/photosite/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/plachow/photosite/releases/tag/v2.0.0
