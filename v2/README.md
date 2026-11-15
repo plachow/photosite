@@ -983,9 +983,8 @@ rescan.
 Two counts and never one ratio, because "nobody has been scored yet" and
 "everybody was scored and everybody is smiling" are different states and a
 ratio cannot tell them apart. A face nobody has looked at is not evidence
-of a frown. What comes of it: a quiet mark on a tile where something is
-worth a second look, `1/2 smiling · 2/2 eyes open` in the details, and two
-filter rows that cut a portrait series **both ways** — keep the frames
+of a frown. What comes of it: `1/2 smiling · 2/2 eyes open` in the details,
+and two filter rows that cut a portrait series **both ways** — keep the frames
 where everybody smiled, or collect the ones where somebody blinked. A
 portrait cull is done from either end and both ends have to be one click
 away.

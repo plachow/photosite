@@ -31,8 +31,14 @@ change lands here under **Unreleased** in the same commit that makes it.
 
 - The stars are drawn with smooth edges, and the stars not given are
   outlines rather than grey stars.
-- The mark for a blink or a missing smile is a small face rather than a
-  bare arc.
+- The marks along the bottom of a tile stand in one row on its bottom edge:
+  the star, the dots for the people and the mark for a description. The
+  dots used to sit a third of the way up the photograph.
+
+### Removed
+
+- The mark on a tile for a blink or a missing smile. The counts in the
+  details and the two rows of the filter are still there.
 
 ### Fixed
 

@@ -376,7 +376,6 @@ pub fn badges(
     organisation: &Organisation,
     verdict: Verdict,
     people: &[photosite_core::people::Tag],
-    expressions: photosite_core::people::Expressions,
 ) -> Vec<(Rect, Mark)> {
     let mut marks = Vec::new();
 
@@ -389,6 +388,15 @@ pub fn badges(
     let size = (well.height() * 0.09).clamp(5.0, 11.0);
     let pad = size * 0.6;
 
+    // Everything said along the bottom stands in one row on the bottom
+    // edge: the star, the people and the lines of text from the left, the
+    // pin in the right corner. A second row above the first put the dots a
+    // third of the way up the photograph, which is in front of the picture
+    // rather than beside it.
+    let gap = pad * 0.5;
+    let mut left = well.min.x + pad;
+    let mut right = well.max.x - pad;
+
     // A doubted position, and only a doubted one. A pin on every photograph
     // that carries coordinates would be on most of a phone's library and
     // would say nothing; this one means "worth a look".
@@ -397,34 +405,59 @@ pub fn badges(
     {
         let side = size * 2.0;
         let spot = Rect::from_min_size(
-            egui::pos2(well.max.x - pad - side, well.max.y - pad - side),
+            egui::pos2(right - side, well.max.y - pad - side),
             Vec2::splat(side),
         );
         painter.rect_filled(spot, CornerRadius::same(2), Color32::from_black_alpha(120));
         pin(painter, spot.center(), size * 0.8, fill);
         marks.push((spot, Mark::Position(verdict)));
+        right = spot.min.x - gap;
+    }
+
+    // One star with the number in it, rather than a row of five. Five stars
+    // across a tile are a fifth of its width and say "rated" long before
+    // they say how much; one star in a colour that darkens as the stars go
+    // says both at a glance and takes the room of a label swatch.
+    if organisation.rating > 0 {
+        let side = size * 2.2;
+        let plate =
+            Rect::from_min_size(egui::pos2(left, well.max.y - pad - side), Vec2::splat(side));
+        painter.rect_filled(plate, CornerRadius::same(2), Color32::from_black_alpha(120));
+        rating_badge(painter, plate.center(), size * 0.95, organisation.rating);
+        marks.push((plate, Mark::Rating(organisation.rating)));
+        left = plate.max.x + gap;
+    }
+
+    // Described: a title and a description, which is what a describe run
+    // leaves behind and what it looks for before it skips a photograph. A
+    // few lines of text, in white rather than a colour: it says that
+    // something is there, not that something is wrong. It keeps its place
+    // in the row before the people are counted, being of one width.
+    let described = organisation.is_described();
+    let described_side = size * 2.0;
+    if described {
+        right -= described_side + gap;
     }
 
     // Who is on it, as a row of dots in their own colours. No names: at
     // three pixels high a name is a smudge, and the colour is what says
-    // "the same person as on that other tile".
+    // "the same person as on that other tile". As many as the row has room
+    // for, and never more than six.
     if !people.is_empty() {
         let dot = size * 1.4;
+        let step = dot + pad * 0.4;
+        let room = ((right - left - pad * 0.6) / step).floor().max(1.0) as usize;
+        let shown = people.len().min(6).min(room);
+        let height = dot + pad * 0.6;
         let plate = Rect::from_min_size(
-            egui::pos2(
-                well.min.x + pad,
-                well.max.y - pad - size * 2.2 - dot - pad * 0.5,
-            ),
-            Vec2::new(
-                (dot + pad * 0.4) * people.len().min(6) as f32 + pad * 0.6,
-                dot + pad * 0.6,
-            ),
+            egui::pos2(left, well.max.y - pad - height),
+            Vec2::new(step * shown as f32 + pad * 0.6, height),
         );
         painter.rect_filled(plate, CornerRadius::same(2), Color32::from_black_alpha(120));
-        for (index, tag) in people.iter().take(6).enumerate() {
+        for (index, tag) in people.iter().take(shown).enumerate() {
             let colour = photosite_core::theme::person_color(tag.id);
             let centre = egui::pos2(
-                plate.min.x + pad * 0.3 + dot / 2.0 + index as f32 * (dot + pad * 0.4),
+                plate.min.x + pad * 0.3 + dot / 2.0 + index as f32 * step,
                 plate.center().y,
             );
             painter.circle_filled(
@@ -435,45 +468,13 @@ pub fn badges(
         }
 
         marks.push((plate, Mark::People));
+        left = plate.max.x + gap;
     }
 
-    // A quiet mark for a photograph worth a second look: somebody blinked,
-    // or somebody is not smiling. Nothing at all when everybody passes —
-    // a badge on every good photograph is a badge that says nothing.
-    //
-    // It is a face, and not the bare arc it once was: an arc on its own is
-    // a mouth to whoever drew it and a telephone to everybody else.
-    if expressions.worth_showing() {
-        let side = size * 2.0;
-        let spot = Rect::from_min_size(
-            egui::pos2(
-                well.max.x - pad - side,
-                well.max.y - pad - side - side - pad * 0.5,
-            ),
-            Vec2::splat(side),
-        );
-        painter.rect_filled(spot, CornerRadius::same(2), Color32::from_black_alpha(120));
-        let amber = Color32::from_rgb(0xF2, 0xC5, 0x4E);
-        let blinking = expressions.anyone_blinking();
-        face(painter, spot.center(), size * 0.82, amber, blinking);
-        marks.push((spot, Mark::Expression { blinking }));
-    }
-
-    if organisation.is_empty() {
-        return marks;
-    }
-
-    // Described: a title and a description, which is what a describe run
-    // leaves behind and what it looks for before it skips a photograph. A
-    // few lines of text in the middle of the bottom edge, the one place no
-    // other mark stands, and in white rather than a colour: it says that
-    // something is there, not that something is wrong.
-    if organisation.is_described() {
-        let side = size * 2.0;
-        let spot = Rect::from_min_size(
-            egui::pos2(well.center().x - side * 0.5, well.max.y - pad - side),
-            Vec2::splat(side),
-        );
+    if described {
+        let side = described_side;
+        let spot =
+            Rect::from_min_size(egui::pos2(left, well.max.y - pad - side), Vec2::splat(side));
         painter.rect_filled(spot, CornerRadius::same(2), Color32::from_black_alpha(120));
         let stroke = Stroke::new((size * 0.2).max(1.0), Color32::from_gray(225));
         let centre = spot.center();
@@ -489,21 +490,6 @@ pub fn badges(
         }
 
         marks.push((spot, Mark::Described));
-    }
-
-    // One star with the number in it, rather than a row of five. Five stars
-    // across a tile are a fifth of its width and say "rated" long before
-    // they say how much; one star in a colour that darkens as the stars go
-    // says both at a glance and takes the room of a label swatch.
-    if organisation.rating > 0 {
-        let side = size * 2.2;
-        let plate = Rect::from_min_size(
-            egui::pos2(well.min.x + pad, well.max.y - pad - side),
-            Vec2::splat(side),
-        );
-        painter.rect_filled(plate, CornerRadius::same(2), Color32::from_black_alpha(120));
-        rating_badge(painter, plate.center(), size * 0.95, organisation.rating);
-        marks.push((plate, Mark::Rating(organisation.rating)));
     }
 
     // The label goes in the corner as its own colour, never the palette's —
@@ -556,59 +542,11 @@ pub enum Mark {
     Position(Verdict),
     /// The row of dots: who is on it.
     People,
-    /// The face: somebody blinked, or somebody is not smiling.
-    Expression {
-        blinking: bool,
-    },
     /// The lines of text: it has a title and a description.
     Described,
     Rating(u8),
     Label(photosite_core::domain::ColorLabel),
     Picked,
-}
-
-/// A small face for a photograph worth a second look: its eyes shut when
-/// somebody blinked, and its mouth turned down when somebody is not smiling.
-///
-/// Drawn rather than written, for the same reason the stars are — the
-/// default font has no such glyph, and a font that did would be a font to
-/// ship.
-fn face(painter: &egui::Painter, centre: egui::Pos2, radius: f32, colour: Color32, shut: bool) {
-    let stroke = Stroke::new((radius * 0.2).max(1.0), colour);
-    painter.circle_stroke(centre, radius, stroke);
-    for side in [-1.0f32, 1.0] {
-        let eye = centre + Vec2::new(side * radius * 0.36, -radius * 0.22);
-        if shut {
-            let lid = Vec2::new(radius * 0.22, 0.0);
-            painter.line_segment([eye - lid, eye + lid], stroke);
-        } else {
-            painter.circle_filled(eye, (radius * 0.14).max(0.8), colour);
-        }
-    }
-
-    let mouth = centre + Vec2::new(0.0, radius * 0.5);
-    if shut {
-        let half = Vec2::new(radius * 0.3, 0.0);
-        painter.line_segment([mouth - half, mouth + half], stroke);
-    } else {
-        let curve = arc(mouth, radius * 0.42, 0.45, true);
-        painter.add(egui::Shape::line(curve, stroke));
-    }
-}
-
-/// Points along a shallow parabola: `depth` says how far it bends and which
-/// way, `up` which side of the middle it sits.
-fn arc(centre: egui::Pos2, size: f32, depth: f32, up: bool) -> Vec<egui::Pos2> {
-    let sign = if up { -1.0 } else { 1.0 };
-    (0..=8)
-        .map(|step| {
-            let along = step as f32 / 8.0 * 2.0 - 1.0;
-            egui::pos2(
-                centre.x + along * size,
-                centre.y + sign * depth * size * (1.0 - along * along),
-            )
-        })
-        .collect()
 }
 
 /// Draws the slide and returns the rectangle the photograph belongs in.

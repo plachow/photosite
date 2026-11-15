@@ -180,7 +180,6 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
                             photosite_core::Verdict::Nowhere
                         };
                         let people = photo.people.clone();
-                        let expressions = photo.expressions;
                         let marks = theme::badges(
                             ui.painter(),
                             well,
@@ -188,7 +187,6 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
                             &organisation,
                             verdict,
                             &people,
-                            expressions,
                         );
 
                         // The pointer resting on a mark is somebody asking

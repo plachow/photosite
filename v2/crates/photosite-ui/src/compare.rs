@@ -241,18 +241,9 @@ fn caption(app: &mut App, ui: &mut egui::Ui, rect: egui::Rect, palette: &Palette
             photosite_core::Verdict::Nowhere
         };
         let people = photo.people.clone();
-        let expressions = photo.expressions;
         // What the marks mean is said over the gallery's tiles; here the
         // pointer is busy looking closer.
-        let _ = theme::badges(
-            ui.painter(),
-            rect,
-            palette,
-            &organisation,
-            verdict,
-            &people,
-            expressions,
-        );
+        let _ = theme::badges(ui.painter(), rect, palette, &organisation, verdict, &people);
     }
 
     let name = path

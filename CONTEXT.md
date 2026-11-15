@@ -171,7 +171,7 @@ Both models are optional files beside the other two; a face scanned without
 them stays unscored (`NULL`) and is scored in place on a later scan by
 rectangle overlap, never losing its id or person. Scores stay in the
 catalogue only — nothing is written into files. Per photo they aggregate to
-one summary (thresholds at 0.5) behind the thumbnail badge, the info panel's
+one summary (thresholds at 0.5) behind the info panel's
 Expression row — which counts, `1/2 smiling · 2/2 eyes open`, rather than
 passing a verdict — and the filter's Smile and Eyes facets, whose sides read
 "everyone passes" versus "someone fails" so a portrait cull can keep either

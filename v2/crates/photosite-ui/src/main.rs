@@ -3594,8 +3594,6 @@ impl App {
                 .map(|tag| tag.name.as_str())
                 .collect::<Vec<_>>()
                 .join(", "),
-            theme::Mark::Expression { blinking: true } => t!("filter-someone-blinking"),
-            theme::Mark::Expression { blinking: false } => t!("filter-someone-not-smiling"),
             theme::Mark::Described => t!("badge-described"),
             theme::Mark::Rating(stars) => self.rating_hint(stars),
             theme::Mark::Label(label) => self.label_hint(label),
