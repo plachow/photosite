@@ -10,6 +10,8 @@ change lands here under **Unreleased** in the same commit that makes it.
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-11-16
+
 ### Added
 
 - A slider on the toolbar sets the size of the tiles, in ten steps from 80 to
@@ -249,7 +251,8 @@ implementation stopped at 0.9.x and never shipped.
 - A Windows installer that updates itself, and a `photosite-cli` for the
   same work without a window.
 
-[Unreleased]: https://github.com/plachow/photosite/compare/v2.3.0...HEAD
+[Unreleased]: https://github.com/plachow/photosite/compare/v2.4.0...HEAD
+[2.4.0]: https://github.com/plachow/photosite/compare/v2.3.0...v2.4.0
 [2.3.0]: https://github.com/plachow/photosite/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/plachow/photosite/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/plachow/photosite/compare/v2.0.0...v2.1.0
