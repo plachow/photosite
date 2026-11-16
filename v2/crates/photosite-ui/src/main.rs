@@ -916,22 +916,7 @@ impl App {
 
     pub fn open(&mut self, folder: PathBuf) {
         let started = std::time::Instant::now();
-        let files = walk(&folder, self.settings.gallery.recursive);
-
-        // A row for every file before a single one is opened. It costs one
-        // transaction, and it is what makes the folder ratable from the first
-        // frame — a rating needs somewhere to go, and waiting for seven
-        // thousand headers to be read first is not somewhere.
-        if let Some(catalog) = self.catalog.as_mut()
-            && let Err(error) = catalog.upsert_identities(&files)
-        {
-            tracing::error!(
-                error = %format!("{error:#}"),
-                "the folder could not be written to the catalogue"
-            );
-        }
-
-        let count = files.len();
+        let count = self.read_folder(&folder);
         self.folder = Some(folder.clone());
         self.selected = None;
         self.selection.clear();
@@ -1092,19 +1077,57 @@ impl App {
         };
 
         tracing::debug!(folder = %folder.display(), "the folder changed underneath us");
-        let files = walk(&folder, self.settings.gallery.recursive);
-        if let Some(catalog) = self.catalog.as_mut()
-            && let Err(error) = catalog.upsert_identities(&files)
-        {
+        self.read_folder(&folder);
+        self.relist();
+        self.start_indexing();
+        self.start_writing();
+    }
+
+    /// Brings the catalogue into line with what is in the folder on the disk,
+    /// and answers how many photographs that is.
+    ///
+    /// A row for every file before a single one is opened. It costs one
+    /// transaction, and it is what makes the folder ratable from the first
+    /// frame — a rating needs somewhere to go, and waiting for seven thousand
+    /// headers to be read first is not somewhere. And the rows of files that
+    /// were deleted outside the application go, so that they stop standing
+    /// in the gallery as empty tiles — but only on the word of a walk that
+    /// saw the whole folder.
+    fn read_folder(&mut self, folder: &Path) -> usize {
+        let recursive = self.settings.gallery.recursive;
+        let (files, complete) = walk(folder, recursive);
+        let Some(catalog) = self.catalog.as_mut() else {
+            return files.len();
+        };
+
+        if let Err(error) = catalog.upsert_identities(&files) {
             tracing::error!(
                 error = %format!("{error:#}"),
                 "the folder could not be written to the catalogue"
             );
         }
 
-        self.relist();
-        self.start_indexing();
-        self.start_writing();
+        if !complete {
+            tracing::warn!(
+                folder = %folder.display(),
+                "the folder could not be read in full; nothing is forgotten from it"
+            );
+        } else {
+            match catalog.forget_missing(folder, recursive, &files) {
+                Ok(gone) if !gone.is_empty() => tracing::info!(
+                    folder = %folder.display(),
+                    count = gone.len(),
+                    "photographs deleted outside the application are forgotten"
+                ),
+                Ok(_) => {}
+                Err(error) => tracing::error!(
+                    error = %format!("{error:#}"),
+                    "the photographs deleted outside could not be forgotten"
+                ),
+            }
+        }
+
+        files.len()
     }
 
     /// The photographs the file operations act on.
@@ -4036,30 +4059,44 @@ pub(crate) fn now() -> i64 {
 /// Nothing is opened here. `metadata` on a walked entry is answered out of
 /// what reading the directory already returned, so this stays a walk rather
 /// than seven thousand file opens on the way to the first frame.
-fn walk(folder: &Path, recursive: bool) -> Vec<FileIdentity> {
-    let mut files: Vec<FileIdentity> = walkdir::WalkDir::new(folder)
+///
+/// Says too whether the walk saw everything. One that stumbled — a share
+/// that went away, a folder it may not read — has not seen what is missing,
+/// only what it did not get to, and nothing may be forgotten on its word.
+fn walk(folder: &Path, recursive: bool) -> (Vec<FileIdentity>, bool) {
+    let mut complete = true;
+    let mut files: Vec<FileIdentity> = Vec::new();
+    let entries = walkdir::WalkDir::new(folder)
         .max_depth(if recursive { usize::MAX } else { 1 })
-        .into_iter()
-        .filter_map(std::result::Result::ok)
-        .filter(|entry| entry.file_type().is_file())
-        .filter(|entry| photosite_core::is_photo(entry.path()))
-        .filter_map(|entry| {
-            let meta = entry.metadata().ok()?;
-            let modified_at = meta
-                .modified()
-                .ok()
-                .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|since| since.as_secs() as i64)
-                .unwrap_or(0);
-            Some(FileIdentity {
-                file_size: meta.len(),
-                modified_at,
-                path: entry.into_path(),
-            })
-        })
-        .collect();
+        .into_iter();
+    for entry in entries {
+        let Ok(entry) = entry else {
+            complete = false;
+            continue;
+        };
+        if !entry.file_type().is_file() || !photosite_core::is_photo(entry.path()) {
+            continue;
+        }
+
+        let Ok(meta) = entry.metadata() else {
+            complete = false;
+            continue;
+        };
+        let modified_at = meta
+            .modified()
+            .ok()
+            .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|since| since.as_secs() as i64)
+            .unwrap_or(0);
+        files.push(FileIdentity {
+            file_size: meta.len(),
+            modified_at,
+            path: entry.into_path(),
+        });
+    }
+
     files.sort_by(|a, b| a.path.cmp(&b.path));
-    files
+    (files, complete)
 }
 
 fn into_pixels(rgb: img::Rgb) -> Pixels {
@@ -6600,6 +6637,22 @@ mod culling {
             app.facets, all,
             "narrowing the gallery must not narrow what can be asked"
         );
+    }
+
+    /// Deleted in Explorer, gone from the gallery once the folder is read
+    /// again — not left standing as an empty tile with its stars on.
+    #[test]
+    fn a_photograph_deleted_outside_leaves_the_gallery() {
+        let (mut app, _data, photos) = three();
+        assert_eq!(app.total(), 3);
+
+        std::fs::remove_file(photos.path().join("b.jpg")).unwrap();
+        app.refresh();
+        assert_eq!(app.total(), 2);
+        assert!((0..app.count()).all(|at| {
+            app.photo(at)
+                .is_some_and(|photo| !photo.path.ends_with("b.jpg"))
+        }));
     }
 
     #[test]

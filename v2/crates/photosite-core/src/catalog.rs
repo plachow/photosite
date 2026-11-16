@@ -1071,6 +1071,53 @@ impl Catalog {
         Ok(moved)
     }
 
+    /// Forgets the photographs in a folder that are no longer on the disk,
+    /// and answers which they were.
+    ///
+    /// `found` is what a **complete** walk of the folder turned up — the
+    /// caller's to promise. A walk that failed part of the way, or a share
+    /// that has gone away, finds nothing, and taking that for an empty
+    /// folder would forget every rating and every word in it. As a second
+    /// guard, a row goes only when its own file is asked about and is not
+    /// there.
+    ///
+    /// Without this, a photograph deleted in Explorer stayed in the gallery
+    /// for ever, its tile empty, because reading a folder only ever added.
+    pub fn forget_missing(
+        &mut self,
+        folder: &Path,
+        recursive: bool,
+        found: &[FileIdentity],
+    ) -> Result<Vec<PathBuf>> {
+        let folder = folder.to_string_lossy().into_owned();
+        let under = format!("{}{}", folder.trim_end_matches(SEPARATOR), SEPARATOR);
+        let known: Vec<PathBuf> = if recursive {
+            self.conn
+                .prepare(
+                    "SELECT path FROM photos
+                     WHERE folder = ?1 OR substr(folder, 1, length(?2)) = ?2",
+                )?
+                .query_map(params![folder, under], |row| row.get::<_, String>(0))?
+                .map(|path| path.map(PathBuf::from))
+                .collect::<rusqlite::Result<_>>()?
+        } else {
+            self.conn
+                .prepare("SELECT path FROM photos WHERE folder = ?1")?
+                .query_map(params![folder], |row| row.get::<_, String>(0))?
+                .map(|path| path.map(PathBuf::from))
+                .collect::<rusqlite::Result<_>>()?
+        };
+
+        let found: std::collections::HashSet<&Path> =
+            found.iter().map(|file| file.path.as_path()).collect();
+        let gone: Vec<PathBuf> = known
+            .into_iter()
+            .filter(|path| !found.contains(path.as_path()) && !path.exists())
+            .collect();
+        self.forget(&gone)?;
+        Ok(gone)
+    }
+
     /// These photographs are gone.
     ///
     /// The keywords and any pending write go with them, which the foreign
@@ -1612,6 +1659,52 @@ mod tests {
             verdict: crate::place::Verdict::Nowhere,
             reason: None,
         }
+    }
+
+    /// A photograph deleted outside the application is forgotten the next
+    /// time the folder is read; one that is still there is not, even when
+    /// the walk somehow missed it; and nothing outside the folder is touched.
+    #[test]
+    fn what_is_no_longer_on_the_disk_is_forgotten_and_nothing_else() {
+        let dir = tempfile::tempdir().unwrap();
+        let inner = dir.path().join("inner");
+        std::fs::create_dir_all(&inner).unwrap();
+        let (kept, deleted, missed, deeper) = (
+            dir.path().join("kept.jpg"),
+            dir.path().join("deleted.jpg"),
+            dir.path().join("missed.jpg"),
+            inner.join("deeper.jpg"),
+        );
+        for path in [&kept, &deleted, &missed, &deeper] {
+            std::fs::write(path, b"x").unwrap();
+        }
+        let identities: Vec<FileIdentity> = [&kept, &deleted, &missed, &deeper]
+            .iter()
+            .map(|path| FileIdentity::read(path).unwrap())
+            .collect();
+        let mut catalog = Catalog::in_memory().unwrap();
+        catalog.upsert_identities(&identities).unwrap();
+
+        std::fs::remove_file(&deleted).unwrap();
+        std::fs::remove_file(&deeper).unwrap();
+        // The walk found only the one; the other is there all the same.
+        let found = [FileIdentity::read(&kept).unwrap()];
+        let gone = catalog.forget_missing(dir.path(), false, &found).unwrap();
+        assert_eq!(gone, [deleted]);
+
+        // Not recursive, so the deeper one was not asked about.
+        let deeper_left = catalog.in_folder(&inner, false).unwrap();
+        assert_eq!(deeper_left.len(), 1);
+        let gone = catalog.forget_missing(dir.path(), true, &found).unwrap();
+        assert_eq!(gone, [deeper]);
+
+        let left: Vec<PathBuf> = catalog
+            .in_folder(dir.path(), true)
+            .unwrap()
+            .into_iter()
+            .map(|photo| photo.path)
+            .collect();
+        assert_eq!(left, [kept, missed]);
     }
 
     #[test]

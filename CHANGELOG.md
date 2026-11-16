@@ -36,6 +36,10 @@ change lands here under **Unreleased** in the same commit that makes it.
   it is; the stars and the words then go into XMP and IPTC only.
 - The sensitivity (ISO) of photographs from cameras that store it as a long
   number is read instead of showing as none.
+- A photograph deleted outside PhotoSite, in Explorer or on a network share,
+  leaves the gallery the next time the folder is read (F5, or when the
+  folder's change is noticed) instead of staying as an empty tile. A folder
+  that cannot be read in full forgets nothing.
 - Copy to, Duplicate and a Move to another drive keep the original's dates:
   the copy is created and modified when the photograph was, not when it was
   copied.
