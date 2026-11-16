@@ -547,17 +547,34 @@ fn embed(raw: &[u8], wanted: &Xmp) -> Result<Vec<u8>> {
 /// None of the four is in little_exif's list of known tags, so they go in by
 /// number. **The file is read first**, without exception: the alternative
 /// writes an empty metadata set over everything the camera recorded.
+///
+/// That alternative is exactly what happened, to thousands of photographs
+/// from one phone, for as long as an EXIF block little_exif could not read
+/// was taken for no EXIF at all: the stars went in and the date, the camera
+/// and the exposure went out. So now a block that is there but cannot be
+/// read is left exactly as it is — the stars and the words still reach the
+/// XMP and IPTC beside it — and whatever is built is checked against what
+/// the camera recorded before it is used. See [`lost_from`].
 fn with_exif(raw: &[u8], wanted: &Xmp) -> Result<Vec<u8>> {
     let rating = wanted.rating;
     let place = wanted.place;
     let mut buffer = raw.to_vec();
+    undefined_as_undefined(&mut buffer);
     let mut metadata = match Metadata::new_from_vec(&buffer, FileExtension::JPEG) {
         Ok(metadata) => metadata,
-        Err(error) => {
-            // No EXIF at all is ordinary; start one rather than give up on
-            // the stars.
+        // No EXIF at all is ordinary; start one rather than give up on the
+        // stars.
+        Err(error) if jpeg::exif_block(raw).is_none() => {
             tracing::debug!(%error, "no EXIF to read; starting a new block");
             Metadata::new()
+        }
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                "the camera's EXIF cannot be read here, so it is left as it is; \
+                 the stars and the words go into XMP and IPTC only"
+            );
+            return Ok(raw.to_vec());
         }
     };
 
@@ -645,7 +662,129 @@ fn with_exif(raw: &[u8], wanted: &Xmp) -> Result<Vec<u8>> {
     metadata
         .write_to_vec(&mut buffer, FileExtension::JPEG)
         .context("the EXIF block could not be written")?;
+
+    if let Some(lost) = lost_from(raw, &buffer, wanted) {
+        tracing::warn!(
+            lost,
+            "rewriting the EXIF block would have lost what the camera recorded, \
+             so it is left as it is; the stars and the words go into XMP and IPTC only"
+        );
+        return Ok(raw.to_vec());
+    }
+
     Ok(buffer)
+}
+
+/// What a rewritten EXIF block dropped of what the camera recorded, if it
+/// dropped anything: the moment, the camera, the lens, the exposure, the
+/// time zone, and the position unless a new one was asked for.
+///
+/// Read with this application's own reader, which is not little_exif — so
+/// a block the writer mangled in a way it cannot see itself is still caught.
+fn lost_from(before: &[u8], after: &[u8], wanted: &Xmp) -> Option<&'static str> {
+    let (before, after) = (
+        photosite_image::exif::read(before),
+        photosite_image::exif::read(after),
+    );
+    if before.taken_at != after.taken_at {
+        return Some("the date it was taken");
+    }
+    if before.camera != after.camera {
+        return Some("the camera");
+    }
+    if before.lens != after.lens {
+        return Some("the lens");
+    }
+    if before.exposure != after.exposure {
+        return Some("the exposure");
+    }
+    if before.offset_seconds != after.offset_seconds {
+        return Some("the time zone");
+    }
+    if wanted.place.is_none() && before.gps.is_some() && after.gps.is_none() {
+        return Some("the position");
+    }
+    None
+}
+
+/// The tags EXIF defines as UNDEFINED — a byte string — which some cameras
+/// write as BYTE instead: the versions, the components, the file source and
+/// the scene type. The bytes are the same either way; the type is a label.
+/// little_exif refuses the whole block over that label, so it is put right
+/// before the block is read.
+///
+/// Found on a HONOR phone, whose `SceneType` is BYTE in every photograph it
+/// takes.
+const UNDEFINED_TAGS: [u16; 5] = [0x9000, 0x9101, 0xA000, 0xA300, 0xA301];
+
+/// Relabels, in place, any of [`UNDEFINED_TAGS`] in the EXIF sub-IFD that a
+/// camera wrote as BYTE. Only the two type bytes of the entry change; the
+/// count, the value and everything else stay where they are, so a block
+/// that has nothing to put right is not touched at all.
+fn undefined_as_undefined(raw: &mut [u8]) {
+    const BYTE: u16 = 1;
+    const UNDEFINED: u16 = 7;
+    const EXIF_IFD: u16 = 0x8769;
+
+    let Some(block) = jpeg::exif_block(raw) else {
+        return;
+    };
+    let tiff = &mut raw[block];
+    let little = match tiff.get(..2) {
+        Some(b"II") => true,
+        Some(b"MM") => false,
+        _ => return,
+    };
+    let half = |tiff: &[u8], at: usize| {
+        tiff.get(at..at + 2).map(|bytes| {
+            let bytes = [bytes[0], bytes[1]];
+            if little {
+                u16::from_le_bytes(bytes)
+            } else {
+                u16::from_be_bytes(bytes)
+            }
+        })
+    };
+    let word = |tiff: &[u8], at: usize| {
+        tiff.get(at..at + 4).map(|bytes| {
+            let bytes = [bytes[0], bytes[1], bytes[2], bytes[3]];
+            if little {
+                u32::from_le_bytes(bytes)
+            } else {
+                u32::from_be_bytes(bytes)
+            }
+        })
+    };
+    let entries = |tiff: &[u8], ifd: usize| {
+        let count = half(tiff, ifd).unwrap_or(0) as usize;
+        (0..count).map(move |index| ifd + 2 + 12 * index)
+    };
+
+    let Some(first) = word(tiff, 4).map(|at| at as usize) else {
+        return;
+    };
+    let Some(sub) = entries(tiff, first)
+        .find(|&entry| half(tiff, entry) == Some(EXIF_IFD))
+        .and_then(|entry| word(tiff, entry + 8))
+        .map(|at| at as usize)
+    else {
+        return;
+    };
+
+    let wrong: Vec<usize> = entries(tiff, sub)
+        .filter(|&entry| {
+            half(tiff, entry).is_some_and(|tag| UNDEFINED_TAGS.contains(&tag))
+                && half(tiff, entry + 2) == Some(BYTE)
+        })
+        .collect();
+    let label = if little {
+        UNDEFINED.to_le_bytes()
+    } else {
+        UNDEFINED.to_be_bytes()
+    };
+    for entry in wrong {
+        tiff[entry + 2..entry + 4].copy_from_slice(&label);
+    }
 }
 
 /// Text as Windows' `XP*` tags hold it: UTF-16 little-endian, null on the
@@ -730,6 +869,98 @@ fn replace(path: &Path, bytes: &[u8]) -> Result<()> {
 mod tests {
     use super::*;
     use photosite_core::domain::ColorLabel;
+
+    /// A JPEG with the EXIF block of a phone: who made it, and when the
+    /// shutter fired, and the scene type written with the type `scene` —
+    /// UNDEFINED (7) as the standard has it, BYTE (1) as a HONOR phone has
+    /// it, or ASCII (2), which nothing here can read.
+    fn jpeg_from_a_phone(scene: u16) -> Vec<u8> {
+        let mut tiff = Vec::new();
+        let entry = |tiff: &mut Vec<u8>, tag: u16, kind: u16, count: u32, value: [u8; 4]| {
+            tiff.extend_from_slice(&tag.to_be_bytes());
+            tiff.extend_from_slice(&kind.to_be_bytes());
+            tiff.extend_from_slice(&count.to_be_bytes());
+            tiff.extend_from_slice(&value);
+        };
+        tiff.extend_from_slice(b"MM\0\x2A");
+        tiff.extend_from_slice(&8u32.to_be_bytes());
+        // IFD0 at 8: the maker, and where the EXIF IFD is.
+        tiff.extend_from_slice(&2u16.to_be_bytes());
+        entry(&mut tiff, 0x010F, 2, 6, 38u32.to_be_bytes());
+        entry(&mut tiff, 0x8769, 4, 1, 44u32.to_be_bytes());
+        tiff.extend_from_slice(&0u32.to_be_bytes());
+        tiff.extend_from_slice(b"HONOR\0");
+        // The EXIF IFD at 44: the moment, and the scene type.
+        tiff.extend_from_slice(&2u16.to_be_bytes());
+        entry(&mut tiff, 0x9003, 2, 20, 74u32.to_be_bytes());
+        entry(&mut tiff, 0xA301, scene, 1, [1, 0, 0, 0]);
+        tiff.extend_from_slice(&0u32.to_be_bytes());
+        tiff.extend_from_slice(b"2026:01:09 16:18:39\0");
+
+        let mut segment = vec![0xFF, 0xE1];
+        segment.extend_from_slice(&((tiff.len() + 8) as u16).to_be_bytes());
+        segment.extend_from_slice(b"Exif\0\0");
+        segment.extend_from_slice(&tiff);
+
+        let mut raw = jpeg_bytes();
+        raw.splice(2..2, segment);
+        raw
+    }
+
+    fn rated(stars: u8) -> Xmp {
+        let mut wanted = Xmp::default();
+        wanted.rating = Some(stars);
+        wanted
+    }
+
+    /// The photographs this happened to: a phone that labels one tag BYTE
+    /// where the standard says UNDEFINED. Its EXIF went unread, was taken for
+    /// none, and a fresh one with the stars in it was written over the date,
+    /// the camera and the exposure. Now the label is put right, the block is
+    /// read, and the stars join what the camera said.
+    #[test]
+    fn a_phone_that_labels_its_scene_type_a_byte_keeps_its_exif() {
+        let raw = jpeg_from_a_phone(1);
+        let before = photosite_image::exif::read(&raw);
+        assert!(before.taken_at.is_some(), "the test photograph has no date");
+
+        let after = photosite_image::exif::read(&embed(&raw, &rated(4)).unwrap());
+        assert_eq!(after.taken_at, before.taken_at, "the date was lost");
+        assert_eq!(after.camera, before.camera, "the camera was lost");
+        assert_eq!(after.said.rating, Some(4));
+    }
+
+    /// And a block that cannot be read at all, for whatever reason the next
+    /// camera finds, is not replaced: it stays byte for byte, and the stars
+    /// go into XMP, where everything since Windows 7 reads them anyway.
+    #[test]
+    fn exif_that_cannot_be_read_is_left_exactly_as_it_was() {
+        let raw = jpeg_from_a_phone(2);
+        let out = embed(&raw, &rated(4)).unwrap();
+
+        let block = |bytes: &[u8]| bytes[jpeg::exif_block(bytes).unwrap()].to_vec();
+        assert_eq!(block(&out), block(&raw), "the camera's EXIF was rewritten");
+        assert_eq!(xmp::read(&jpeg::xmp(&out).unwrap()).rating, Some(4));
+    }
+
+    /// Putting the label right moves two bytes and nothing else.
+    #[test]
+    fn relabelling_a_byte_as_undefined_touches_only_its_type() {
+        let raw = jpeg_from_a_phone(1);
+        let mut relabelled = raw.clone();
+        undefined_as_undefined(&mut relabelled);
+
+        let changed: Vec<usize> = (0..raw.len())
+            .filter(|&at| raw[at] != relabelled[at])
+            .collect();
+        assert_eq!(changed.len(), 1, "{changed:?}");
+        assert_eq!(relabelled, jpeg_from_a_phone(7));
+
+        // A block that is already right is left alone.
+        let mut right = jpeg_from_a_phone(7);
+        undefined_as_undefined(&mut right);
+        assert_eq!(right, jpeg_from_a_phone(7));
+    }
 
     fn organisation() -> Organisation {
         Organisation {

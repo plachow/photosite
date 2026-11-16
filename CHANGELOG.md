@@ -27,6 +27,15 @@ change lands here under **Unreleased** in the same commit that makes it.
 
 ### Fixed
 
+- Rating, describing or naming people in a JPEG no longer wipes the
+  camera's EXIF from it. A block the writer could not read — every photograph
+  from a HONOR phone, which labels one tag differently from the standard —
+  was taken for no EXIF at all and replaced, losing the date taken, the
+  camera and the exposure. Such a block is now read correctly, and one that
+  still cannot be read, or would lose anything in the rewrite, is left as
+  it is; the stars and the words then go into XMP and IPTC only.
+- The sensitivity (ISO) of photographs from cameras that store it as a long
+  number is read instead of showing as none.
 - Copy to, Duplicate and a Move to another drive keep the original's dates:
   the copy is created and modified when the photograph was, not when it was
   copied.

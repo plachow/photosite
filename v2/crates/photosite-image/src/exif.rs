@@ -618,6 +618,13 @@ impl<'a> TiffReader<'a> {
 
     /// A width or a height, which TIFF allows to be either size of integer.
     pub(crate) fn dimension(&self, ifd: usize, tag: u16) -> Option<u32> {
+        self.integer(ifd, tag)
+    }
+
+    /// A whole number the specification calls a SHORT and some cameras
+    /// write as a LONG all the same — a HONOR phone's sensitivity, for one.
+    /// Read as a SHORT, a big-endian LONG is its two high bytes: nought.
+    pub(crate) fn integer(&self, ifd: usize, tag: u16) -> Option<u32> {
         let entry = self.entry_for(ifd, tag)?;
         match self.u16(entry + 2)? {
             3 => self.u16(entry + 8).map(u32::from),
@@ -687,13 +694,14 @@ impl<'a> TiffReader<'a> {
             seconds: self.rational(ifd, 0x829A),
             aperture: self.rational(ifd, 0x829D),
             // A SHORT for anything up to 65535 and a LONG above it, and
-            // cameras that go past that write both. Either will do.
+            // cameras that go past that write both. Either will do. Nought
+            // is no sensitivity at all, only a value nobody filled in.
             sensitivity: self
-                .short(ifd, 0x8827)
-                .map(u32::from)
+                .integer(ifd, 0x8827)
+                .filter(|&iso| iso > 0)
                 .or_else(|| self.long(ifd, 0x8833)),
             focal_mm: self.rational(ifd, 0x920A),
-            focal_equivalent_mm: self.short(ifd, 0xA405).map(u32::from),
+            focal_equivalent_mm: self.integer(ifd, 0xA405),
         }
     }
 

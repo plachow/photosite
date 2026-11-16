@@ -10,6 +10,8 @@ use anyhow::{Context, Result};
 
 /// The header that marks an APP1 segment as XMP rather than as EXIF.
 const XMP_HEADER: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
+/// The header that marks an APP1 segment as EXIF.
+const EXIF_HEADER: &[u8] = b"Exif\0\0";
 const APP1: u8 = 0xE1;
 /// Where Photoshop keeps its resources, the IPTC record among them.
 const APP13: u8 = 0xED;
@@ -209,6 +211,15 @@ pub fn app13(raw: &[u8]) -> Option<&[u8]> {
     let segments = segments(raw)?;
     let found = segment_with(raw, &segments, APP13, crate::iptc::HEADER)?;
     raw.get(segments[found].body())
+}
+
+/// Where the EXIF block's TIFF structure is in the file — past the
+/// `Exif\0\0` that opens its segment — if the photograph carries one.
+pub fn exif_block(raw: &[u8]) -> Option<std::ops::Range<usize>> {
+    let segments = segments(raw)?;
+    let found = segment_with(raw, &segments, APP1, EXIF_HEADER)?;
+    let body = segments[found].body();
+    Some(body.start + EXIF_HEADER.len()..body.end)
 }
 
 /// The body of the first segment with this marker and opening bytes, the
