@@ -49,6 +49,7 @@ theme-automatic = Follow the system
 ## The grid
 
 toolbar-recursive = Recursive
+toolbar-tile-size = Tile size: { $size } px
 gallery-empty = No photographs here
 gallery-pick-folder = Open a folder to begin
 preview-pick-tile = Click a tile to see it here

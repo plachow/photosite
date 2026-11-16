@@ -10,7 +10,15 @@ change lands here under **Unreleased** in the same commit that makes it.
 
 ## [Unreleased]
 
+### Added
+
+- A slider on the toolbar sets the size of the tiles, in ten steps from 80 to
+  640 pixels, and the size is kept for the next run.
+
 ### Changed
+
+- Larger tiles and Smaller tiles step through the same sizes as the new
+  slider instead of growing by a quarter from wherever the size was.
 
 - The filter offers people in the order of how many photographs in the
   folder each is on, the most photographed first, rather than by name.

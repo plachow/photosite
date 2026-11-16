@@ -46,7 +46,9 @@ use photosite_core::compare::Compare;
 use photosite_core::domain::{ColorLabel, Flag, Photo, PhotoId, Sort, SortField};
 use photosite_core::filter::{Facets, Filter};
 use photosite_core::history::History;
-use photosite_core::settings::{Gallery, Kind, Settings, TUNABLES};
+use photosite_core::settings::{
+    Gallery, Settings, TILE_STEPS, nearest_tile_step, next_tile_step, tile_size_limits,
+};
 use photosite_core::transfer::Mode;
 use photosite_core::{
     Catalog, FileIdentity, Paths, commands, diagnostics, docks as layout, i18n, jobs, t,
@@ -1885,8 +1887,13 @@ impl App {
                     self.open(folder);
                 }
             }
-            "view.bigger_tiles" => self.resize_tiles(1.25),
-            "view.smaller_tiles" => self.resize_tiles(1.0 / 1.25),
+            // The keys walk the toolbar slider's steps, so that a key and the
+            // slider never disagree about what the next size is.
+            "view.bigger_tiles" | "view.smaller_tiles" => {
+                let larger = id == "view.bigger_tiles";
+                self.settings.gallery.tile_size =
+                    next_tile_step(self.settings.gallery.tile_size, larger);
+            }
             "view.next_theme" => {
                 let at = palettes::THEMES
                     .iter()
@@ -3760,17 +3767,11 @@ impl App {
         self.settings.window.docks_hidden = layout::hidden_to_text(&self.hidden);
     }
 
-    /// The limits come from the field descriptions, not from numbers written
-    /// here.
+    /// Resizes the tiles by any amount, for Ctrl and the wheel, which moves
+    /// smoothly rather than by the slider's steps. The limits come from the
+    /// field descriptions, not from numbers written here.
     pub fn resize_tiles(&mut self, factor: f64) {
-        let (min, max) = match TUNABLES
-            .iter()
-            .find(|tunable| tunable.path == "gallery.tile_size")
-            .map(|tunable| tunable.kind)
-        {
-            Some(Kind::Float { min, max }) => (min, max),
-            _ => (80.0, 640.0),
-        };
+        let (min, max) = tile_size_limits();
         self.settings.gallery.tile_size =
             (self.settings.gallery.tile_size * factor).clamp(min, max);
     }
@@ -4346,6 +4347,25 @@ impl App {
             }));
             if ui.button(label).clicked() {
                 self.show_filter = !self.show_filter;
+            }
+
+            ui.separator();
+
+            // The tile size, by the same steps as the keys. A size the wheel
+            // left between two steps shows at the nearer one and is only
+            // changed when the slider is moved.
+            let steps = TILE_STEPS;
+            let mut step = nearest_tile_step(self.settings.gallery.tile_size);
+            let size = t!("toolbar-tile-size", size = steps[step] as i64);
+            let larger = self.hint(t!("command-view-bigger-tiles"), "view.bigger_tiles");
+            let smaller = self.hint(t!("command-view-smaller-tiles"), "view.smaller_tiles");
+            ui.spacing_mut().slider_width = 90.0;
+            if ui
+                .add(egui::Slider::new(&mut step, 0..=steps.len() - 1).show_value(false))
+                .on_hover_text(format!("{size}\n{larger}\n{smaller}"))
+                .changed()
+            {
+                self.settings.gallery.tile_size = steps[step];
             }
 
             ui.separator();

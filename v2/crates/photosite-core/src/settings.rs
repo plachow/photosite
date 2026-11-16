@@ -287,6 +287,73 @@ impl Gallery {
     }
 }
 
+/// The tile sizes the toolbar's slider stops at, and where Larger tiles and
+/// Smaller tiles go next.
+///
+/// Each is about a quarter larger than the one before, which is the step the
+/// keys always took, rounded to numbers somebody would write down. A slider
+/// that moved by the pixel would make a picked size impossible to find again
+/// and would reflow the whole grid on every pixel of a drag. The first and the
+/// last are the limits of `gallery.tile_size`, and a test keeps them so.
+pub const TILE_STEPS: &[f64] = &[
+    80.0, 100.0, 125.0, 160.0, 200.0, 250.0, 320.0, 400.0, 500.0, 640.0,
+];
+
+/// The smallest and the largest a tile may be, from the description of
+/// `gallery.tile_size` rather than from numbers written here.
+pub fn tile_size_limits() -> (f64, f64) {
+    match TUNABLES
+        .iter()
+        .find(|tunable| tunable.path == "gallery.tile_size")
+        .map(|tunable| tunable.kind)
+    {
+        Some(Kind::Float { min, max }) => (min, max),
+        _ => (80.0, 640.0),
+    }
+}
+
+/// Which step a tile size is shown at. Ctrl and the wheel still resize by
+/// any amount, and a settings file can say anything, so a size between two
+/// steps shows as the nearer one. Nearer is measured as a ratio: 110 is
+/// closer to 100 than to 125 the way the eye sees it, not only in pixels.
+pub fn nearest_tile_step(size: f64) -> usize {
+    if !size.is_finite() || size <= 0.0 {
+        return 0;
+    }
+
+    let distance = |step: f64| (size / step).ln().abs();
+    (0..TILE_STEPS.len())
+        .min_by(|&a, &b| distance(TILE_STEPS[a]).total_cmp(&distance(TILE_STEPS[b])))
+        .unwrap_or(0)
+}
+
+/// The size one step larger, or with `larger` false one step smaller, than
+/// a tile size. A size between two steps goes to the next one in that
+/// direction rather than skipping it, and the ends hold where they are.
+pub fn next_tile_step(size: f64, larger: bool) -> f64 {
+    // A size a hair off a step is that step: a rounding left by the wheel
+    // must not make the key appear to do nothing.
+    let near = |step: f64| (size - step).abs() < 0.5;
+    let next = if larger {
+        TILE_STEPS
+            .iter()
+            .copied()
+            .find(|&step| step > size && !near(step))
+    } else {
+        TILE_STEPS
+            .iter()
+            .rev()
+            .copied()
+            .find(|&step| step < size && !near(step))
+    };
+
+    match next {
+        Some(step) => step,
+        None if larger => TILE_STEPS[TILE_STEPS.len() - 1],
+        None => TILE_STEPS[0],
+    }
+}
+
 /// Two spellings of one folder. Windows does not care about case, and a
 /// list with `D:\Foto` and `d:\foto` in it is one folder offered twice.
 pub fn same_folder(a: &str, b: &str) -> bool {
@@ -1229,6 +1296,48 @@ mod tests {
         let paths = Paths::portable(dir.path());
         paths.ensure().unwrap();
         (dir, paths)
+    }
+
+    /// The slider's ends are the setting's limits. If one moved without the
+    /// other, the slider could not reach a size the setting allows, or would
+    /// offer one the setting then clamps away.
+    #[test]
+    fn the_tile_steps_span_the_limits_of_the_setting() {
+        let (min, max) = tile_size_limits();
+        assert_eq!(TILE_STEPS.first(), Some(&min));
+        assert_eq!(TILE_STEPS.last(), Some(&max));
+        assert!(
+            TILE_STEPS.windows(2).all(|pair| pair[0] < pair[1]),
+            "the steps must climb: {TILE_STEPS:?}"
+        );
+    }
+
+    /// The default and whatever the wheel leaves are shown at the nearer
+    /// step, and nonsense from a hand-edited file at the smallest.
+    #[test]
+    fn a_size_between_steps_shows_at_the_nearer_one() {
+        assert_eq!(TILE_STEPS[nearest_tile_step(200.0)], 200.0);
+        assert_eq!(TILE_STEPS[nearest_tile_step(220.0)], 200.0);
+        assert_eq!(TILE_STEPS[nearest_tile_step(230.0)], 250.0);
+        assert_eq!(TILE_STEPS[nearest_tile_step(10.0)], 80.0);
+        assert_eq!(TILE_STEPS[nearest_tile_step(5000.0)], 640.0);
+        assert_eq!(nearest_tile_step(f64::NAN), 0);
+        assert_eq!(nearest_tile_step(-3.0), 0);
+    }
+
+    /// The keys walk the same steps as the slider, take the next one from a
+    /// size in between, and stop at the ends.
+    #[test]
+    fn the_keys_step_to_the_next_size_and_stop_at_the_ends() {
+        assert_eq!(next_tile_step(200.0, true), 250.0);
+        assert_eq!(next_tile_step(200.0, false), 160.0);
+        assert_eq!(next_tile_step(220.0, true), 250.0);
+        assert_eq!(next_tile_step(220.0, false), 200.0);
+        assert_eq!(next_tile_step(199.8, true), 250.0, "a hair off is the step");
+        assert_eq!(next_tile_step(640.0, true), 640.0);
+        assert_eq!(next_tile_step(80.0, false), 80.0);
+        assert_eq!(next_tile_step(9000.0, false), 640.0);
+        assert_eq!(next_tile_step(1.0, true), 80.0);
     }
 
     /// A setting we removed must not take everything else with it. This
