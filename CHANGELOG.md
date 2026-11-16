@@ -17,6 +17,11 @@ change lands here under **Unreleased** in the same commit that makes it.
 
 ### Changed
 
+- One PhotoSite runs per catalogue. Opening a photograph or a folder while
+  PhotoSite is already open — a double-click in Explorer, say — brings the
+  open window to the front and opens it there instead of starting a second
+  window over the same catalogue. A start with its own `--data` folder still
+  runs beside it.
 - Larger tiles and Smaller tiles step through the same sizes as the new
   slider instead of growing by a quarter from wherever the size was.
 

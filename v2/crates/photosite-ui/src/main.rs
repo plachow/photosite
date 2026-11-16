@@ -25,6 +25,7 @@ mod filter;
 mod grid;
 mod icon;
 mod info;
+mod instance;
 mod list;
 mod menu;
 mod menubar;
@@ -147,6 +148,9 @@ fn main() -> Result<()> {
     let mut search: Option<String> = None;
     let mut folder: Option<PathBuf> = None;
     let mut on: Option<std::ffi::OsString> = None;
+    // The photograph or folder named on the command line, as it was named:
+    // what a second start hands to the first.
+    let mut given: Option<PathBuf> = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--data" => data = args.next().map(PathBuf::from),
@@ -178,6 +182,7 @@ fn main() -> Result<()> {
             // file manager means: look at this one.
             other => {
                 let path = PathBuf::from(other);
+                given = Some(path.clone());
                 if path.is_file() {
                     on = path.file_name().map(|name| name.to_os_string());
                     folder = path.parent().map(Path::to_path_buf);
@@ -190,11 +195,32 @@ fn main() -> Result<()> {
 
     let paths = Paths::resolve(data.as_deref())?;
     paths.ensure()?;
+
+    // One PhotoSite per catalogue. Asked before the log is opened and the
+    // settings are read, because a start that is only passing a photograph
+    // on must not write to either. See [`instance`].
+    let claimed = instance::claim(&paths.data);
+    if let Ok(instance::Claim::Taken) = claimed {
+        instance::hand_over(&paths.data, given.as_deref())?;
+        return Ok(());
+    }
+
     // On this thread, which is the one the window will run on.
     paste_key::listen();
     let _logging = diagnostics::start(&paths, verbose);
     diagnostics::install_panic_hook(&paths);
     tracing::info!(verze = photosite_core::VERSION, "start");
+    let instance = match claimed {
+        Ok(instance::Claim::First(instance)) => Some(instance),
+        Ok(instance::Claim::Taken) => None,
+        // A catalogue on a drive that will not lock files: run all the
+        // same. Two windows over it are a risk; no window at all is a
+        // certainty.
+        Err(error) => {
+            tracing::warn!(%error, "the catalogue cannot be locked; a second start would open beside this one");
+            None
+        }
+    };
 
     let mut settings = Settings::load(&paths);
     if reset {
@@ -240,6 +266,10 @@ fn main() -> Result<()> {
         Box::new(move |cc| {
             icon::adopt(cc);
             let mut app = App::new(paths, settings);
+            app.arrivals = instance
+                .as_ref()
+                .map(|instance| instance.listen(cc.egui_ctx.clone()));
+            app.instance = instance;
             app.selftest = selftest;
             app.shot = shot;
             app.show_settings = open_settings;
@@ -590,6 +620,12 @@ pub struct App {
     startup: Option<Startup>,
     frames: u32,
     started: std::time::Instant,
+    /// The hold on the catalogue that keeps a second PhotoSite from opening
+    /// over it, for as long as this one runs. See [`instance`].
+    instance: Option<instance::Instance>,
+    /// What later starts handed over: a photograph or a folder to open, or
+    /// nothing, which is a request to come to the front.
+    arrivals: Option<crossbeam_channel::Receiver<Option<PathBuf>>>,
 }
 
 /// The part of starting up that waits for the window: the folder to open
@@ -612,6 +648,23 @@ pub struct Startup {
     pub open_editor: bool,
     /// Whether the window was maximized when it was last closed.
     pub maximize: bool,
+}
+
+/// What opening `path` means, as a start would read it: a photograph is its
+/// folder, stood on; a folder is itself; anything else is nothing to open.
+fn arriving(path: &Path) -> Startup {
+    if path.is_file() {
+        Startup {
+            folder: path.parent().map(Path::to_path_buf),
+            on: path.file_name().map(std::ffi::OsStr::to_os_string),
+            ..Default::default()
+        }
+    } else {
+        Startup {
+            folder: path.is_dir().then(|| path.to_path_buf()),
+            ..Default::default()
+        }
+    }
 }
 
 // TextureHandle does not implement Debug, so we write our own — and write it
@@ -812,6 +865,8 @@ impl App {
             startup: None,
             frames: 0,
             started: std::time::Instant::now(),
+            instance: None,
+            arrivals: None,
         }
     }
 
@@ -887,6 +942,35 @@ impl App {
 
         if let Some(startup) = self.startup.take() {
             self.start(startup);
+        }
+    }
+
+    /// Answers a later start of PhotoSite over this catalogue: comes to the
+    /// front, and opens what it was handed the way a start would have —
+    /// a folder as the gallery, a photograph in its folder and in a tab.
+    fn collect_arrivals(&mut self, ctx: &egui::Context) {
+        let Some(arrivals) = &self.arrivals else {
+            return;
+        };
+        let arrived: Vec<Option<PathBuf>> = arrivals.try_iter().collect();
+        if arrived.is_empty() {
+            return;
+        }
+
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        for path in arrived.into_iter().flatten() {
+            tracing::info!(path = %path.display(), "handed over by a second start");
+            let handed = arriving(&path);
+            match self.startup.as_mut() {
+                // Still on the way up: what was handed over takes the place
+                // of what this start was going to open.
+                Some(startup) => {
+                    startup.folder = handed.folder;
+                    startup.on = handed.on;
+                }
+                None => self.start(handed),
+            }
         }
     }
 
@@ -4110,6 +4194,7 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.first_frames(&ctx);
+        self.collect_arrivals(&ctx);
         self.hold_the_close(&ctx);
         self.shell_when_clear(&ctx);
         self.collect_turned();
@@ -6637,6 +6722,27 @@ mod culling {
             app.facets, all,
             "narrowing the gallery must not narrow what can be asked"
         );
+    }
+
+    /// A double-click on a photograph in Explorer while PhotoSite is open
+    /// lands here: the photograph is stood on, in its folder.
+    #[test]
+    fn a_photograph_handed_over_by_a_second_start_is_opened_here() {
+        let (mut app, _data, photos) = three();
+        let (send, receive) = crossbeam_channel::unbounded();
+        app.arrivals = Some(receive);
+        send.send(Some(photos.path().join("b.jpg"))).unwrap();
+
+        app.collect_arrivals(&egui::Context::default());
+        let at = app.selected.expect("nothing was stood on");
+        assert!(app.photo(at).unwrap().path.ends_with("b.jpg"));
+
+        // A folder is the gallery; nothing at all only asks to be seen.
+        assert_eq!(
+            arriving(photos.path()).folder.as_deref(),
+            Some(photos.path())
+        );
+        assert!(arriving(&photos.path().join("gone.jpg")).folder.is_none());
     }
 
     /// Deleted in Explorer, gone from the gallery once the folder is read
