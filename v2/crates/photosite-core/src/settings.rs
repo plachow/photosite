@@ -61,8 +61,9 @@ pub struct Window {
     pub splitter: f64,
     /// Where each dialog was left, so that it opens there next time: one
     /// line, `name=x,y` separated by spaces, the middle of the window in
-    /// points. Nothing for a dialog that has never been shown, which then
-    /// opens in the middle of the application. See [`Window::dialog_at`].
+    /// points, and `name=x,y,width` for a dialog that can be made wider.
+    /// Nothing for a dialog that has never been shown, which then opens in
+    /// the middle of the application. See [`Window::dialog_at`].
     pub dialogs: String,
 }
 
@@ -83,30 +84,63 @@ impl Default for Window {
 }
 
 impl Window {
-    /// Where a dialog was left — the middle of it — or nothing, when it has
-    /// never been shown.
-    pub fn dialog_at(&self, name: &str) -> Option<(f64, f64)> {
+    /// What is kept about one dialog: its numbers, in order — the middle,
+    /// and for a dialog somebody can widen, the width it was left at.
+    fn dialog_numbers(&self, name: &str) -> Option<Vec<f64>> {
         self.dialogs
             .split_whitespace()
             .filter_map(|entry| entry.split_once('='))
             .find(|(had, _)| *had == name)
-            .and_then(|(_, at)| {
-                let (x, y) = at.split_once(',')?;
-                Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
+            .and_then(|(_, kept)| {
+                kept.split(',')
+                    .map(|number| number.trim().parse().ok())
+                    .collect()
             })
     }
 
-    /// Remembers where a dialog is. Rounded to whole points: a position is
-    /// not a measurement, and a settings file full of `412.33333` is one
-    /// nobody can read.
+    /// Where a dialog was left — the middle of it — or nothing, when it has
+    /// never been shown.
+    pub fn dialog_at(&self, name: &str) -> Option<(f64, f64)> {
+        match self.dialog_numbers(name)?.as_slice() {
+            [x, y, ..] => Some((*x, *y)),
+            _ => None,
+        }
+    }
+
+    /// How wide a dialog was left, for one that can be widened, or nothing
+    /// when it never has been.
+    pub fn dialog_width(&self, name: &str) -> Option<f64> {
+        match self.dialog_numbers(name)?.as_slice() {
+            [_, _, width, ..] if *width > 0.0 => Some(*width),
+            _ => None,
+        }
+    }
+
+    /// Remembers where a dialog is, and keeps the width it had.
     pub fn remember_dialog(&mut self, name: &str, x: f64, y: f64) {
+        let width = self.dialog_width(name);
+        self.keep_dialog(name, x, y, width);
+    }
+
+    /// Remembers where a dialog is and how wide somebody has made it.
+    pub fn remember_dialog_width(&mut self, name: &str, x: f64, y: f64, width: f64) {
+        self.keep_dialog(name, x, y, Some(width));
+    }
+
+    /// Rounded to whole points: a position is not a measurement, and a
+    /// settings file full of `412.33333` is one nobody can read.
+    fn keep_dialog(&mut self, name: &str, x: f64, y: f64, width: Option<f64>) {
         let mut entries: Vec<String> = self
             .dialogs
             .split_whitespace()
             .filter(|entry| entry.split_once('=').is_none_or(|(had, _)| had != name))
             .map(str::to_owned)
             .collect();
-        entries.push(format!("{name}={:.0},{:.0}", x.round(), y.round()));
+        let mut entry = format!("{name}={:.0},{:.0}", x.round(), y.round());
+        if let Some(width) = width {
+            entry.push_str(&format!(",{:.0}", width.round()));
+        }
+        entries.push(entry);
         entries.sort();
         self.dialogs = entries.join(" ");
     }
@@ -1567,5 +1601,23 @@ tile_size = 'sto'
         };
         assert_eq!(window.dialog_at("describe"), None);
         assert_eq!(window.dialog_at("people"), None);
+    }
+
+    /// A dialog somebody widened opens that wide again, and moving it does
+    /// not forget how wide it was.
+    #[test]
+    fn a_widened_dialog_keeps_its_width_wherever_it_is_moved() {
+        let mut window = Window::default();
+        window.remember_dialog("filter", 400.0, 300.0);
+        assert_eq!(window.dialog_width("filter"), None);
+
+        window.remember_dialog_width("filter", 400.0, 300.0, 540.4);
+        assert_eq!(window.dialog_at("filter"), Some((400.0, 300.0)));
+        assert_eq!(window.dialog_width("filter"), Some(540.0));
+
+        window.remember_dialog("filter", 10.0, 20.0);
+        assert_eq!(window.dialog_at("filter"), Some((10.0, 20.0)));
+        assert_eq!(window.dialog_width("filter"), Some(540.0));
+        assert_eq!(window.dialogs, "filter=10,20,540");
     }
 }

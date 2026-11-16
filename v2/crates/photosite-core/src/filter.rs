@@ -434,9 +434,11 @@ pub struct Facets {
     /// position is precise has nothing to review, and says so by offering
     /// nothing.
     pub places: Vec<Verdict>,
-    /// Everybody who appears anywhere in this folder, each once. What the
-    /// panel offers: the people who are actually on these photographs, not
-    /// everybody ever named.
+    /// Everybody who appears anywhere in this folder, each once, the one on
+    /// the most photographs first. What the panel offers: the people who are
+    /// actually on these photographs, not everybody ever named, and the ones
+    /// somebody is most likely to be looking for where they are found
+    /// first.
     pub people: Vec<String>,
     /// Whether anything here has been scored for expression at all. Without
     /// it the smile and eyes rows would be a heading over two buttons that
@@ -467,7 +469,7 @@ impl Facets {
         let mut flags = BTreeSet::new();
         let mut shapes = BTreeSet::new();
         let mut places = BTreeSet::new();
-        let mut people = BTreeSet::new();
+        let mut people = std::collections::BTreeMap::new();
         let mut expressions = false;
         let mut described = 0usize;
         let mut highest_rating = 0u8;
@@ -496,8 +498,11 @@ impl Facets {
             labels.insert(photo.organisation.label);
             flags.insert(photo.organisation.flag);
             places.insert(photo.verdict);
-            for tag in &photo.people {
-                people.insert(tag.name.clone());
+            // Counted once a photograph, however many faces on it carry
+            // the same name.
+            let names: BTreeSet<&str> = photo.people.iter().map(|tag| tag.name.as_str()).collect();
+            for name in names {
+                *people.entry(name.to_owned()).or_insert(0usize) += 1;
             }
 
             expressions = expressions || photo.expressions.scored > 0;
@@ -520,7 +525,7 @@ impl Facets {
             flags: flags.into_iter().collect(),
             shapes: shapes.into_iter().collect(),
             places: places.into_iter().collect(),
-            people: people.into_iter().collect(),
+            people: most_photographed_first(people),
             expressions,
             described,
             photos: photos.len(),
@@ -534,6 +539,16 @@ impl Facets {
     pub fn divided_by_description(&self) -> bool {
         self.described > 0 && self.described < self.photos
     }
+}
+
+/// Names by how many photographs each is on, most first. Those on as many
+/// as each other stay in the order of the alphabet, so the row does not
+/// shuffle itself between two folders that hold them equally.
+fn most_photographed_first(counted: std::collections::BTreeMap<String, usize>) -> Vec<String> {
+    let mut people: Vec<(String, usize)> = counted.into_iter().collect();
+    // Stable, and the map hands them over alphabetically.
+    people.sort_by(|(_, one), (_, other)| other.cmp(one));
+    people.into_iter().map(|(name, _)| name).collect()
 }
 
 #[cfg(test)]
@@ -668,8 +683,32 @@ mod tests {
         };
 
         let facets = Facets::of(&[one, two, photo("three.jpg")]);
-        assert_eq!(facets.people, ["Jana", "Petr"]);
+        assert_eq!(facets.people, ["Petr", "Jana"]);
         assert!(facets.expressions);
+    }
+
+    /// The one on the most photographs first, however the alphabet would
+    /// have it; a face named twice on one photograph is still one
+    /// photograph; and a tie keeps the alphabet.
+    #[test]
+    fn the_people_most_photographed_are_offered_first() {
+        let tag = |name: &str| crate::people::Tag {
+            id: 1,
+            name: name.to_owned(),
+        };
+        let on = |file: &str, names: &[&str]| {
+            let mut photo = photo(file);
+            photo.people = names.iter().map(|name| tag(name)).collect();
+            photo
+        };
+
+        let facets = Facets::of(&[
+            on("1.jpg", &["Zuzka", "Adam", "Adam"]),
+            on("2.jpg", &["Zuzka", "Bára"]),
+            on("3.jpg", &["Zuzka", "Cyril"]),
+            on("4.jpg", &["Bára"]),
+        ]);
+        assert_eq!(facets.people, ["Zuzka", "Bára", "Adam", "Cyril"]);
     }
 
     /// A folder nobody has swept must not offer a smile row: two buttons

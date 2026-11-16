@@ -55,6 +55,33 @@ pub fn remember<R>(
     }
 }
 
+/// The width somebody left a dialog at, or `otherwise` for one nobody has
+/// widened yet.
+pub fn width(remembered: &Remembered, name: &str, otherwise: f32) -> f32 {
+    remembered
+        .dialog_width(name)
+        .map_or(otherwise, |width| width as f32)
+}
+
+/// [`remember`] for a dialog that can be made wider: where it is and how
+/// wide, so that it opens that wide in the next run too, not only in this
+/// one.
+pub fn remember_width<R>(
+    remembered: &mut Remembered,
+    name: &str,
+    shown: &Option<egui::InnerResponse<Option<R>>>,
+) {
+    if let Some(shown) = shown {
+        let rect = shown.response.rect;
+        remembered.remember_dialog_width(
+            name,
+            f64::from(rect.center().x),
+            f64::from(rect.center().y),
+            f64::from(rect.width()),
+        );
+    }
+}
+
 /// Room between the rows. Called first thing inside a dialog.
 pub fn spacious(ui: &mut egui::Ui) {
     ui.spacing_mut().item_spacing = egui::vec2(10.0, 10.0);

@@ -10,11 +10,22 @@ change lands here under **Unreleased** in the same commit that makes it.
 
 ## [Unreleased]
 
+### Changed
+
+- The filter offers people in the order of how many photographs in the
+  folder each is on, the most photographed first, rather than by name.
+- The people in the filter take at most four rows; a folder with more
+  people scrolls them there instead of growing the dialog.
+
 ### Fixed
 
 - Copy to, Duplicate and a Move to another drive keep the original's dates:
   the copy is created and modified when the photograph was, not when it was
   copied.
+- The filter opens as wide as it was last made, in the next run too.
+- The filter is as tall as its sections, up to the height of the
+  application, so the dates at the bottom no longer need scrolling to on a
+  screen with room for them.
 
 ## [2.3.0] - 2026-11-15
 

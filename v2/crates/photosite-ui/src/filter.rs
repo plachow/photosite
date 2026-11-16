@@ -61,6 +61,21 @@ impl Calendar {
 /// The width of a day in the calendar, and of the weekday named above it.
 const DAY: f32 = 26.0;
 
+/// What the dialog needs besides its sections — the title, the margins,
+/// the line with the count — and a little air above and below it, so it
+/// never quite touches the edges of the application.
+const OUTSIDE_THE_SECTIONS: f32 = 180.0;
+
+/// How many rows of people show before the rest scroll.
+const PEOPLE_ROWS: usize = 4;
+
+/// The height of so many rows of chips, gaps between them included.
+fn rows(ui: &egui::Ui, count: usize) -> f32 {
+    let spacing = ui.spacing();
+    let chip = ui.text_style_height(&egui::TextStyle::Button) + 2.0 * spacing.button_padding.y;
+    count as f32 * (chip + spacing.item_spacing.y) - spacing.item_spacing.y
+}
+
 pub fn window(app: &mut App, ctx: &egui::Context, palette: &Palette) {
     if !app.show_filter {
         app.filter_calendar = None;
@@ -76,13 +91,25 @@ pub fn window(app: &mut App, ctx: &egui::Context, palette: &Palette) {
     let mut under: Option<egui::Rect> = None;
     let span = facets.taken;
 
+    // As tall as what it holds, up to the height of the application, so the
+    // dates at the bottom are on screen wherever there is room for them.
+    // Only a screen too short for the lot has anything to scroll.
+    let tallest = (ctx.content_rect().height() - OUTSIDE_THE_SECTIONS).max(160.0);
     let shown = crate::dialog::window(ctx, &app.settings.window, "filter", t!("filter-title"))
         .open(&mut open)
-        .default_width(380.0)
+        // Wider by hand, and that width kept from one run to the next; the
+        // height follows the sections and is nothing to set.
+        .resizable([true, false])
+        .default_width(crate::dialog::width(&app.settings.window, "filter", 380.0))
+        .min_width(300.0)
         .show(ctx, |ui| {
             crate::dialog::spacious(ui);
             egui::ScrollArea::vertical()
-                .max_height(520.0)
+                .max_height(tallest)
+                // The whole width of the dialog, so that rows of chips wrap
+                // at its edge: the dialog decides how wide they are, never
+                // the other way round.
+                .auto_shrink([false, true])
                 .show(ui, |ui| {
                     // Only what this folder can answer gets a section. A
                     // "Lens" heading over an empty row in a folder of phone
@@ -160,10 +187,19 @@ pub fn window(app: &mut App, ctx: &egui::Context, palette: &Palette) {
 
                     // Who is on the photographs. The chips narrow rather
                     // than widen — two names means the shot they are both
-                    // in — so the section says so on its own.
+                    // in — so the section says so on its own. The most
+                    // photographed come first, and a family of fifty gets a
+                    // few rows of them and a scroll for the rest rather than
+                    // pushing the dates off the bottom of the screen.
                     if !facets.people.is_empty() {
                         section(ui, palette, &t!("filter-section-people"), |ui| {
-                            chips(ui, &mut filter.people, &facets.people, Clone::clone);
+                            egui::ScrollArea::vertical()
+                                .id_salt("filter people")
+                                .max_height(rows(ui, PEOPLE_ROWS))
+                                .auto_shrink([false, true])
+                                .show(ui, |ui| {
+                                    chips(ui, &mut filter.people, &facets.people, Clone::clone);
+                                });
                         });
                     }
 
@@ -271,7 +307,7 @@ pub fn window(app: &mut App, ctx: &egui::Context, palette: &Palette) {
                 });
             });
         });
-    crate::dialog::remember(&mut app.settings.window, "filter", &shown);
+    crate::dialog::remember_width(&mut app.settings.window, "filter", &shown);
 
     // The calendar floats under its box rather than sitting in the window:
     // a month of buttons that came and went would push everything beneath
@@ -543,6 +579,112 @@ mod tests {
         let hovered = chips_stand(true);
         assert_eq!(at_rest.len(), 3);
         assert_eq!(at_rest, hovered);
+    }
+
+    /// A folder with a crowd in it: forty people and a span of dates.
+    fn crowded() -> (App, tempfile::TempDir, tempfile::TempDir) {
+        let (mut app, data, photos) = crate::culling::three();
+        app.facets.people = (0..40).map(|n| format!("Person number {n}")).collect();
+        app.facets.taken = Some((0, 86_400 * 400));
+        app.show_filter = true;
+        (app, data, photos)
+    }
+
+    /// Draws the filter for a frame, with the pointer where it is, and
+    /// answers where the dialog stood.
+    fn frame(
+        app: &mut App,
+        ctx: &egui::Context,
+        screen: egui::Vec2,
+        pointer: egui::Pos2,
+    ) -> egui::Rect {
+        let theme = photosite_core::theme::resolve(&Default::default(), None);
+        theme::apply(ctx, &theme.palette, theme.dark, 1.0);
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, screen)),
+            events: vec![egui::Event::PointerMoved(pointer)],
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| window(app, ui.ctx(), &theme.palette));
+        out.textures_delta.clear();
+        ctx.memory(|memory| memory.area_rect(egui::Id::new("filter")))
+            .expect("the filter was not shown")
+    }
+
+    /// However many people a folder holds, and wherever the pointer goes
+    /// among them, the dialog stays as wide as it was made.
+    #[test]
+    fn people_do_not_make_the_filter_any_wider() {
+        let (mut app, _data, _photos) = crowded();
+        let ctx = egui::Context::default();
+        let screen = egui::vec2(1600.0, 1000.0);
+        let first = frame(&mut app, &ctx, screen, egui::pos2(-50.0, -50.0));
+        for step in 0..400 {
+            let pointer = egui::pos2(
+                first.left() + (step % 20) as f32 * 19.0,
+                first.top() + (step / 20) as f32 * 32.0,
+            );
+            let stood = frame(&mut app, &ctx, screen, pointer);
+            assert_eq!(stood.width(), first.width(), "at {pointer:?}");
+        }
+    }
+
+    /// The dates are at the bottom, and on a screen with room for the lot
+    /// they are in the dialog without scrolling to them; on any screen the
+    /// dialog fits.
+    #[test]
+    fn the_dates_are_in_view_where_the_screen_has_room() {
+        let (mut app, _data, _photos) = crowded();
+        let ctx = egui::Context::default();
+        let screen = egui::vec2(1600.0, 1200.0);
+        let mut stood = egui::Rect::NOTHING;
+        for _ in 0..8 {
+            // The calendar hangs from the "from" box, and so says where
+            // that box is.
+            app.filter_calendar = Some(Calendar {
+                end: End::From,
+                year: 2025,
+                month: 1,
+            });
+            stood = frame(&mut app, &ctx, screen, egui::pos2(-50.0, -50.0));
+        }
+
+        let calendar = ctx
+            .memory(|memory| memory.area_rect(egui::Id::new("filter calendar")))
+            .expect("no calendar");
+        assert!(
+            calendar.top() < stood.bottom(),
+            "the date box is below the dialog: {calendar:?} under {stood:?}"
+        );
+
+        let short = egui::vec2(1600.0, 600.0);
+        let ctx = egui::Context::default();
+        for _ in 0..8 {
+            stood = frame(&mut app, &ctx, short, egui::pos2(-50.0, -50.0));
+        }
+        assert!(stood.height() <= short.y, "{stood:?} on a screen {short:?}");
+    }
+
+    /// Made wider in one run, the dialog opens that wide in the next.
+    #[test]
+    fn the_filter_opens_as_wide_as_it_was_left() {
+        let (mut app, _data, _photos) = crowded();
+        app.settings
+            .window
+            .remember_dialog_width("filter", 800.0, 500.0, 560.0);
+
+        let ctx = egui::Context::default();
+        let mut stood = egui::Rect::NOTHING;
+        for _ in 0..4 {
+            stood = frame(
+                &mut app,
+                &ctx,
+                egui::vec2(1600.0, 1000.0),
+                egui::pos2(-50.0, -50.0),
+            );
+        }
+        assert_eq!(stood.width(), 560.0);
+        assert_eq!(app.settings.window.dialog_width("filter"), Some(560.0));
     }
 
     #[test]
