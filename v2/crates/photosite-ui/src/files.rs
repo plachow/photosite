@@ -184,29 +184,41 @@ fn carry(step: &Planned, mode: Mode) -> Result<()> {
 /// the copy fails.
 fn one(from: &Path, to: &Path, mode: Mode) -> std::io::Result<()> {
     if mode == Mode::Copy {
-        return copy(from, to);
+        return copy(from, to, Dated::WhenTaken);
     }
 
     match std::fs::rename(from, to) {
         Ok(()) => Ok(()),
         Err(_) => {
-            copy(from, to)?;
+            copy(from, to, Dated::AsTheOriginal)?;
             std::fs::remove_file(from)
         }
     }
 }
 
+/// Which dates a copy is given.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Dated {
+    /// Created and modified when the photograph was taken, where it says
+    /// when; the original's dates where it does not. What a copy wants:
+    /// the original's own dates are often those of the evening it was last
+    /// rated or downloaded, which says nothing about the photograph.
+    WhenTaken,
+    /// Exactly the original's. A move is the same file somewhere else, and
+    /// a rename keeps its dates as they are; a move across drives does too.
+    AsTheOriginal,
+}
+
 /// The bytes, and the dates they carry.
 ///
-/// A photograph's file dates are often the only record of when it arrived,
-/// and anybody sorting a folder by date expects a copy to sit where the
-/// original sat. `std::fs::copy` keeps the modified date on some systems
-/// and not on others, and the created date nowhere, so the copy is given
-/// all of them afterwards. Failing to is logged, not raised: the
+/// Anybody sorting a folder by date expects a copy to sit where the
+/// photograph belongs. `std::fs::copy` keeps the modified date on some
+/// systems and not on others, and the created date nowhere, so the copy is
+/// given its dates afterwards. Failing to is logged, not raised: the
 /// photograph did arrive, and that is what matters.
-fn copy(from: &Path, to: &Path) -> std::io::Result<()> {
+fn copy(from: &Path, to: &Path, dated: Dated) -> std::io::Result<()> {
     std::fs::copy(from, to)?;
-    if let Err(error) = keep_dates(from, to) {
+    if let Err(error) = give_dates(from, to, dated) {
         tracing::warn!(
             from = %from.display(),
             %error,
@@ -216,23 +228,53 @@ fn copy(from: &Path, to: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn keep_dates(from: &Path, to: &Path) -> std::io::Result<()> {
+fn give_dates(from: &Path, to: &Path, dated: Dated) -> std::io::Result<()> {
     let source = std::fs::metadata(from)?;
+    let taken = match dated {
+        Dated::WhenTaken => taken_moment(from),
+        Dated::AsTheOriginal => None,
+    };
+    let modified = taken.map_or_else(|| source.modified(), Ok)?;
     let times = std::fs::FileTimes::new()
         .set_accessed(source.accessed()?)
-        .set_modified(source.modified()?);
+        .set_modified(modified);
     #[cfg(target_os = "windows")]
     let times = {
         use std::os::windows::fs::FileTimesExt;
-        times.set_created(source.created()?)
+        times.set_created(taken.map_or_else(|| source.created(), Ok)?)
     };
     #[cfg(target_os = "macos")]
     let times = {
         use std::os::macos::fs::FileTimesExt;
-        times.set_created(source.created()?)
+        times.set_created(taken.map_or_else(|| source.created(), Ok)?)
     };
 
     open_for_dates(to)?.set_times(times)
+}
+
+/// When the shutter fired, as a moment, if the photograph says.
+///
+/// EXIF keeps the clock on the wall. The camera's own offset from UTC turns
+/// that into a moment where it recorded one; where it did not, the zone
+/// this computer is in for that date is the best guess there is — and for
+/// photographs taken at home, which most are, the right one.
+fn taken_moment(path: &Path) -> Option<std::time::SystemTime> {
+    use chrono::TimeZone as _;
+
+    let exif = photosite_image::exif::read_file(path);
+    let wall = exif.taken_at?;
+    let seconds = match exif.offset_seconds {
+        Some(offset) => wall - i64::from(offset),
+        None => {
+            let naive = chrono::DateTime::from_timestamp(wall, 0)?.naive_utc();
+            chrono::Local
+                .from_local_datetime(&naive)
+                .earliest()?
+                .timestamp()
+        }
+    };
+    let since = std::time::Duration::from_secs(u64::try_from(seconds).ok()?);
+    Some(std::time::UNIX_EPOCH + since)
 }
 
 /// Asking only to write the attributes, because the copy of a read-only
@@ -503,6 +545,83 @@ mod tests {
         assert_eq!(copy.modified().unwrap(), then, "the copy was dated today");
         #[cfg(target_os = "windows")]
         assert_eq!(copy.created().unwrap(), then, "the copy was made today");
+    }
+
+    /// A JPEG that says it was taken at 16:18:39 on 9 January 2026, an hour
+    /// ahead of UTC.
+    fn taken_in_prague() -> Vec<u8> {
+        let mut tiff = Vec::new();
+        let entry = |tiff: &mut Vec<u8>, tag: u16, kind: u16, count: u32, at: u32| {
+            tiff.extend_from_slice(&tag.to_be_bytes());
+            tiff.extend_from_slice(&kind.to_be_bytes());
+            tiff.extend_from_slice(&count.to_be_bytes());
+            tiff.extend_from_slice(&at.to_be_bytes());
+        };
+        tiff.extend_from_slice(b"MM\0\x2A");
+        tiff.extend_from_slice(&8u32.to_be_bytes());
+        tiff.extend_from_slice(&1u16.to_be_bytes());
+        entry(&mut tiff, 0x8769, 4, 1, 26);
+        tiff.extend_from_slice(&0u32.to_be_bytes());
+        tiff.extend_from_slice(&2u16.to_be_bytes());
+        entry(&mut tiff, 0x9003, 2, 20, 56);
+        entry(&mut tiff, 0x9011, 2, 7, 76);
+        tiff.extend_from_slice(&0u32.to_be_bytes());
+        tiff.extend_from_slice(b"2026:01:09 16:18:39\0");
+        tiff.extend_from_slice(b"+01:00\0");
+
+        let mut raw = vec![0xFF, 0xD8, 0xFF, 0xE1];
+        raw.extend_from_slice(&((tiff.len() + 8) as u16).to_be_bytes());
+        raw.extend_from_slice(b"Exif\0\0");
+        raw.extend_from_slice(&tiff);
+        raw.extend_from_slice(&[0xFF, 0xDA, 0x00, 0x08, 1, 1, 0, 0, 63, 0]);
+        raw.extend_from_slice(b"pixels");
+        raw.extend_from_slice(&[0xFF, 0xD9]);
+        raw
+    }
+
+    /// A copy is dated when the photograph was taken, not when the original
+    /// file was last written; a move keeps the original's dates exactly.
+    #[test]
+    fn a_copy_is_dated_when_the_photograph_was_taken() {
+        let dir = tempfile::tempdir().unwrap();
+        let (from, into) = (dir.path().join("from"), dir.path().join("into"));
+        std::fs::create_dir_all(&from).unwrap();
+        std::fs::create_dir_all(&into).unwrap();
+        let photo = from.join("a.jpg");
+        std::fs::write(&photo, taken_in_prague()).unwrap();
+
+        let (mut app, _data, _photos) = crate::culling::three();
+        transfer(&mut app, std::slice::from_ref(&photo), &into, Mode::Copy).unwrap();
+
+        // 16:18:39 an hour ahead of UTC is 15:18:39 UTC.
+        let taken = std::time::UNIX_EPOCH
+            + std::time::Duration::from_secs(
+                chrono::NaiveDate::from_ymd_opt(2026, 1, 9)
+                    .unwrap()
+                    .and_hms_opt(15, 18, 39)
+                    .unwrap()
+                    .and_utc()
+                    .timestamp() as u64,
+            );
+        let made = std::fs::metadata(into.join("a.jpg")).unwrap();
+        assert_eq!(made.modified().unwrap(), taken);
+        #[cfg(target_os = "windows")]
+        assert_eq!(made.created().unwrap(), taken);
+
+        // Moved, by a copy and a delete as across drives, it keeps its own.
+        let original = std::fs::metadata(&photo).unwrap().modified().unwrap();
+        let moved = dir.path().join("moved.jpg");
+        one(&photo, &moved, Mode::Move).unwrap();
+        assert_eq!(
+            std::fs::metadata(&moved).unwrap().modified().unwrap(),
+            original
+        );
+        let crossed = dir.path().join("crossed.jpg");
+        copy(&moved, &crossed, Dated::AsTheOriginal).unwrap();
+        assert_eq!(
+            std::fs::metadata(&crossed).unwrap().modified().unwrap(),
+            original
+        );
     }
 
     #[test]

@@ -43,9 +43,10 @@ change lands here under **Unreleased** in the same commit that makes it.
   leaves the gallery the next time the folder is read (F5, or when the
   folder's change is noticed) instead of staying as an empty tile. A folder
   that cannot be read in full forgets nothing.
-- Copy to, Duplicate and a Move to another drive keep the original's dates:
-  the copy is created and modified when the photograph was, not when it was
-  copied.
+- Copy to and Duplicate date the copy when the photograph was taken, as its
+  EXIF says, and a Move to another drive keeps the original's dates; neither
+  is dated when it was copied any more. A photograph that does not say when
+  it was taken keeps the original file's dates.
 - The filter opens as wide as it was last made, in the next run too.
 - The filter is as tall as its sections, up to the height of the
   application, so the dates at the bottom no longer need scrolling to on a
