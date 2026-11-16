@@ -10,6 +10,14 @@ change lands here under **Unreleased** in the same commit that makes it.
 
 ## [Unreleased]
 
+### Added
+
+- `photosite-cli restore-exif --from <backup> <folders>` puts the camera's
+  EXIF back into photographs that earlier versions stripped of it, from a
+  backup of them made before. A backup file is used only when it is the same
+  photograph, byte for byte; the stars, words and names given since stay.
+  Without `--write` it only says what it would do.
+
 ## [2.4.0] - 2026-11-16
 
 ### Added

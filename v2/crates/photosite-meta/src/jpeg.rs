@@ -262,6 +262,28 @@ pub fn with_xmp(raw: &[u8], packet: &str) -> Result<Vec<u8>> {
     with_segment(raw, APP1, XMP_HEADER, Some(&body))
 }
 
+/// The EXIF block's TIFF structure, without the `Exif\0\0` before it.
+pub fn exif(raw: &[u8]) -> Option<&[u8]> {
+    body_of(raw, APP1, EXIF_HEADER)
+}
+
+/// Puts an EXIF block into the file — the TIFF structure, as [`exif`]
+/// gives it — replacing the one already there.
+pub fn with_exif(raw: &[u8], tiff: &[u8]) -> Result<Vec<u8>> {
+    let body_len = EXIF_HEADER.len() + tiff.len() + 2;
+    anyhow::ensure!(
+        body_len <= SEGMENT_LIMIT,
+        "the EXIF block is {} bytes and a JPEG segment holds at most {}",
+        tiff.len(),
+        SEGMENT_LIMIT - EXIF_HEADER.len() - 2
+    );
+
+    let mut body = Vec::with_capacity(body_len);
+    body.extend_from_slice(EXIF_HEADER);
+    body.extend_from_slice(tiff);
+    with_segment(raw, APP1, EXIF_HEADER, Some(&body))
+}
+
 /// Puts the Photoshop block into the file, replacing the one already there;
 /// `None` takes it out.
 ///

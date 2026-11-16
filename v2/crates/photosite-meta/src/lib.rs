@@ -675,6 +675,125 @@ fn with_exif(raw: &[u8], wanted: &Xmp) -> Result<Vec<u8>> {
     Ok(buffer)
 }
 
+/// What became of one photograph offered to [`restore_exif`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Restoring {
+    /// The camera's EXIF is back; these are the bytes to write.
+    Restored(Vec<u8>),
+    /// It already says when it was taken and with what, as the original does.
+    Intact,
+    /// The backup holds a different photograph under the same name.
+    NotTheSame,
+    /// The backup says no more than the file does: no date, no camera.
+    NothingToRestore,
+}
+
+/// Puts back the EXIF block a photograph lost, from a copy of it made
+/// before it was lost.
+///
+/// Built for the photographs a HONOR phone took, whose EXIF this
+/// application once replaced with a block holding only the stars and the
+/// words. Only the EXIF comes from the backup. What was said here since —
+/// the XMP with its stars, title, description and named faces, the IPTC
+/// keywords — stays, and the stars and the words go into the restored
+/// block too, the way any write puts them there. A turn made here stays
+/// turned.
+///
+/// Nothing is touched unless the backup is the same photograph: the
+/// compressed image, every byte of it, must be the same in both.
+pub fn restore_exif(damaged: &[u8], original: &[u8]) -> Result<Restoring> {
+    let ours = photosite_image::exif::read(damaged);
+    let theirs = photosite_image::exif::read(original);
+    if theirs.taken_at.is_none() && theirs.camera.is_none() {
+        return Ok(Restoring::NothingToRestore);
+    }
+    if ours.taken_at == theirs.taken_at && ours.camera == theirs.camera {
+        return Ok(Restoring::Intact);
+    }
+
+    let picture = jpeg::compressed_image(damaged);
+    if picture.is_none() || picture != jpeg::compressed_image(original) {
+        return Ok(Restoring::NotTheSame);
+    }
+
+    let tiff = jpeg::exif(original).context("the backup has no EXIF block")?;
+    let restored = jpeg::with_exif(damaged, tiff)?;
+
+    let mut wanted = jpeg::xmp(damaged)
+        .map(|packet| xmp::read(&packet))
+        .unwrap_or_default();
+    // The camera's own position comes back with its block; a position put
+    // right here is still in the XMP, which every reader prefers.
+    wanted.place = None;
+    // A turn made here lives only in the EXIF orientation, so the one the
+    // damaged block carries is kept — when it carries one at all. A block
+    // with no orientation is not one that says "upright".
+    wanted.orientation = if ifd0_has(damaged, 0x0112) && ours.orientation != theirs.orientation {
+        Some(ours.orientation)
+    } else {
+        None
+    };
+    let out = with_exif(&restored, &wanted)?;
+
+    let after = photosite_image::exif::read(&out);
+    anyhow::ensure!(
+        after.taken_at == theirs.taken_at && after.camera == theirs.camera,
+        "the restored block does not say what the backup says"
+    );
+    anyhow::ensure!(
+        jpeg::compressed_image(&out) == picture,
+        "restoring the EXIF would have changed the photograph itself"
+    );
+    Ok(Restoring::Restored(out))
+}
+
+/// [`restore_exif`] on a file, written back the way every write here is:
+/// beside it first, then moved into place, its creation date kept.
+pub fn restore_exif_file(path: &Path, original: &[u8], dry_run: bool) -> Result<Restoring> {
+    let damaged = std::fs::read(path).with_context(|| format!("cannot read {}", path.display()))?;
+    let outcome = restore_exif(&damaged, original)?;
+    if let Restoring::Restored(bytes) = &outcome
+        && !dry_run
+    {
+        replace(path, bytes)?;
+    }
+    Ok(outcome)
+}
+
+/// Whether the first IFD of a JPEG's EXIF block has an entry for `tag`.
+fn ifd0_has(raw: &[u8], tag: u16) -> bool {
+    let Some(tiff) = jpeg::exif(raw) else {
+        return false;
+    };
+    let little = match tiff.get(..2) {
+        Some(b"II") => true,
+        Some(b"MM") => false,
+        _ => return false,
+    };
+    let half = |at: usize| {
+        tiff.get(at..at + 2).map(|bytes| {
+            if little {
+                u16::from_le_bytes([bytes[0], bytes[1]])
+            } else {
+                u16::from_be_bytes([bytes[0], bytes[1]])
+            }
+        })
+    };
+    let Some(first) = tiff.get(4..8).map(|bytes| {
+        let bytes = [bytes[0], bytes[1], bytes[2], bytes[3]];
+        if little {
+            u32::from_le_bytes(bytes)
+        } else {
+            u32::from_be_bytes(bytes)
+        }
+    }) else {
+        return false;
+    };
+    let first = first as usize;
+    let count = half(first).unwrap_or(0) as usize;
+    (0..count).any(|index| half(first + 2 + 12 * index) == Some(tag))
+}
+
 /// What a rewritten EXIF block dropped of what the camera recorded, if it
 /// dropped anything: the moment, the camera, the lens, the exposure, the
 /// time zone, and the position unless a new one was asked for.
@@ -1003,6 +1122,97 @@ mod tests {
         let block = |bytes: &[u8]| bytes[jpeg::exif_block(bytes).unwrap()].to_vec();
         assert_eq!(block(&out), block(&raw), "the camera's EXIF was rewritten");
         assert_eq!(xmp::read(&jpeg::xmp(&out).unwrap()).rating, Some(4));
+    }
+
+    /// The phone's photograph as the old writer left it: its EXIF replaced
+    /// by a block holding the stars and, when `turned`, an orientation; the
+    /// XMP beside it with the stars and a title.
+    fn as_the_old_writer_left_it(original: &[u8], turned: bool) -> Vec<u8> {
+        let mut tiff = b"MM\0\x2A".to_vec();
+        tiff.extend_from_slice(&8u32.to_be_bytes());
+        let entries: &[(u16, u16)] = if turned {
+            &[(0x0112, 6), (0x4746, 4)]
+        } else {
+            &[(0x4746, 4)]
+        };
+        tiff.extend_from_slice(&(entries.len() as u16).to_be_bytes());
+        for (tag, value) in entries {
+            tiff.extend_from_slice(&tag.to_be_bytes());
+            tiff.extend_from_slice(&3u16.to_be_bytes());
+            tiff.extend_from_slice(&1u32.to_be_bytes());
+            tiff.extend_from_slice(&value.to_be_bytes());
+            tiff.extend_from_slice(&[0, 0]);
+        }
+        tiff.extend_from_slice(&0u32.to_be_bytes());
+
+        let damaged = jpeg::with_exif(original, &tiff).unwrap();
+        let mut said = rated(4);
+        said.title = Some("Silvestr".to_owned());
+        jpeg::with_xmp(&damaged, &xmp::merge(None, &said)).unwrap()
+    }
+
+    #[test]
+    fn the_cameras_exif_comes_back_and_what_was_said_here_stays() {
+        let original = jpeg_from_a_phone(1);
+        let damaged = as_the_old_writer_left_it(&original, false);
+        assert_eq!(photosite_image::exif::read(&damaged).taken_at, None);
+
+        let Restoring::Restored(out) = restore_exif(&damaged, &original).unwrap() else {
+            panic!("nothing was restored");
+        };
+        let exif = photosite_image::exif::read(&out);
+        assert_eq!(
+            exif.taken_at,
+            photosite_image::exif::read(&original).taken_at
+        );
+        assert_eq!(exif.camera.as_deref(), Some("HONOR"));
+        assert_eq!(exif.said.rating, Some(4), "the stars left the EXIF");
+        assert_eq!(exif.said.title.as_deref(), Some("Silvestr"));
+        let said = xmp::read(&jpeg::xmp(&out).unwrap());
+        assert_eq!(
+            (said.rating, said.title.as_deref()),
+            (Some(4), Some("Silvestr"))
+        );
+        assert_eq!(
+            jpeg::compressed_image(&out),
+            jpeg::compressed_image(&damaged)
+        );
+
+        // Done once, there is nothing more to do.
+        assert_eq!(restore_exif(&out, &original).unwrap(), Restoring::Intact);
+    }
+
+    #[test]
+    fn a_turn_made_here_survives_the_restore_and_no_turn_is_invented() {
+        let original = jpeg_from_a_phone(7);
+        let turned = as_the_old_writer_left_it(&original, true);
+        let Restoring::Restored(out) = restore_exif(&turned, &original).unwrap() else {
+            panic!("nothing was restored");
+        };
+        assert_eq!(photosite_image::exif::read(&out).orientation, 6);
+
+        let upright = as_the_old_writer_left_it(&original, false);
+        let Restoring::Restored(out) = restore_exif(&upright, &original).unwrap() else {
+            panic!("nothing was restored");
+        };
+        assert!(!ifd0_has(&out, 0x0112), "an orientation was made up");
+    }
+
+    #[test]
+    fn a_different_photograph_under_the_same_name_is_left_alone() {
+        let original = jpeg_from_a_phone(1);
+        let damaged = as_the_old_writer_left_it(&original, false);
+        let mut other = original.clone();
+        let last = other.len() - 3;
+        other[last] ^= 0xFF;
+        assert_eq!(
+            restore_exif(&damaged, &other).unwrap(),
+            Restoring::NotTheSame
+        );
+        assert_eq!(
+            restore_exif(&damaged, &jpeg_bytes()).unwrap(),
+            Restoring::NothingToRestore
+        );
     }
 
     /// Putting the label right moves two bytes and nothing else.

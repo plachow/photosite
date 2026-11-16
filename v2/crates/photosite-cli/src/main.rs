@@ -144,6 +144,26 @@ enum Command {
     /// run that ends before the queue does can be finished without opening
     /// one.
     Write,
+    /// Puts back the camera's EXIF into photographs that lost it, from a
+    /// backup made before they did.
+    ///
+    /// For the photographs a HONOR phone took, whose EXIF PhotoSite 2.3 and
+    /// earlier replaced with a block holding only the stars and the words.
+    /// The backup is matched by file name and is used only when it is the
+    /// same photograph, byte for byte. The stars, the words and the named
+    /// faces said since stay. Without `--write`, nothing is written: it
+    /// says what it would do.
+    RestoreExif {
+        /// Where the backup is. Searched with every folder inside it.
+        #[arg(long, value_name = "FOLDER")]
+        from: PathBuf,
+        /// The folders to put the EXIF back into, with every folder inside.
+        #[arg(required = true)]
+        folders: Vec<PathBuf>,
+        /// Write the files. Without it, only say what would be done.
+        #[arg(long)]
+        write: bool,
+    },
     /// Where everything lives and what it runs on. The first question any
     /// support conversation opens with.
     Doctor,
@@ -223,6 +243,11 @@ fn main() -> Result<()> {
             overwrite,
         ),
         Command::Write => write_out(&paths),
+        Command::RestoreExif {
+            from,
+            folders,
+            write,
+        } => restore_exif(&from, &folders, write),
         Command::Doctor => {
             let mut rows = diagnostics::about(&paths);
             rows.push((
@@ -242,6 +267,152 @@ fn main() -> Result<()> {
             Ok(())
         }
     }
+}
+
+/// Every JPEG under a folder, folders inside it included.
+fn jpegs_under(folder: &Path) -> Vec<PathBuf> {
+    walkdir::WalkDir::new(folder)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_file())
+        .map(walkdir::DirEntry::into_path)
+        .filter(|path| {
+            path.extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| {
+                    extension.eq_ignore_ascii_case("jpg") || extension.eq_ignore_ascii_case("jpeg")
+                })
+        })
+        .collect()
+}
+
+/// Puts the camera's EXIF back from a backup. See [`Command::RestoreExif`].
+///
+/// Only a photograph that does not say when it was taken, or with what, is
+/// looked at; one that does has nothing missing. Every name that could not
+/// be matched is listed at the end, so whoever runs this knows what is left.
+fn restore_exif(from: &Path, folders: &[PathBuf], write: bool) -> Result<()> {
+    use photosite_meta::Restoring;
+    use std::collections::HashMap;
+
+    anyhow::ensure!(from.is_dir(), "{} is not a folder", from.display());
+    let mut backup: HashMap<String, Vec<PathBuf>> = HashMap::new();
+    for path in jpegs_under(from) {
+        if let Some(name) = path.file_name() {
+            backup
+                .entry(name.to_string_lossy().to_lowercase())
+                .or_default()
+                .push(path);
+        }
+    }
+    println!(
+        "{} photographs in the backup at {}",
+        backup.values().map(Vec::len).sum::<usize>(),
+        from.display()
+    );
+
+    let (mut restored, mut fine, mut errors) = (0usize, 0usize, 0usize);
+    let (mut unmatched, mut different, mut empty) = (Vec::new(), Vec::new(), Vec::new());
+    for folder in folders {
+        anyhow::ensure!(folder.is_dir(), "{} is not a folder", folder.display());
+        for path in jpegs_under(folder) {
+            // Never the backup itself, if it sits inside a folder named.
+            if path.starts_with(from) {
+                continue;
+            }
+            let said = photosite_image::exif::read_file(&path);
+            if said.taken_at.is_some() && said.camera.is_some() {
+                fine += 1;
+                continue;
+            }
+
+            let name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().to_lowercase())
+                .unwrap_or_default();
+            let Some(candidates) = backup.get(&name) else {
+                unmatched.push(path);
+                continue;
+            };
+
+            let mut outcome = None;
+            for candidate in candidates {
+                let original = match std::fs::read(candidate) {
+                    Ok(original) => original,
+                    Err(error) => {
+                        eprintln!("cannot read {}: {error}", candidate.display());
+                        continue;
+                    }
+                };
+                match photosite_meta::restore_exif_file(&path, &original, !write) {
+                    Ok(Restoring::NotTheSame) => outcome = outcome.or(Some(Restoring::NotTheSame)),
+                    Ok(Restoring::NothingToRestore) => {
+                        outcome = Some(Restoring::NothingToRestore);
+                    }
+                    Ok(done) => {
+                        outcome = Some(done);
+                        break;
+                    }
+                    Err(error) => {
+                        eprintln!("{}: {error:#}", path.display());
+                        errors += 1;
+                        outcome = Some(Restoring::Intact);
+                        break;
+                    }
+                }
+            }
+
+            match outcome {
+                Some(Restoring::Restored(_)) => {
+                    restored += 1;
+                    if restored % 250 == 0 {
+                        println!("  {restored} so far...");
+                    }
+                }
+                Some(Restoring::Intact) => {}
+                Some(Restoring::NothingToRestore) => empty.push(path),
+                Some(Restoring::NotTheSame) | None => different.push(path),
+            }
+        }
+    }
+
+    let verb = if write {
+        "restored"
+    } else {
+        "would be restored"
+    };
+    println!();
+    println!("{restored:6}  {verb}");
+    println!("{fine:6}  already say when and with what");
+    println!(
+        "{:6}  have no photograph of that name in the backup",
+        unmatched.len()
+    );
+    println!(
+        "{:6}  have one of that name that is a different photograph",
+        different.len()
+    );
+    println!("{:6}  have one that says no more than they do", empty.len());
+    println!("{errors:6}  could not be done");
+    for (heading, list) in [
+        ("Not in the backup", &unmatched),
+        ("A different photograph in the backup", &different),
+        ("Nothing more in the backup", &empty),
+    ] {
+        if !list.is_empty() {
+            println!();
+            println!("{heading}:");
+            for path in list.iter() {
+                println!("  {}", path.display());
+            }
+        }
+    }
+    if !write && restored > 0 {
+        println!();
+        println!("Nothing was written. Run again with --write to restore them.");
+    }
+
+    Ok(())
 }
 
 /// Sweeps a folder for faces.
