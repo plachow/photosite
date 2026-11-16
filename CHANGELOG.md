@@ -36,6 +36,9 @@ change lands here under **Unreleased** in the same commit that makes it.
   it is; the stars and the words then go into XMP and IPTC only.
 - The sensitivity (ISO) of photographs from cameras that store it as a long
   number is read instead of showing as none.
+- Writing a rating, a label, words or names into a photograph keeps the
+  file's creation date; only the modified date moves, as backups and
+  synchronisation need it to.
 - A photograph deleted outside PhotoSite, in Explorer or on a network share,
   leaves the gallery the next time the folder is read (F5, or when the
   folder's change is noticed) instead of staying as an empty tile. A folder

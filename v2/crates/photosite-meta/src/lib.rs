@@ -852,8 +852,25 @@ fn replace(path: &Path, bytes: &[u8]) -> Result<()> {
             .unwrap_or("tmp")
     ));
 
+    // When the photograph arrived, which is what somebody sorting a folder
+    // by creation date is sorting by. The file written here is a new file,
+    // created now, and a rating would otherwise make every photograph rated
+    // in one evening look as if it had arrived that evening. Modified is
+    // left to move forward: it is how backups, synchronisation and every
+    // thumbnail cache, this one included, know the file has changed.
+    let created = std::fs::metadata(path).and_then(|meta| meta.created()).ok();
+
     std::fs::write(&temporary, bytes)
         .with_context(|| format!("cannot write {}", temporary.display()))?;
+    if let Some(created) = created
+        && let Err(error) = keep_created(&temporary, created)
+    {
+        tracing::warn!(
+            path = %path.display(),
+            %error,
+            "the photograph will look newly created"
+        );
+    }
 
     if let Err(error) = std::fs::rename(&temporary, path) {
         // Leaving a stray part file behind would be a second failure on top
@@ -865,10 +882,55 @@ fn replace(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Gives a file the creation time it is to have. Windows and macOS keep one;
+/// elsewhere there is nothing to set.
+fn keep_created(path: &Path, created: std::time::SystemTime) -> std::io::Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::fs::FileTimesExt;
+        let times = std::fs::FileTimes::new().set_created(created);
+        std::fs::File::options()
+            .write(true)
+            .open(path)?
+            .set_times(times)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::macos::fs::FileTimesExt;
+        let times = std::fs::FileTimes::new().set_created(created);
+        std::fs::File::options()
+            .write(true)
+            .open(path)?
+            .set_times(times)
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let _ = (path, created);
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use photosite_core::domain::ColorLabel;
+
+    /// Rated today, the photograph still arrived when it arrived.
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    #[test]
+    fn writing_into_a_photograph_keeps_when_it_was_created() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.jpg");
+        std::fs::write(&path, jpeg_bytes()).unwrap();
+        let then =
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_736_436_000);
+        keep_created(&path, then).unwrap();
+
+        replace(&path, &jpeg_bytes()).unwrap();
+        let meta = std::fs::metadata(&path).unwrap();
+        assert_eq!(meta.created().unwrap(), then);
+        assert!(meta.modified().unwrap() > then, "modified must move on");
+    }
 
     /// A JPEG with the EXIF block of a phone: who made it, and when the
     /// shutter fired, and the scene type written with the type `scene` —
