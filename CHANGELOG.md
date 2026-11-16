@@ -10,6 +10,12 @@ change lands here under **Unreleased** in the same commit that makes it.
 
 ## [Unreleased]
 
+### Fixed
+
+- Copy to, Duplicate and a Move to another drive keep the original's dates:
+  the copy is created and modified when the photograph was, not when it was
+  copied.
+
 ## [2.3.0] - 2026-11-15
 
 ### Added

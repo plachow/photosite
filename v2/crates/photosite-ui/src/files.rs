@@ -184,16 +184,73 @@ fn carry(step: &Planned, mode: Mode) -> Result<()> {
 /// the copy fails.
 fn one(from: &Path, to: &Path, mode: Mode) -> std::io::Result<()> {
     if mode == Mode::Copy {
-        return std::fs::copy(from, to).map(|_| ());
+        return copy(from, to);
     }
 
     match std::fs::rename(from, to) {
         Ok(()) => Ok(()),
         Err(_) => {
-            std::fs::copy(from, to)?;
+            copy(from, to)?;
             std::fs::remove_file(from)
         }
     }
+}
+
+/// The bytes, and the dates they carry.
+///
+/// A photograph's file dates are often the only record of when it arrived,
+/// and anybody sorting a folder by date expects a copy to sit where the
+/// original sat. `std::fs::copy` keeps the modified date on some systems
+/// and not on others, and the created date nowhere, so the copy is given
+/// all of them afterwards. Failing to is logged, not raised: the
+/// photograph did arrive, and that is what matters.
+fn copy(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::copy(from, to)?;
+    if let Err(error) = keep_dates(from, to) {
+        tracing::warn!(
+            from = %from.display(),
+            %error,
+            "the copy arrived but kept none of the original's dates"
+        );
+    }
+    Ok(())
+}
+
+fn keep_dates(from: &Path, to: &Path) -> std::io::Result<()> {
+    let source = std::fs::metadata(from)?;
+    let times = std::fs::FileTimes::new()
+        .set_accessed(source.accessed()?)
+        .set_modified(source.modified()?);
+    #[cfg(target_os = "windows")]
+    let times = {
+        use std::os::windows::fs::FileTimesExt;
+        times.set_created(source.created()?)
+    };
+    #[cfg(target_os = "macos")]
+    let times = {
+        use std::os::macos::fs::FileTimesExt;
+        times.set_created(source.created()?)
+    };
+
+    open_for_dates(to)?.set_times(times)
+}
+
+/// Asking only to write the attributes, because the copy of a read-only
+/// photograph is read-only too and would refuse anything more.
+#[cfg(target_os = "windows")]
+fn open_for_dates(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_WRITE_ATTRIBUTES: u32 = 0x0100;
+    std::fs::OpenOptions::new()
+        .access_mode(FILE_WRITE_ATTRIBUTES)
+        .open(path)
+}
+
+/// The owner may set a file's dates through any handle to it, read-only
+/// ones included.
+#[cfg(not(target_os = "windows"))]
+fn open_for_dates(path: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::File::open(path)
 }
 
 /// To the recycle bin, never to nowhere.
@@ -406,6 +463,46 @@ mod tests {
             std::fs::read(into.join("a (2).jpg")).unwrap(),
             b"the new one"
         );
+    }
+
+    /// Sorted by date, a copy belongs where its original was, not at the
+    /// moment somebody happened to copy it.
+    #[test]
+    fn a_copy_keeps_the_dates_of_the_original() {
+        let dir = tempfile::tempdir().unwrap();
+        let (from, into) = (dir.path().join("from"), dir.path().join("into"));
+        std::fs::create_dir_all(&from).unwrap();
+        std::fs::create_dir_all(&into).unwrap();
+        let photo = from.join("a.jpg");
+        std::fs::write(&photo, b"pixels").unwrap();
+
+        let then =
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_736_436_000);
+        let times = std::fs::FileTimes::new()
+            .set_modified(then)
+            .set_accessed(then);
+        #[cfg(target_os = "windows")]
+        let times = {
+            use std::os::windows::fs::FileTimesExt;
+            times.set_created(then)
+        };
+        std::fs::File::options()
+            .write(true)
+            .open(&photo)
+            .unwrap()
+            .set_times(times)
+            .unwrap();
+        let mut readonly = std::fs::metadata(&photo).unwrap().permissions();
+        readonly.set_readonly(true);
+        std::fs::set_permissions(&photo, readonly).unwrap();
+
+        let (mut app, _data, _photos) = crate::culling::three();
+        transfer(&mut app, std::slice::from_ref(&photo), &into, Mode::Copy).unwrap();
+
+        let copy = std::fs::metadata(into.join("a.jpg")).unwrap();
+        assert_eq!(copy.modified().unwrap(), then, "the copy was dated today");
+        #[cfg(target_os = "windows")]
+        assert_eq!(copy.created().unwrap(), then, "the copy was made today");
     }
 
     #[test]
