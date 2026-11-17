@@ -223,7 +223,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Edit,
         default_shortcut: Some("Ctrl+C"),
         toolbar: false,
-        scope: Scope::Manager,
+        scope: Scope::Everywhere,
         menu: Menu::Item,
     },
     Command {
@@ -248,13 +248,16 @@ pub const COMMANDS: &[Command] = &[
     },
     // Somewhere else, chosen now. Alt rather than Ctrl because the clipboard
     // already has Ctrl+C, and these are the same idea without the two steps.
+    // Copying reaches the editor, where it is of the photograph in front;
+    // moving does not, because the tab would be left showing a file that is
+    // no longer where it was.
     Command {
         id: "file.copy_to",
         title_key: "command-file-copy-to",
         group: Group::File,
         default_shortcut: Some("Alt+C"),
         toolbar: false,
-        scope: Scope::Manager,
+        scope: Scope::Everywhere,
         menu: Menu::Section,
     },
     Command {
@@ -274,7 +277,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::File,
         default_shortcut: Some("Ctrl+Shift+C"),
         toolbar: false,
-        scope: Scope::Manager,
+        scope: Scope::Everywhere,
         menu: Menu::Item,
     },
     Command {
@@ -421,6 +424,10 @@ pub const COMMANDS: &[Command] = &[
         scope: Scope::Everywhere,
         menu: Menu::Under("menu-rating"),
     },
+    // The labels are the gallery's keys and the editor's too, like the stars:
+    // they land on whatever is being looked at. All but "none", whose `0`
+    // fits the photograph to the screen in the editor. There a label comes
+    // off the way it went on — each colour toggles, as P and X do.
     Command {
         id: "photo.label_none",
         title_key: "command-photo-label-none",
@@ -436,7 +443,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Photo,
         default_shortcut: Some("6"),
         toolbar: false,
-        scope: Scope::Manager,
+        scope: Scope::Everywhere,
         menu: Menu::Under("menu-label"),
     },
     Command {
@@ -445,7 +452,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Photo,
         default_shortcut: Some("7"),
         toolbar: false,
-        scope: Scope::Manager,
+        scope: Scope::Everywhere,
         menu: Menu::Under("menu-label"),
     },
     Command {
@@ -454,7 +461,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Photo,
         default_shortcut: Some("8"),
         toolbar: false,
-        scope: Scope::Manager,
+        scope: Scope::Everywhere,
         menu: Menu::Under("menu-label"),
     },
     Command {
@@ -463,7 +470,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Photo,
         default_shortcut: Some("9"),
         toolbar: false,
-        scope: Scope::Manager,
+        scope: Scope::Everywhere,
         menu: Menu::Under("menu-label"),
     },
     Command {
@@ -472,7 +479,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Photo,
         default_shortcut: None,
         toolbar: false,
-        scope: Scope::Manager,
+        scope: Scope::Everywhere,
         menu: Menu::Under("menu-label"),
     },
     // Both toggle. Pressing P on a photograph already picked takes the pick
@@ -484,7 +491,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Photo,
         default_shortcut: Some("P"),
         toolbar: false,
-        scope: Scope::Manager,
+        scope: Scope::Everywhere,
         menu: Menu::Section,
     },
     Command {
@@ -493,7 +500,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Photo,
         default_shortcut: Some("X"),
         toolbar: false,
-        scope: Scope::Manager,
+        scope: Scope::Everywhere,
         menu: Menu::Item,
     },
     // Somebody the detector did not frame — turned away, far off, seen from
@@ -593,7 +600,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Photo,
         default_shortcut: Some("Ctrl+L"),
         toolbar: false,
-        scope: Scope::Manager,
+        scope: Scope::Everywhere,
         menu: Menu::Section,
     },
     Command {
@@ -602,7 +609,7 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Photo,
         default_shortcut: Some("Ctrl+R"),
         toolbar: false,
-        scope: Scope::Manager,
+        scope: Scope::Everywhere,
         menu: Menu::Item,
     },
     Command {

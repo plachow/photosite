@@ -1229,6 +1229,23 @@ impl App {
             .collect()
     }
 
+    /// What copying acts on: the photograph in front of the editor, when a
+    /// photograph is — whether the gallery holds it or not, since a file is
+    /// copied by its path — and otherwise the selection. A pasted picture
+    /// has no file to copy.
+    fn in_front_paths(&self) -> Vec<PathBuf> {
+        if self.tabs.manager_is_active() {
+            return self.chosen_paths();
+        }
+
+        self.tabs
+            .active_editor()
+            .filter(|editor| editor.pasted.is_none())
+            .map(|editor| editor.path.clone())
+            .into_iter()
+            .collect()
+    }
+
     /// Runs a file operation and says what came of it, whichever way it went.
     fn did<T>(&mut self, outcome: anyhow::Result<T>, said: impl FnOnce(T) -> String) {
         match outcome {
@@ -1647,7 +1664,7 @@ impl App {
     /// Copies or moves what is chosen into a folder, and remembers it as the
     /// place the dialog offers next time.
     fn send_to(&mut self, folder: &Path, mode: Mode) {
-        let chosen = self.chosen_paths();
+        let chosen = self.in_front_paths();
         if chosen.is_empty() {
             self.status = t!("files-nothing-selected");
             return;
@@ -1660,7 +1677,7 @@ impl App {
     /// same kind went to, so that sorting a card into piles is the key and
     /// then Enter.
     fn ask_where(&mut self, mode: Mode) {
-        if self.chosen_paths().is_empty() {
+        if self.in_front_paths().is_empty() {
             self.status = t!("files-nothing-selected");
             return;
         }
@@ -2248,7 +2265,7 @@ impl App {
 
     /// Puts what is chosen on the clipboard, ours and the system's both.
     fn onto_clipboard(&mut self, ctx: &egui::Context, cut: bool) {
-        let chosen = clipboard::existing(&self.chosen_paths());
+        let chosen = clipboard::existing(&self.in_front_paths());
         if chosen.is_empty() {
             self.status = t!("files-nothing-selected");
             return;
@@ -2598,10 +2615,11 @@ impl App {
             "view.clear_filter" => self.filter.is_active(),
             "file.rescan" | "file.new_folder" | "go.favourite" => self.folder.is_some(),
             "file.open_with" | "file.system_menu" => shell::AVAILABLE && !self.selection.is_empty(),
-            "file.delete" if !self.tabs.manager_is_active() => self
-                .tabs
-                .active_editor()
-                .is_some_and(|editor| editor.pasted.is_none()),
+            "file.delete" | "file.copy" | "file.copy_to" | "file.copy_again"
+                if !self.tabs.manager_is_active() =>
+            {
+                !self.in_front_paths().is_empty()
+            }
             "file.copy" | "file.cut" | "file.delete" | "file.duplicate" | "file.rename"
             | "file.copy_to" | "file.move_to" | "file.copy_again" | "file.reveal"
             | "photo.edit" => !self.selection.is_empty(),
@@ -3460,11 +3478,22 @@ impl App {
         }
     }
 
+    /// A colour label, which toggles like the verdict: the same colour again
+    /// takes it off. In the editor that is the only way to take it off, as
+    /// `0` there fits the photograph to the screen.
     fn label(&mut self, label: ColorLabel) {
         let chosen = self.chosen();
         if chosen.is_empty() {
             return;
         }
+
+        let already = label != ColorLabel::None
+            && self
+                .acting_on()
+                .into_iter()
+                .filter_map(|at| self.photo(at))
+                .all(|photo| photo.organisation.label == label);
+        let label = if already { ColorLabel::None } else { label };
 
         self.write_catalog(|catalog| catalog.set_label(&chosen, label));
         self.queue_write(&chosen);
@@ -5856,6 +5885,50 @@ mod culling {
         assert_eq!(app.photo(2).unwrap().organisation.rating, 1);
     }
 
+    /// The gallery's keys in the editor: a Czech `ž` on the `6` puts the red
+    /// label on the photograph in front and takes it off again, and P and X
+    /// give their verdict there as they do over the grid.
+    #[test]
+    fn the_labels_and_the_verdict_reach_the_editor() {
+        use egui::Key;
+
+        let bare = egui::Modifiers::default();
+        let (mut app, _data, _photos) = three();
+        app.select_only(0);
+        app.edit(2);
+
+        keys_in_a_frame(&mut app, vec![key_at(Key::Num6, Key::Num6, bare)]);
+        assert_eq!(app.photo(2).unwrap().organisation.label, ColorLabel::Red);
+        assert_eq!(
+            app.photo(0).unwrap().organisation.label,
+            ColorLabel::None,
+            "the label went on the selection behind the tab"
+        );
+        keys_in_a_frame(&mut app, vec![key_at(Key::Num6, Key::Num6, bare)]);
+        assert_eq!(app.photo(2).unwrap().organisation.label, ColorLabel::None);
+
+        keys_in_a_frame(&mut app, vec![key_at(Key::P, Key::P, bare)]);
+        assert_eq!(app.photo(2).unwrap().organisation.flag, Flag::Picked);
+        keys_in_a_frame(&mut app, vec![key_at(Key::X, Key::X, bare)]);
+        assert_eq!(app.photo(2).unwrap().organisation.flag, Flag::Rejected);
+    }
+
+    /// A colour over one already that colour takes it off; over a mixed
+    /// selection it puts it on all of them.
+    #[test]
+    fn a_label_toggles_like_the_verdict() {
+        let (mut app, _data, _photos) = three();
+        app.select_only(0);
+        app.run_for_test("photo.label_green");
+        app.select_also(1);
+        app.run_for_test("photo.label_green");
+        assert_eq!(app.photo(0).unwrap().organisation.label, ColorLabel::Green);
+        assert_eq!(app.photo(1).unwrap().organisation.label, ColorLabel::Green);
+        app.run_for_test("photo.label_green");
+        assert_eq!(app.photo(0).unwrap().organisation.label, ColorLabel::None);
+        assert_eq!(app.photo(1).unwrap().organisation.label, ColorLabel::None);
+    }
+
     /// With Ctrl a key is what it types: Ctrl and `+` makes the tiles
     /// larger on every keyboard, wherever its plus happens to sit.
     #[test]
@@ -6956,6 +7029,19 @@ mod editing {
             Some("file.delete")
         );
         assert!(app.can_run("file.delete"));
+    }
+
+    /// Copying from the editor is of the photograph in front, not of the
+    /// selection left behind in the manager.
+    #[test]
+    fn copying_in_the_editor_takes_the_photograph_in_front() {
+        let (mut app, _data, photos) = culling::three();
+        app.select_only(0);
+        app.edit(2);
+        assert_eq!(app.in_front_paths(), [photos.path().join("c.jpg")]);
+        assert!(app.can_run("file.copy_to"));
+        app.tabs.activate(crate::editor::Tabs::MANAGER);
+        assert_eq!(app.in_front_paths(), [photos.path().join("a.jpg")]);
     }
 
     #[test]

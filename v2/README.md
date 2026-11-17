@@ -885,6 +885,13 @@ to change it. For now the tab is a viewer; the editor grows into it.
 | a middle click, `Ctrl+F` | fills the screen and gives it back; the strip of tabs goes with it |
 | `Enter` | back to the manager, standing on this photograph: the folder opened if it has to be, the tree unfolded to it, the tile chosen and scrolled into view |
 | `Esc`, the cross on the tab | closes the tab and leaves the manager where it was |
+| the gallery's keys: `1`..`5`, `` ` ``, `6`..`9`, `P`, `X`, `Alt+1`..`Alt+9`, `Ctrl+L`, `Ctrl+R`, `Ctrl+C`, `Alt+C`, `Ctrl+Shift+C`, `Delete` | the same as over the grid, on the photograph in front rather than on the selection behind the tab; `Delete` moves on to the next photograph |
+
+A label comes off the way it went on: the same colour again takes it off,
+as `P` and `X` do. That holds in the manager too, and in the editor it is the
+only way, because `0` there fits the photograph to the screen. Moving and
+renaming stay in the manager: the tab would be left showing a file that is
+no longer where it was.
 
 **The keys are commands, not keys.** `Escape`, `Enter` and the rest are
 entries in the registry like every other, so they can be rebound with

@@ -24,6 +24,14 @@ change lands here under **Unreleased** in the same commit that makes it.
 - `Delete` works in the editor too. It moves the photograph in front to the
   recycle bin and goes on to the next one, or to the one before when it was
   the last. When it was the only one, the tab closes.
+- The colour labels (`6`..`9`), pick and reject (`P`, `X`), turning
+  (`Ctrl+L`, `Ctrl+R`) and copying (`Ctrl+C`, `Alt+C`, `Ctrl+Shift+C`) work in
+  the editor as they do in the manager, on the photograph in front.
+
+### Changed
+
+- A colour label toggles like pick and reject: the same colour again takes
+  it off.
 
 ## [2.4.0] - 2026-11-16
 
