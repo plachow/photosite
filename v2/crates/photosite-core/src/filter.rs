@@ -534,6 +534,26 @@ impl Facets {
         }
     }
 
+    /// Reads again only what organising changes — the labels, the verdicts
+    /// and the highest rating — after a key has changed them, so a colour
+    /// given a moment ago is offered at once. The rest of a pass would copy
+    /// every camera and lens name in the folder on each key held down in a
+    /// cull, for answers that cannot have changed.
+    pub fn reorganised(&mut self, photos: &[Photo]) {
+        let mut labels = BTreeSet::new();
+        let mut flags = BTreeSet::new();
+        let mut highest_rating = 0u8;
+        for photo in photos {
+            labels.insert(photo.organisation.label);
+            flags.insert(photo.organisation.flag);
+            highest_rating = highest_rating.max(photo.organisation.rating);
+        }
+
+        self.labels = labels.into_iter().collect();
+        self.flags = flags.into_iter().collect();
+        self.highest_rating = highest_rating;
+    }
+
     /// Whether "described" is a question worth offering here: only where
     /// some photographs are and some are not.
     pub fn divided_by_description(&self) -> bool {
@@ -1014,6 +1034,23 @@ mod tests {
         assert_eq!(facets.highest_rating, 3);
         assert_eq!(facets.taken, Some((1_000, 9_000)));
         assert_eq!(facets.labels, [ColorLabel::None, ColorLabel::Red]);
+    }
+
+    #[test]
+    fn reorganised_facets_are_the_ones_a_whole_pass_would_give() {
+        let mut nikon = photo("a.jpg");
+        nikon.camera = Some("NIKON D90".to_owned());
+        let phone = photo("b.png");
+        let mut photos = vec![nikon, phone];
+        let mut facets = Facets::of(&photos);
+        assert_eq!(facets.labels, [ColorLabel::None]);
+
+        photos[1].organisation.label = ColorLabel::Green;
+        photos[1].organisation.flag = Flag::Picked;
+        photos[0].organisation.rating = 4;
+        facets.reorganised(&photos);
+        assert_eq!(facets, Facets::of(&photos));
+        assert_eq!(facets.labels, [ColorLabel::None, ColorLabel::Green]);
     }
 
     #[test]

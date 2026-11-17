@@ -3476,6 +3476,7 @@ impl App {
                 photo.organisation.rating = stars;
             }
         }
+        self.facets.reorganised(&self.all);
     }
 
     /// A colour label, which toggles like the verdict: the same colour again
@@ -3502,6 +3503,9 @@ impl App {
                 photo.organisation.label = label;
             }
         }
+        // The filter offers the colours the folder holds, the one just given
+        // among them.
+        self.facets.reorganised(&self.all);
     }
 
     /// The culling verdict, which toggles.
@@ -3532,6 +3536,7 @@ impl App {
                 photo.organisation.flag = wanted;
             }
         }
+        self.facets.reorganised(&self.all);
     }
 
     /// Fills the text fields from the photograph, when it is a different one.
@@ -5927,6 +5932,21 @@ mod culling {
         app.run_for_test("photo.label_green");
         assert_eq!(app.photo(0).unwrap().organisation.label, ColorLabel::None);
         assert_eq!(app.photo(1).unwrap().organisation.label, ColorLabel::None);
+    }
+
+    /// The filter offers a colour the moment it is given, not only once the
+    /// folder has been read again, and stops offering it once it is gone.
+    #[test]
+    fn a_label_given_is_offered_by_the_filter_at_once() {
+        let (mut app, _data, _photos) = three();
+        assert_eq!(app.facets.labels, [ColorLabel::None]);
+        app.select_only(1);
+        app.run_for_test("photo.label_red");
+        assert_eq!(app.facets.labels, [ColorLabel::None, ColorLabel::Red]);
+        app.run_for_test("photo.pick");
+        assert!(app.facets.flags.contains(&Flag::Picked));
+        app.run_for_test("photo.label_red");
+        assert_eq!(app.facets.labels, [ColorLabel::None]);
     }
 
     /// With Ctrl a key is what it types: Ctrl and `+` makes the tiles

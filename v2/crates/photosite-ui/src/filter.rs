@@ -11,7 +11,7 @@
 
 use crate::{App, theme};
 use eframe::egui;
-use photosite_core::domain::Organisation;
+use photosite_core::domain::{ColorLabel, Organisation};
 use photosite_core::filter::{Described, Expression, Filter, Shape};
 use photosite_core::theme::Palette;
 use photosite_core::{i18n, t, time};
@@ -114,23 +114,39 @@ pub fn window(app: &mut App, ctx: &egui::Context, palette: &Palette) {
                     // Only what this folder can answer gets a section. A
                     // "Lens" heading over an empty row in a folder of phone
                     // photographs is a question with no answers.
-                    if facets.highest_rating > 0 {
+                    // What is chosen stays on offer even after the folder
+                    // has stopped holding it — the last red one turned
+                    // green, say — or the gallery would stay narrowed with
+                    // nothing left to click to widen it again.
+                    let highest = facets.highest_rating.max(filter.minimum_rating);
+                    if highest > 0 {
                         section(ui, palette, &t!("filter-section-rating"), |ui| {
-                            rating(ui, &mut filter, facets.highest_rating);
+                            rating(ui, &mut filter, highest);
                         });
                     }
 
-                    if facets.labels.len() > 1 {
+                    let labels = offered(&facets.labels, &filter.labels);
+                    if labels.len() > 1 || !filter.labels.is_empty() {
                         section(ui, palette, &t!("filter-section-label"), |ui| {
-                            chips(ui, &mut filter.labels, &facets.labels, |label| {
-                                i18n::t(label.title_key())
+                            ui.horizontal_wrapped(|ui| {
+                                for label in labels {
+                                    let on = filter.labels.contains(&label);
+                                    if label_chip(ui, palette, label, on).clicked() {
+                                        if on {
+                                            filter.labels.remove(&label);
+                                        } else {
+                                            filter.labels.insert(label);
+                                        }
+                                    }
+                                }
                             });
                         });
                     }
 
-                    if facets.flags.len() > 1 {
+                    let flags = offered(&facets.flags, &filter.flags);
+                    if flags.len() > 1 || !filter.flags.is_empty() {
                         section(ui, palette, &t!("filter-section-flag"), |ui| {
-                            chips(ui, &mut filter.flags, &facets.flags, |flag| {
+                            chips(ui, &mut filter.flags, &flags, |flag| {
                                 i18n::t(flag.title_key())
                             });
                         });
@@ -495,6 +511,77 @@ fn sides(ui: &mut egui::Ui, facet: &mut Expression, all: &str, anyone: &str) {
     }
 }
 
+/// What the folder holds and what is chosen, each once, in order.
+fn offered<T: Clone + Ord>(held: &[T], chosen: &BTreeSet<T>) -> Vec<T> {
+    let mut all: BTreeSet<T> = held.iter().cloned().collect();
+    all.extend(chosen.iter().cloned());
+    all.into_iter().collect()
+}
+
+/// One colour label to pick in the filter: its colour as a dot and then its
+/// name, so the row reads at a glance the way the tiles do. "No label" is an
+/// empty ring, as in the details pane. Drawn like the other chips — a frame
+/// when chosen or under the pointer — only with the dot in front.
+fn label_chip(ui: &mut egui::Ui, palette: &Palette, label: ColorLabel, on: bool) -> egui::Response {
+    let name = i18n::t(label.title_key());
+    let padding = ui.spacing().button_padding;
+    let gap = ui.spacing().icon_spacing;
+    let dot = ui.text_style_height(&egui::TextStyle::Button) * 0.7;
+    let galley = egui::WidgetText::from(name.clone()).into_galley(
+        ui,
+        Some(egui::TextWrapMode::Extend),
+        f32::INFINITY,
+        egui::TextStyle::Button,
+    );
+    let size = egui::vec2(
+        2.0 * padding.x + dot + gap + galley.size().x,
+        (2.0 * padding.y + galley.size().y).max(ui.spacing().interact_size.y),
+    );
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, on, &name)
+    });
+
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.style().interact_selectable(&response, on);
+        if on || response.hovered() || response.has_focus() {
+            ui.painter().rect(
+                rect.expand(visuals.expansion),
+                visuals.corner_radius,
+                visuals.weak_bg_fill,
+                visuals.bg_stroke,
+                egui::StrokeKind::Inside,
+            );
+        }
+
+        let centre = egui::pos2(rect.left() + padding.x + dot / 2.0, rect.center().y);
+        match label.color() {
+            Some(colour) => {
+                ui.painter().circle_filled(
+                    centre,
+                    dot / 2.0,
+                    egui::Color32::from_rgb(colour.r, colour.g, colour.b),
+                );
+            }
+            None => {
+                ui.painter().circle_stroke(
+                    centre,
+                    dot / 2.0 - 0.5,
+                    egui::Stroke::new(1.0, theme::color(palette.dim)),
+                );
+            }
+        }
+
+        let text_at = egui::pos2(
+            rect.left() + padding.x + dot + gap,
+            rect.center().y - galley.size().y / 2.0,
+        );
+        ui.painter().galley(text_at, galley, visuals.text_color());
+    }
+
+    response
+}
+
 /// A row of values, any number of which can be picked. None picked means
 /// any, which is what an empty set means to the core.
 fn chips<T: Clone + Ord>(
@@ -579,6 +666,75 @@ mod tests {
         let hovered = chips_stand(true);
         assert_eq!(at_rest.len(), 3);
         assert_eq!(at_rest, hovered);
+    }
+
+    /// A colour chip takes a click like any other chip, and is as tall as
+    /// the chips beside it, so a row of them stays one row.
+    #[test]
+    fn a_colour_chip_is_clicked_like_the_others() {
+        let ctx = egui::Context::default();
+        let theme = photosite_core::theme::resolve(&Default::default(), None);
+        theme::apply(&ctx, &theme.palette, theme.dark, 1.0);
+        let mut red = egui::Rect::NOTHING;
+        let mut plain = egui::Rect::NOTHING;
+        let mut clicked = false;
+        for events in [
+            vec![],
+            vec![egui::Event::PointerMoved(egui::pos2(-50.0, -50.0))],
+            vec![
+                egui::Event::PointerMoved(egui::pos2(20.0, 10.0)),
+                egui::Event::PointerButton {
+                    pos: egui::pos2(20.0, 10.0),
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            vec![egui::Event::PointerButton {
+                pos: egui::pos2(20.0, 10.0),
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        ] {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(600.0, 400.0),
+                )),
+                events,
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| {
+                crate::dialog::spacious(ui);
+                ui.horizontal_wrapped(|ui| {
+                    let response = label_chip(ui, &theme.palette, ColorLabel::Red, false);
+                    red = response.rect;
+                    clicked |= response.clicked();
+                    plain = ui.selectable_label(false, "Red").rect;
+                });
+            });
+            out.textures_delta.clear();
+        }
+
+        assert!(red.contains(egui::pos2(20.0, 10.0)), "{red:?}");
+        assert!(clicked);
+        assert_eq!(red.height(), plain.height());
+        assert!(
+            red.width() > plain.width(),
+            "the dot is in front of the name"
+        );
+    }
+
+    /// A colour chosen stays on offer after the folder stops holding it, so
+    /// the gallery it narrowed can be widened again.
+    #[test]
+    fn a_chosen_value_is_offered_even_when_the_folder_lost_it() {
+        let chosen: BTreeSet<ColorLabel> = [ColorLabel::Red].into_iter().collect();
+        assert_eq!(
+            offered(&[ColorLabel::None, ColorLabel::Green], &chosen),
+            [ColorLabel::None, ColorLabel::Red, ColorLabel::Green]
+        );
     }
 
     /// A folder with a crowd in it: forty people and a span of dates.

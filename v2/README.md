@@ -365,6 +365,11 @@ three stars.
 you — in a folder shot on two phones it offers those two phones and no
 heading at all for lenses, because there are none. A list of every camera
 ever owned, most of them matching nothing here, is a list nobody reads.
+The stars, the colours and the verdicts are read again as they are given, so
+a colour put on with `6` is offered at once rather than after the folder is
+next read. The colours show as dots, as on the tiles. A value already chosen
+stays on offer after the folder stops holding it — the last red one turned
+green — so the gallery it narrowed can always be widened again.
 
 The filter is deliberately **not** saved between runs. One that survived a
 restart would hide photographs on a later day for a reason nobody remembers

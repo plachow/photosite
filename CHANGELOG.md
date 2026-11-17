@@ -32,6 +32,15 @@ change lands here under **Unreleased** in the same commit that makes it.
 
 - A colour label toggles like pick and reject: the same colour again takes
   it off.
+- The colour labels in the filter show their colour as a dot before the name.
+
+### Fixed
+
+- The filter offers a colour label, a verdict or a rating as soon as it is
+  given. Until now it offered only what the folder held when it was read, so
+  the *Label* section did not appear until the folder was opened again. A
+  value chosen in the filter stays on offer even when no photograph holds it
+  any more, so the gallery can always be widened again.
 
 ## [2.4.0] - 2026-11-16
 
