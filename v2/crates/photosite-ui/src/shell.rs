@@ -1,7 +1,7 @@
-//! Windows' own shell: which programs open a photograph, and the menu
-//! Explorer would show for it.
+//! Windows' own shell: which programs open a photograph, the menu Explorer
+//! would show for it, and dragging it out to another program.
 //!
-//! Both are questions only the system can answer. The list of programs is
+//! The first two only the system can answer. The list of programs is
 //! whatever Explorer's *Open with* would offer — an editor installed last
 //! week is on it without anybody telling us — and the system menu is every
 //! verb every installed program has added, *Send to* and *Properties* and
@@ -89,7 +89,15 @@ fn ours(verb: &str) -> Option<&'static str> {
 pub const AVAILABLE: bool = cfg!(windows);
 
 #[cfg(windows)]
-pub use windows_shell::{choose_app, handlers, open_with, system_menu};
+pub use windows_shell::{choose_app, drag_out, handlers, open_with, system_menu};
+
+/// Elsewhere a photograph cannot be dragged out: the toolkit's windowing has
+/// no way to start a drag, only to receive one. Nothing is said, because
+/// nothing was asked for — a drag that goes nowhere is what it always was.
+#[cfg(not(windows))]
+pub fn drag_out(_paths: &[PathBuf]) -> anyhow::Result<()> {
+    Ok(())
+}
 
 #[cfg(not(windows))]
 pub fn handlers(_extension: &str) -> Vec<Handler> {
@@ -122,16 +130,18 @@ mod windows_shell {
         COINIT_APARTMENTTHREADED, CoInitializeEx, CoTaskMemFree, CoUninitialize, IDataObject,
     };
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::System::Ole::{DROPEFFECT_COPY, IDropSource};
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         GetActiveWindow, GetKeyState, VK_CONTROL, VK_SHIFT,
     };
     use windows::Win32::UI::Shell::Common::ITEMIDLIST;
     use windows::Win32::UI::Shell::{
-        ASSOC_FILTER_RECOMMENDED, CMF_EXTENDEDVERBS, CMF_NORMAL, CMIC_MASK_CONTROL_DOWN,
-        CMIC_MASK_PTINVOKE, CMIC_MASK_SHIFT_DOWN, CMINVOKECOMMANDINFO, CMINVOKECOMMANDINFOEX,
-        GCS_VERBW, IAssocHandler, IContextMenu, IContextMenu2, IContextMenu3, ILFindLastID,
-        IShellFolder, OAIF_EXEC, OPENASINFO, SHAssocEnumHandlers, SHBindToParent, SHOpenWithDialog,
-        SHParseDisplayName,
+        ASSOC_FILTER_RECOMMENDED, BHID_DataObject, CMF_EXTENDEDVERBS, CMF_NORMAL,
+        CMIC_MASK_CONTROL_DOWN, CMIC_MASK_PTINVOKE, CMIC_MASK_SHIFT_DOWN, CMINVOKECOMMANDINFO,
+        CMINVOKECOMMANDINFOEX, GCS_VERBW, IAssocHandler, IContextMenu, IContextMenu2,
+        IContextMenu3, ILFindLastID, IShellFolder, IShellItemArray, OAIF_EXEC, OPENASINFO,
+        SHAssocEnumHandlers, SHBindToParent, SHCreateShellItemArrayFromIDLists, SHDoDragDrop,
+        SHOpenWithDialog, SHParseDisplayName,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow, GetCursorPos,
@@ -313,6 +323,47 @@ mod windows_shell {
             Err(error) if error.code().0 as u32 == 0x8007_04C7 => Ok(()),
             Err(error) => Err(error).context("the system would not offer a program"),
         }
+    }
+
+    /// Drags the photographs out of the window, to wherever they are let go:
+    /// a folder in Explorer, a letter being written, a photo book being laid
+    /// out. Returns once they have been let go.
+    ///
+    /// The shell makes the data object, so whoever takes it gets the files
+    /// the way Explorer would have given them, and from as many folders as
+    /// were chosen: an item array is made of whole paths, unlike a folder's
+    /// own object, which can speak only for that folder's files.
+    ///
+    /// **Copied, never moved.** A photograph moved away by whatever it was
+    /// dropped on would leave its stars and its people in a row that points
+    /// at nothing; moving goes through our own command, which takes them
+    /// along.
+    pub fn drag_out(paths: &[PathBuf]) -> Result<()> {
+        anyhow::ensure!(!paths.is_empty(), "nothing to drag");
+        let _com = Com::start();
+        let lists = paths
+            .iter()
+            .map(|path| pidl(path))
+            .collect::<Result<Vec<_>>>()?;
+        let lists: Vec<*const ITEMIDLIST> = lists
+            .iter()
+            .map(|list| list.0 as *const ITEMIDLIST)
+            .collect();
+
+        // SAFETY: the lists stay alive until the item array, which copies
+        // them, is made; the data object is alive for the drag. With no drop
+        // source of our own the shell lends its default one, which ends the
+        // drag when the button that started it is let go.
+        unsafe {
+            let items: IShellItemArray = SHCreateShellItemArrayFromIDLists(&lists)?;
+            let data: IDataObject = items.BindToHandler(None, &BHID_DataObject)?;
+            // A drag let go somewhere that would not take it is an answer
+            // like any other, and comes back as a success: the place said
+            // no by not lighting up.
+            SHDoDragDrop(Some(owner()), &data, None::<&IDropSource>, DROPEFFECT_COPY)
+                .context("the system would not start the drag")?;
+        }
+        Ok(())
     }
 
     thread_local! {

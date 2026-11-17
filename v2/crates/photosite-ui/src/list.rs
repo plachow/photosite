@@ -51,6 +51,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
             let mut clicked: Option<(usize, egui::Modifiers)> = None;
             let mut opened: Option<usize> = None;
             let mut menu_on: Option<(usize, egui::Response)> = None;
+            let mut dragged: Option<usize> = None;
 
             // The columns, from the right. The name takes whatever is left,
             // because it is the one that can be any length at all and the
@@ -62,7 +63,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
                     area.min + Vec2::new(0.0, index as f32 * ROW),
                     Vec2::new(width, ROW),
                 );
-                let response = ui.interact(rect, ui.id().with(index), Sense::click());
+                let response = ui.interact(rect, ui.id().with(index), Sense::click_and_drag());
                 if response.clicked() {
                     clicked = Some((index, ui.input(|input| input.modifiers)));
                 }
@@ -73,6 +74,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
 
                 if crate::menu::wanted(&response) {
                     menu_on = Some((index, response.clone()));
+                }
+
+                if crate::drag::wanted(ui, &response) {
+                    dragged = Some(index);
                 }
 
                 let chosen = app.is_selected(index);
@@ -101,6 +106,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
 
             if let Some((index, response)) = menu_on {
                 crate::menu::attach(app, index, &response);
+            }
+
+            if let Some(index) = dragged {
+                crate::drag::start(app, index);
             }
         });
 }

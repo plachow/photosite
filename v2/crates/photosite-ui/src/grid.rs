@@ -97,6 +97,7 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
             let mut clicked: Option<(usize, egui::Modifiers)> = None;
             let mut opened: Option<usize> = None;
             let mut menu_on: Option<(usize, egui::Response)> = None;
+            let mut dragged: Option<usize> = None;
 
             for row in first..last {
                 for col in 0..cols {
@@ -116,7 +117,7 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
                     let Some(path) = app.photo(index).map(|photo| photo.path.clone()) else {
                         continue;
                     };
-                    let response = ui.interact(rect, ui.id().with(index), Sense::click());
+                    let response = ui.interact(rect, ui.id().with(index), Sense::click_and_drag());
                     if response.clicked() {
                         clicked = Some((index, ui.input(|input| input.modifiers)));
                     }
@@ -127,6 +128,10 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
 
                     if crate::menu::wanted(&response) {
                         menu_on = Some((index, response.clone()));
+                    }
+
+                    if crate::drag::wanted(ui, &response) {
+                        dragged = Some(index);
                     }
 
                     let name = path
@@ -261,6 +266,10 @@ pub fn gallery(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
             // reorder the folder under the loop that drew them.
             if let Some((index, response)) = menu_on {
                 crate::menu::attach(app, index, &response);
+            }
+
+            if let Some(index) = dragged {
+                crate::drag::start(app, index);
             }
         });
 }

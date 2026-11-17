@@ -17,6 +17,10 @@ change lands here under **Unreleased** in the same commit that makes it.
   backup of them made before. A backup file is used only when it is the same
   photograph, byte for byte; the stars, words and names given since stay.
   Without `--write` it only says what it would do.
+- On Windows, photographs can be dragged out of the grid or the list into
+  another program: a folder in Explorer, an e-mail, a photo book. Dragging a
+  photograph that is not selected takes only that one, and dragging one that
+  is selected takes the whole selection. They are always copied, never moved.
 
 ## [2.4.0] - 2026-11-16
 

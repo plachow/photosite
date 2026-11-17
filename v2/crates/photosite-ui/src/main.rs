@@ -19,6 +19,7 @@ mod compare;
 mod describe;
 mod dialog;
 mod docks;
+mod drag;
 mod editor;
 mod files;
 mod filter;
@@ -577,6 +578,10 @@ pub struct App {
     /// Something of the system's to show, and how many frames are still to
     /// be drawn first. See [`App::shell_when_clear`].
     shell_waiting: Option<(ShellAsk, u8)>,
+    /// Photographs were just dragged out of the window, and the button that
+    /// let them go was let go inside the system's loop, where the toolkit
+    /// never saw it. Given back at the start of the next frame.
+    pub let_go: bool,
     /// The Copy to or Move to dialog, while it is open.
     pub sending: Option<files::Sending>,
     /// The copy or move under way, if one is. One at a time: two moves out
@@ -849,6 +854,7 @@ impl App {
             turned: crossbeam_channel::unbounded(),
             open_with: None,
             shell_waiting: None,
+            let_go: false,
             sending: None,
             transferring: None,
             pasted_count: 0,
@@ -4191,6 +4197,12 @@ fn into_pixels(rgb: img::Rgb) -> Pixels {
 }
 
 impl eframe::App for App {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        if std::mem::take(&mut self.let_go) {
+            drag::give_back_release(ctx, raw);
+        }
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.first_frames(&ctx);
