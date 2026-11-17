@@ -2141,6 +2141,7 @@ impl App {
             // off the disk. The same key, and in both places it means "get
             // this out of what I am looking at" — it is only in the gallery
             // that what one is looking at is the folder itself.
+            "file.delete" if !self.tabs.manager_is_active() => self.delete_in_editor(ctx),
             "file.delete" if self.compare.is_some() => self.drop_from_comparison(),
             "file.delete" => {
                 let chosen = self.chosen_paths();
@@ -2597,6 +2598,10 @@ impl App {
             "view.clear_filter" => self.filter.is_active(),
             "file.rescan" | "file.new_folder" | "go.favourite" => self.folder.is_some(),
             "file.open_with" | "file.system_menu" => shell::AVAILABLE && !self.selection.is_empty(),
+            "file.delete" if !self.tabs.manager_is_active() => self
+                .tabs
+                .active_editor()
+                .is_some_and(|editor| editor.pasted.is_none()),
             "file.copy" | "file.cut" | "file.delete" | "file.duplicate" | "file.rename"
             | "file.copy_to" | "file.move_to" | "file.copy_again" | "file.reveal"
             | "photo.edit" => !self.selection.is_empty(),
@@ -3050,6 +3055,52 @@ impl App {
         {
             editor.show(next);
         }
+    }
+
+    /// `Delete` in the editor: the photograph in front goes to the recycle
+    /// bin, and the tab moves on to the next one, the way a viewer does —
+    /// somebody weeding a folder one photograph at a time wants the next
+    /// one, not the manager. The one before when it was the last; the tab
+    /// closes when it was the only one.
+    ///
+    /// A pasted picture has no file to delete, and nothing happens.
+    fn delete_in_editor(&mut self, ctx: &egui::Context) {
+        let Some(path) = self
+            .tabs
+            .active_editor()
+            .filter(|editor| editor.pasted.is_none())
+            .map(|editor| editor.path.clone())
+        else {
+            return;
+        };
+
+        let next = self.after_deleting(&path);
+        let outcome = files::delete(self, std::slice::from_ref(&path));
+        let deleted = outcome.is_ok();
+        self.did(outcome, |()| t!("files-deleted", count = 1));
+        if !deleted {
+            return;
+        }
+
+        self.reopen();
+        match next {
+            Some(next) => {
+                if let Some(editor) = self.tabs.active_editor_mut() {
+                    editor.show(next);
+                }
+            }
+            None => {
+                self.close_tab(self.tabs.active(), ctx);
+            }
+        }
+    }
+
+    /// What the editor shows once this photograph is gone: the next one in
+    /// the gallery, or the one before when it was the last. Nothing when it
+    /// was the only one, or is not in the gallery at all.
+    fn after_deleting(&self, path: &Path) -> Option<PathBuf> {
+        self.neighbour_of(path, 1)
+            .or_else(|| self.neighbour_of(path, -1))
     }
 
     /// Tells the window whether to fill the screen: when the manager asked
@@ -6865,6 +6916,46 @@ mod editing {
         assert_eq!(shown(&app), Some("b.jpg".to_owned()));
         // The same tab throughout, not one per photograph.
         assert_eq!(app.tabs.count(), 2);
+    }
+
+    /// Where the editor goes when `Delete` takes the photograph in front.
+    /// Asked without deleting anything: a test that did would fill the
+    /// recycle bin of whoever runs it.
+    #[test]
+    fn deleting_in_the_editor_moves_on_to_the_next_or_back_to_the_one_before() {
+        let (app, _data, photos) = culling::three();
+        let at = |name: &str| photos.path().join(name);
+        let name = |path: Option<PathBuf>| {
+            path.and_then(|path| path.file_name().map(|n| n.to_string_lossy().into_owned()))
+        };
+        assert_eq!(
+            name(app.after_deleting(&at("a.jpg"))),
+            Some("b.jpg".to_owned())
+        );
+        assert_eq!(
+            name(app.after_deleting(&at("b.jpg"))),
+            Some("c.jpg".to_owned())
+        );
+        assert_eq!(
+            name(app.after_deleting(&at("c.jpg"))),
+            Some("b.jpg".to_owned()),
+            "the last one falls back to the one before"
+        );
+        assert_eq!(app.after_deleting(&at("elsewhere.jpg")), None);
+    }
+
+    #[test]
+    fn delete_is_a_key_of_the_editor_and_needs_a_file() {
+        let (mut app, _data, _photos) = culling::three();
+        app.edit(1);
+        let delete: Shortcut = "Delete".parse().unwrap();
+        assert_eq!(
+            app.bindings
+                .command_for(&delete, Scope::Editor)
+                .map(|command| command.id),
+            Some("file.delete")
+        );
+        assert!(app.can_run("file.delete"));
     }
 
     #[test]

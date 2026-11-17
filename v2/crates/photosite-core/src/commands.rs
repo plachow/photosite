@@ -241,7 +241,9 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Edit,
         default_shortcut: Some("Delete"),
         toolbar: false,
-        scope: Scope::Manager,
+        // In the editor as well: there it is the photograph in front that
+        // goes, and the tab moves on to the next.
+        scope: Scope::Everywhere,
         menu: Menu::Section,
     },
     // Somewhere else, chosen now. Alt rather than Ctrl because the clipboard

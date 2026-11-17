@@ -21,6 +21,9 @@ change lands here under **Unreleased** in the same commit that makes it.
   another program: a folder in Explorer, an e-mail, a photo book. Dragging a
   photograph that is not selected takes only that one, and dragging one that
   is selected takes the whole selection. They are always copied, never moved.
+- `Delete` works in the editor too. It moves the photograph in front to the
+  recycle bin and goes on to the next one, or to the one before when it was
+  the last. When it was the only one, the tab closes.
 
 ## [2.4.0] - 2026-11-16
 
