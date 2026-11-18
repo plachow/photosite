@@ -711,7 +711,8 @@ mod tests {
                     let response = label_chip(ui, &theme.palette, ColorLabel::Red, false);
                     red = response.rect;
                     clicked |= response.clicked();
-                    plain = ui.selectable_label(false, "Red").rect;
+                    let word = photosite_core::i18n::t(ColorLabel::Red.title_key());
+                    plain = ui.selectable_label(false, word).rect;
                 });
             });
             out.textures_delta.clear();
