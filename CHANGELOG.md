@@ -27,8 +27,17 @@ change lands here under **Unreleased** in the same commit that makes it.
 - The colour labels (`6`..`9`), pick and reject (`P`, `X`), turning
   (`Ctrl+L`, `Ctrl+R`) and copying (`Ctrl+C`, `Alt+C`, `Ctrl+Shift+C`) work in
   the editor as they do in the manager, on the photograph in front.
+- The search box has a cross that clears it, shown while there is text in it.
+- A click on the preview scrolls the grid to its tile.
+- The details show the camera, the lens, the time zone and what the file says
+  about the position (coordinates, altitude, accuracy) where it records them.
 
 ### Changed
+
+- When the filter or the search changes, the grid scrolls to the selected
+  photograph. Find one photograph of a series by searching, clear the search,
+  and the photographs taken with it are around it.
+- The facts at the bottom of the details are in a smaller type.
 
 - A colour label toggles like pick and reject: the same colour again takes
   it off.

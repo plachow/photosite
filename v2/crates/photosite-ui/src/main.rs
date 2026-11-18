@@ -1395,10 +1395,17 @@ impl App {
 
     /// Replaces the filter and reworks what is shown, but only when it
     /// really changed — the search box hands one back every frame.
+    ///
+    /// The gallery follows the photograph under the cursor. A search is how
+    /// one photograph of a series is found, and clearing it is how the rest
+    /// of the series is found: they were taken next to it. Left where it was
+    /// scrolled to, the grid showed the top of five thousand photographs and
+    /// the one just found was somewhere among them.
     fn set_filter(&mut self, filter: Filter) {
         if filter != self.filter {
             self.filter = filter;
             self.refilter();
+            self.scroll_grid_to = self.selected;
         }
     }
 
@@ -4540,15 +4547,39 @@ impl App {
 
             ui.separator();
 
+            // The cross sits inside the box, at its end, and only while there
+            // is something to take away. The box keeps room for it, so the
+            // text never runs under it.
+            const CROSS: f32 = 14.0;
             let mut search = self.filter.search.clone();
-            if ui
-                .add(
-                    egui::TextEdit::singleline(&mut search)
-                        .desired_width(150.0)
-                        .hint_text(t!("filter-search")),
-                )
-                .changed()
-            {
+            let box_ = ui.add(
+                egui::TextEdit::singleline(&mut search)
+                    .desired_width(150.0)
+                    .margin(egui::Margin {
+                        left: 4,
+                        right: 4 + CROSS as i8,
+                        top: 2,
+                        bottom: 2,
+                    })
+                    .hint_text(t!("filter-search")),
+            );
+            let mut changed = box_.changed();
+            if !search.is_empty() {
+                let spot = egui::Rect::from_center_size(
+                    egui::pos2(box_.rect.max.x - 2.0 - CROSS * 0.5, box_.rect.center().y),
+                    egui::Vec2::splat(CROSS),
+                );
+                let cleared = ui
+                    .put(spot, |ui: &mut egui::Ui| editor::cross(ui, palette))
+                    .on_hover_text(t!("filter-search-clear"))
+                    .clicked();
+                if cleared {
+                    search.clear();
+                    changed = true;
+                }
+            }
+
+            if changed {
                 let mut filter = self.filter.clone();
                 filter.search = search;
                 self.set_filter(filter);
@@ -6863,6 +6894,26 @@ mod culling {
 
         app.set_filter(Filter::default());
         assert_eq!(app.selection.len(), 1, "hidden ones do not come back");
+    }
+
+    /// Found by a search, then the search cleared: the gallery is brought to
+    /// where that photograph stands among all the others, so the ones taken
+    /// with it are in view.
+    #[test]
+    fn clearing_a_search_brings_the_gallery_to_what_it_found() {
+        let (mut app, _data, _photos) = three();
+        app.set_filter(Filter {
+            search: "c.jpg".to_owned(),
+            ..Default::default()
+        });
+        app.select_only(0);
+        app.scroll_grid_to = None;
+
+        app.set_filter(Filter::default());
+        let at = app.selected.expect("the photograph found is still chosen");
+        assert_eq!(names(&app)[at], "c.jpg");
+        assert_eq!(app.count(), 3, "the search is gone");
+        assert_eq!(app.scroll_grid_to, Some(at));
     }
 
     #[test]

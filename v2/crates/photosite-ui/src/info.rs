@@ -471,18 +471,24 @@ fn facts(app: &mut App, ui: &mut egui::Ui, palette: &Palette, photo: &Photo) {
         .max()
         .unwrap_or(0);
 
+    // Fixed-width, so the values stand in a column, and a size smaller than
+    // the rest of the pane: this is what is looked up, not what is worked in.
+    const SIZE: f32 = 10.5;
     ui.add_space(6.0);
+    ui.spacing_mut().item_spacing.y = 2.0;
     for (label, value) in &rows {
         ui.horizontal(|ui| {
             ui.add_space(8.0);
             ui.label(
                 egui::RichText::new(format!("{label:width$}"))
                     .monospace()
+                    .size(SIZE)
                     .color(theme::color(palette.dim)),
             );
             ui.label(
                 egui::RichText::new(value)
                     .monospace()
+                    .size(SIZE)
                     .color(theme::color(palette.text)),
             );
         });
@@ -536,6 +542,20 @@ fn read(photo: &Photo) -> Vec<(String, String)> {
 
     let meta = photosite_image::exif::read_file(path);
 
+    // The clock's zone straight after the time it qualifies; without it the
+    // time is the wall clock wherever the camera happened to be.
+    if let Some(offset) = meta.offset_seconds {
+        rows.push((t!("info-zone"), t!("info-zone-at", offset = zone(offset))));
+    }
+
+    if let Some(camera) = meta.camera.clone() {
+        rows.push((t!("info-camera"), camera));
+    }
+
+    if let Some(lens) = meta.lens.clone() {
+        rows.push((t!("info-lens"), lens));
+    }
+
     // The exposure triangle, and the focal length beside it. One row rather
     // than four: `1/250 . f/2.8 . ISO 400 . 24 mm` is how a photographer
     // reads it, and four labelled lines are four times the panel for the
@@ -564,6 +584,21 @@ fn read(photo: &Photo) -> Vec<(String, String)> {
         }
 
         rows.push((t!("info-exposure"), parts.join("  \u{b7}  ")));
+    }
+
+    // What the file itself says about where, whatever the place above has
+    // since been corrected to: the height and how sure the phone was are
+    // nowhere else.
+    if let Some(gps) = &meta.gps {
+        let mut parts = vec![format!("{:.6}, {:.6}", gps.latitude, gps.longitude)];
+        if let Some(altitude) = gps.altitude {
+            parts.push(t!("info-gps-altitude", metres = altitude));
+        }
+        if let Some(error) = gps.error_metres {
+            parts.push(t!("info-gps-error", metres = error));
+        }
+        parts.extend(gps.method.clone());
+        rows.push((t!("info-gps"), parts.join("  \u{b7}  ")));
     }
 
     // How its faces scored — a catalogue row rather than anything read out
@@ -600,4 +635,23 @@ fn read(photo: &Photo) -> Vec<(String, String)> {
     ));
 
     rows
+}
+
+/// An offset from UTC as a clock writes it: `+02:00`, `-03:30`.
+fn zone(seconds: i32) -> String {
+    let sign = if seconds < 0 { '-' } else { '+' };
+    let minutes = seconds.unsigned_abs() / 60;
+    format!("{sign}{:02}:{:02}", minutes / 60, minutes % 60)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::zone;
+
+    #[test]
+    fn a_zone_is_written_the_way_a_clock_writes_it() {
+        assert_eq!(zone(7200), "+02:00");
+        assert_eq!(zone(0), "+00:00");
+        assert_eq!(zone(-12_600), "-03:30");
+    }
 }

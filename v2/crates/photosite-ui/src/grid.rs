@@ -313,6 +313,16 @@ pub fn preview(app: &mut App, ui: &mut egui::Ui, palette: &Palette) {
     ui.painter()
         .rect_filled(area, 0, theme::color(palette.well));
 
+    // A click on the preview finds its tile. The tile scrolls out of view
+    // while the preview stays; after a filter is cleared it may be anywhere
+    // among thousands, and this is the way back to it.
+    if ui
+        .interact(area, ui.id().with("preview"), Sense::click())
+        .clicked()
+    {
+        app.scroll_grid_to = Some(index);
+    }
+
     // Until the full resolution is decoded, whatever is already there is
     // shown — so the pane never flashes empty.
     let chosen = [Want::Preview, Want::Thumb, Want::Quick]
